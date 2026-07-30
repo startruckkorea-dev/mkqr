@@ -69,7 +69,7 @@ import { createRoot } from "react-dom/client";
 import {
   Building2, QrCode, ListChecks, LogOut, Plus, Pencil, Trash2, X,
   Download, RefreshCw, MapPin, Search, CheckCircle2, AlertTriangle,
-  Upload, ExternalLink,
+  Upload, ExternalLink, Phone, Navigation,
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import QRCode from "qrcode";
@@ -199,6 +199,19 @@ function randomToken(len = 10) {
 
 // User-Agent 문자열을 "iPhone · Safari" 같은 짧은 기기 설명으로 변환 — 체크인 기록에서 어떤 장비로
 // 접근했는지 한눈에 보기 위함. 완벽한 기기 판별은 아니고 대략적인 OS/브라우저 구분용.
+// 지역명 문자열을 기준으로 일관된 배지 색상을 골라준다 (같은 지역은 항상 같은 색)
+const REGION_COLORS = [
+  "bg-blue-100 text-blue-700", "bg-purple-100 text-purple-700", "bg-rose-100 text-rose-700",
+  "bg-amber-100 text-amber-700", "bg-teal-100 text-teal-700", "bg-indigo-100 text-indigo-700",
+  "bg-orange-100 text-orange-700", "bg-cyan-100 text-cyan-700",
+];
+function regionBadgeColor(region) {
+  if (!region) return "bg-slate-100 text-slate-600";
+  let hash = 0;
+  for (let i = 0; i < region.length; i++) hash = (hash * 31 + region.charCodeAt(i)) >>> 0;
+  return REGION_COLORS[hash % REGION_COLORS.length];
+}
+
 function parseDeviceLabel(ua) {
   if (!ua) return "-";
   let os = "기타 OS";
@@ -278,6 +291,8 @@ const inputCls = "w-full border border-slate-300 rounded-lg px-3 py-2 text-sm fo
 /* ------------------------------------------------------------------ */
 /* 센터 관리 탭                                                         */
 /* ------------------------------------------------------------------ */
+const MAX_CENTERS = 40; // QR은 센터당 1개씩 발급되므로 곧 QR 최대 개수와 동일
+
 function CentersTab({ centers, reload, onCreated }) {
   const [editing, setEditing] = useState(null); // null | {} (신규) | {...} (수정)
   const [busy, setBusy] = useState(false);
@@ -287,6 +302,10 @@ function CentersTab({ centers, reload, onCreated }) {
   const filtered = centers.filter((c) => !q || c.Title?.includes(q) || c.Region?.includes(q) || c.AddressKr?.includes(q));
 
   async function save(form) {
+    if (!editing?.id && centers.length >= MAX_CENTERS) {
+      alert(`QR 코드(=센터)는 최대 ${MAX_CENTERS}개까지만 만들 수 있습니다.\n현재 ${centers.length}개가 등록되어 있어 더 이상 추가할 수 없습니다.`);
+      return;
+    }
     setBusy(true);
     try {
       const fields = {
@@ -340,6 +359,11 @@ function CentersTab({ centers, reload, onCreated }) {
 
   // 엑셀 일괄 가져오기 — 위 템플릿(1행 헤더: 지역/센터명/센터명영문/법인명/주소/주소영문/전화번호)을 그대로 파싱
   async function importExcel(file) {
+    if (centers.length >= MAX_CENTERS) {
+      alert(`QR 코드(=센터)는 최대 ${MAX_CENTERS}개까지만 만들 수 있습니다.\n현재 ${centers.length}개가 등록되어 있어 더 이상 추가할 수 없습니다.`);
+      if (fileRef.current) fileRef.current.value = "";
+      return;
+    }
     setBusy(true);
     try {
       const buf = await file.arrayBuffer();
@@ -348,7 +372,8 @@ function CentersTab({ centers, reload, onCreated }) {
       const rows = XLSX.utils.sheet_to_json(sheet, { header: 1 });
       const existingTitles = new Set(centers.map((c) => c.Title));
       const existingRegions = new Set(centers.map((c) => c.Region).filter(Boolean));
-      let created = 0, skipped = 0;
+      let created = 0, skipped = 0, blockedByLimit = 0;
+      let totalCount = centers.length; // 등록될 때마다 증가시키며 40개 한도 체크
       const regionNotices = []; // 센터명은 새것이지만 지역은 기존에 이미 있는 경우 (참고용, 등록은 진행)
       for (let r = 1; r < rows.length; r++) { // 0행은 헤더이므로 1행부터
         const row = rows[r] || [];
@@ -368,13 +393,16 @@ function CentersTab({ centers, reload, onCreated }) {
           Active: true,
         };
         if (existingTitles.has(fields.Title)) { skipped++; continue; } // 센터명 중복 → 진짜 중복이니 건너뜀
+        if (totalCount >= MAX_CENTERS) { blockedByLimit++; continue; } // 40개 한도 초과분은 등록 안 함
         if (region && existingRegions.has(region)) { regionNotices.push(fields.Title); } // 지역만 중복 → 등록은 진행, 안내만
         await mkCreateItem(MK_LISTS.centers, fields);
         existingTitles.add(fields.Title); // 같은 파일 안에서도 중복 방지
         if (region) existingRegions.add(region);
+        totalCount++;
         created++;
       }
       let msg = `${created}개 센터를 가져왔습니다.`;
+      if (blockedByLimit) msg += `\nQR 최대 ${MAX_CENTERS}개 제한으로 ${blockedByLimit}건은 등록되지 않았습니다. (기존 센터를 정리하시거나 관리자에게 문의해주세요)`;
       if (skipped) msg += `\n센터명 중복 ${skipped}건은 건너뜀.`;
       if (regionNotices.length) msg += `\n\n※ 같은 지역에 이미 다른 센터가 있는 신규 등록건 (참고용, 정상 등록됨):\n${regionNotices.join(", ")}`;
       msg += `\n\n주소만 채워졌으니 각 센터에서 "좌표 찾기"로 위경도를 채워주세요.`;
@@ -394,8 +422,8 @@ function CentersTab({ centers, reload, onCreated }) {
             <Building2 size={17} style={{ color: BRAND.accent }} />
           </div>
           <div>
-            <div className="text-xl font-semibold text-slate-800">{centers.length}</div>
-            <div className="text-xs text-slate-400">전체 센터</div>
+            <div className="text-xl font-semibold text-slate-800">{centers.length}<span className="text-sm font-normal text-slate-400"> / {MAX_CENTERS}</span></div>
+            <div className="text-xs text-slate-400">전체 센터 (QR 최대 {MAX_CENTERS}개)</div>
           </div>
         </div>
         <div className="bg-white rounded-xl border p-4 flex items-center gap-3">
@@ -431,52 +459,81 @@ function CentersTab({ centers, reload, onCreated }) {
           <button onClick={() => fileRef.current.click()} disabled={busy} className="flex items-center gap-1.5 px-3 py-2 border border-slate-300 rounded-lg text-sm hover:bg-slate-50">
             <Upload size={15} /> 엑셀 일괄 등록하기
           </button>
-          <button onClick={() => setEditing({})} className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm text-white" style={{ background: BRAND.accent }}>
+          <button
+            onClick={() => centers.length >= MAX_CENTERS
+              ? alert(`QR 코드(=센터)는 최대 ${MAX_CENTERS}개까지만 만들 수 있습니다.\n현재 ${centers.length}개가 등록되어 있어 더 이상 추가할 수 없습니다.`)
+              : setEditing({})}
+            className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm text-white ${centers.length >= MAX_CENTERS ? "opacity-50 cursor-not-allowed" : ""}`}
+            style={{ background: BRAND.accent }}>
             <Plus size={15} /> 센터 추가
           </button>
         </div>
       </div>
 
-      <div className="bg-white rounded-xl border overflow-hidden">
-        <table className="w-full text-sm">
-          <thead className="bg-slate-50 text-slate-500 text-xs">
-            <tr>
-              <th className="text-left px-4 py-2.5">지역</th>
-              <th className="text-left px-4 py-2.5">센터명</th>
-              <th className="text-left px-4 py-2.5">주소</th>
-              <th className="text-left px-4 py-2.5">좌표</th>
-              <th className="text-left px-4 py-2.5">상태</th>
-              <th className="text-right px-4 py-2.5">관리</th>
-            </tr>
-          </thead>
-          <tbody>
-            {filtered.map((c) => (
-              <tr key={c.id} onClick={() => setEditing(c)} className="border-t hover:bg-slate-50 cursor-pointer">
-                <td className="px-4 py-2.5 text-slate-500">{c.Region}</td>
-                <td className="px-4 py-2.5 font-medium text-slate-800">{c.Title}</td>
-                <td className="px-4 py-2.5 text-slate-500 max-w-xs truncate">{c.AddressKr}</td>
-                <td className="px-4 py-2.5 text-slate-500">{c.Lat && c.Lng ? `${Number(c.Lat).toFixed(4)}, ${Number(c.Lng).toFixed(4)}` : <span className="text-amber-600">미설정</span>}</td>
-                <td className="px-4 py-2.5">{c.Active === false ? <span className="text-slate-400">비활성</span> : <span className="text-emerald-600">활성</span>}</td>
-                <td className="px-4 py-2.5 text-right" onClick={(e) => e.stopPropagation()}>
-                  <button onClick={() => setEditing(c)} className="text-slate-400 hover:text-slate-700 mr-2"><Pencil size={15} /></button>
-                  <button onClick={() => remove(c)} className="text-slate-400 hover:text-red-600"><Trash2 size={15} /></button>
-                </td>
-              </tr>
-            ))}
-            {!filtered.length && (
-              <tr>
-                <td colSpan={6} className="text-center py-14">
-                  <Building2 size={28} className="mx-auto text-slate-300 mb-2" />
-                  <div className="text-slate-500 text-sm mb-1">{centers.length ? "검색 결과가 없습니다" : "등록된 센터가 없습니다"}</div>
-                  {!centers.length && (
-                    <div className="text-slate-400 text-xs">우측 상단 "센터 추가" 또는 "엑셀 일괄 등록하기"로 시작해보세요</div>
+      {filtered.length > 0 && (
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+          {filtered.map((c) => {
+            const initial = (c.Title || "?").trim().charAt(0);
+            const regionColor = regionBadgeColor(c.Region);
+            return (
+              <div key={c.id} onClick={() => setEditing(c)}
+                className="bg-white rounded-xl border p-4 hover:shadow-md hover:border-slate-300 transition-all cursor-pointer relative group">
+                <div className="absolute top-3 right-3 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity" onClick={(e) => e.stopPropagation()}>
+                  <button onClick={() => setEditing(c)} className="w-7 h-7 flex items-center justify-center rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100"><Pencil size={14} /></button>
+                  <button onClick={() => remove(c)} className="w-7 h-7 flex items-center justify-center rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50"><Trash2 size={14} /></button>
+                </div>
+
+                <div className="flex items-start gap-3 mb-3">
+                  <div className="w-11 h-11 rounded-xl flex items-center justify-center shrink-0 text-white font-semibold text-lg" style={{ background: BRAND.navy }}>
+                    {initial}
+                  </div>
+                  <div className="min-w-0 pr-12">
+                    <div className="font-semibold text-slate-800 truncate">{c.Title}</div>
+                    <div className="text-xs text-slate-400 truncate">{c.CorpNameKr || c.CenterNameEn || "\u00A0"}</div>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-1.5 mb-3">
+                  {c.Region && (
+                    <span className={`text-[11px] px-2 py-0.5 rounded-full font-medium ${regionColor}`}>{c.Region}</span>
                   )}
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
+                  {c.Active === false
+                    ? <span className="text-[11px] px-2 py-0.5 rounded-full bg-slate-100 text-slate-500 font-medium">비활성</span>
+                    : <span className="text-[11px] px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700 font-medium">활성</span>}
+                </div>
+
+                <div className="space-y-1.5 text-xs text-slate-500">
+                  <div className="flex items-start gap-1.5">
+                    <MapPin size={13} className="shrink-0 mt-0.5 text-slate-300" />
+                    <span className="truncate">{c.AddressKr || "주소 미입력"}</span>
+                  </div>
+                  {c.Phone && (
+                    <div className="flex items-center gap-1.5">
+                      <Phone size={13} className="shrink-0 text-slate-300" />
+                      <span>{c.Phone}</span>
+                    </div>
+                  )}
+                  <div className="flex items-center gap-1.5">
+                    <Navigation size={13} className="shrink-0 text-slate-300" />
+                    {c.Lat && c.Lng
+                      ? <span>{Number(c.Lat).toFixed(4)}, {Number(c.Lng).toFixed(4)} · 허용반경 {((c.VerifyRadiusM ?? 10000) / 1000).toFixed(1)}km</span>
+                      : <span className="text-amber-600">좌표 미설정</span>}
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+      {!filtered.length && (
+        <div className="bg-white rounded-xl border py-16 text-center">
+          <Building2 size={28} className="mx-auto text-slate-300 mb-2" />
+          <div className="text-slate-500 text-sm mb-1">{centers.length ? "검색 결과가 없습니다" : "등록된 센터가 없습니다"}</div>
+          {!centers.length && (
+            <div className="text-slate-400 text-xs">우측 상단 "센터 추가" 또는 "엑셀 일괄 등록하기"로 시작해보세요</div>
+          )}
+        </div>
+      )}
 
       {editing !== null && <CenterEditModal center={editing} onClose={() => setEditing(null)} onSave={save} onGeocode={geocode} busy={busy} />}
     </div>
