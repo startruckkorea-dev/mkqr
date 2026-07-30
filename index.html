@@ -248,7 +248,7 @@ const inputCls = "w-full border border-slate-300 rounded-lg px-3 py-2 text-sm fo
 /* ------------------------------------------------------------------ */
 /* 센터 관리 탭                                                         */
 /* ------------------------------------------------------------------ */
-function CentersTab({ centers, reload }) {
+function CentersTab({ centers, reload, onCreated }) {
   const [editing, setEditing] = useState(null); // null | {} (신규) | {...} (수정)
   const [busy, setBusy] = useState(false);
   const [q, setQ] = useState("");
@@ -267,12 +267,15 @@ function CentersTab({ centers, reload }) {
       };
       if (editing?.id) {
         await mkUpdateItem(MK_LISTS.centers, editing.id, fields);
+        setEditing(null);
+        await reload();
       } else {
         fields.QrToken = randomToken();
-        await mkCreateItem(MK_LISTS.centers, fields);
+        const created = await mkCreateItem(MK_LISTS.centers, fields);
+        setEditing(null);
+        await reload();
+        if (onCreated) onCreated(created.id);
       }
-      setEditing(null);
-      await reload();
     } catch (e) { alert(e.message); } finally { setBusy(false); }
   }
 
@@ -426,8 +429,9 @@ function CenterEditModal({ center, onClose, onSave, onGeocode, busy }) {
 /* ------------------------------------------------------------------ */
 /* QR 코드 탭                                                          */
 /* ------------------------------------------------------------------ */
-function QrTab({ centers }) {
+function QrTab({ centers, highlightId }) {
   const canvasRefs = useRef({});
+  const cardRefs = useRef({});
   const [checkinBaseUrl, setCheckinBaseUrl] = useState(() => {
     // 기본값: 같은 저장소의 checkin.html (배포 후 실제 도메인으로 자동 대응)
     return window.location.origin + window.location.pathname.replace(/index\.html$/, "").replace(/\/$/, "") + "/checkin.html";
@@ -441,6 +445,12 @@ function QrTab({ centers }) {
       QRCode.toCanvas(el, url, { width: 180, margin: 1, color: { dark: BRAND.navy, light: "#ffffff" } });
     });
   }, [centers, checkinBaseUrl]);
+
+  useEffect(() => {
+    if (highlightId && cardRefs.current[highlightId]) {
+      cardRefs.current[highlightId].scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+  }, [highlightId, centers]);
 
   function download(centerId, title) {
     const el = canvasRefs.current[centerId];
@@ -458,7 +468,10 @@ function QrTab({ centers }) {
       </Field>
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-4">
         {centers.filter((c) => c.Active !== false).map((c) => (
-          <div key={c.id} className="bg-white border rounded-xl p-4 text-center">
+          <div key={c.id} ref={(el) => (cardRefs.current[c.id] = el)}
+            className={`bg-white border rounded-xl p-4 text-center ${c.id === highlightId ? "ring-2 ring-offset-2" : ""}`}
+            style={c.id === highlightId ? { borderColor: BRAND.accent, boxShadow: `0 0 0 2px ${BRAND.accent}` } : {}}>
+            {c.id === highlightId && <div className="text-[10px] font-semibold mb-1" style={{ color: BRAND.accent }}>✨ 방금 등록됨</div>}
             <div className="font-medium text-sm text-slate-800 mb-2">{c.Title}</div>
             <canvas ref={(el) => (canvasRefs.current[c.id] = el)} className="mx-auto" />
             <div className="text-xs text-slate-400 mt-2 break-all">토큰: {c.QrToken}</div>
@@ -568,6 +581,7 @@ function App({ userEmail }) {
   const [centers, setCenters] = useState([]);
   const [checkins, setCheckins] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [highlightId, setHighlightId] = useState(null);
 
   async function reload() {
     setLoading(true);
@@ -581,6 +595,12 @@ function App({ userEmail }) {
   useEffect(() => { reload(); }, []);
 
   const needsVerify = checkins.filter((r) => r.VerifyStatus === "검증필요").length;
+
+  function handleCenterCreated(id) {
+    setHighlightId(id);
+    setTab("qr");
+    setTimeout(() => setHighlightId(null), 5000);
+  }
 
   const nav = [
     { id: "centers", label: "센터 관리", icon: Building2 },
@@ -610,8 +630,8 @@ function App({ userEmail }) {
         <h2 className="text-lg font-semibold text-slate-800 mb-4">{nav.find((n) => n.id === tab)?.label}</h2>
         {loading ? <div className="text-slate-400 text-sm">불러오는 중...</div> : (
           <>
-            {tab === "centers" && <CentersTab centers={centers} reload={reload} />}
-            {tab === "qr" && <QrTab centers={centers} />}
+            {tab === "centers" && <CentersTab centers={centers} reload={reload} onCreated={handleCenterCreated} />}
+            {tab === "qr" && <QrTab centers={centers} highlightId={highlightId} />}
             {tab === "checkins" && <CheckInsTab checkins={checkins} centers={centers} reload={reload} />}
           </>
         )}
