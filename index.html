@@ -1207,13 +1207,66 @@ function AdminsTab({ admins, reload, userEmail }) {
   async function addAdmin() {
     const trimmedEmail = pendingEmail.trim().toLowerCase();
     if (!trimmedEmail || !trimmedEmail.includes("@")) { alert("올바른 이메일을 입력하거나 검색 결과에서 선택해주세요."); return; }
-    if (registeredEmails.has(trimmedEmail)) { alert("이미 등록된 이메일입니다."); return; }
     setBusy(true);
     try {
+      // 화면에 있는 admins(부모 state)는 마지막 새로고침 시점 기준이라 오래됐을 수 있어, 저장 직전 서버에서 다시 확인한다.
+      const freshAdmins = await mkListAll(MK_LISTS.admins);
+      if (freshAdmins.some((a) => (a.fields.Email || "").toLowerCase() === trimmedEmail)) { alert("이미 등록된 이메일입니다."); setBusy(false); return; }
       await mkCreateItem(MK_LISTS.admins, { Title: pendingName || trimmedEmail.split("@")[0], Email: trimmedEmail, Active: true });
       setQuery(""); setPendingEmail(""); setPendingName("");
       await reload();
     } catch (e) { alert(e.message); } finally { setBusy(false); }
+  }
+
+  // 예전 버그(반영/추가 시 캐시된 데이터 기준으로 중복 판단)로 이미 쌓인 중복 행을 정리하는 도구.
+  // 같은 이메일의 여러 행을 하나로 합치되, 값은 "하나라도 켜져 있으면 켜진 것으로" 보수적으로 병합한 뒤 나머지는 삭제한다.
+  const [cleaning, setCleaning] = useState(false);
+  async function cleanupDuplicates() {
+    if (!confirm("mkqr_Admins와 mkqr_CategoryAccess 목록에서 같은 이메일의 중복 행을 찾아 하나로 합치고 나머지는 삭제합니다. 계속할까요?")) return;
+    setCleaning(true);
+    try {
+      let mergedAdmins = 0, deletedAdmins = 0, mergedAccess = 0, deletedAccess = 0;
+
+      // mkqr_Admins 중복 정리
+      const rawAdmins = await mkListAll(MK_LISTS.admins);
+      const adminGroups = {};
+      rawAdmins.forEach((it) => {
+        const email = (it.fields.Email || "").toLowerCase();
+        if (!email) return;
+        (adminGroups[email] = adminGroups[email] || []).push(it);
+      });
+      for (const email in adminGroups) {
+        const group = adminGroups[email];
+        if (group.length <= 1) continue;
+        const keep = group[0];
+        const anyActive = group.some((g) => g.fields.Active !== false);
+        await mkUpdateItem(MK_LISTS.admins, keep.id, { Active: anyActive });
+        for (let i = 1; i < group.length; i++) { await mkDeleteItem(MK_LISTS.admins, group[i].id); deletedAdmins++; }
+        mergedAdmins++;
+      }
+
+      // mkqr_CategoryAccess 중복 정리
+      const rawAccess = await mkListAll(MK_LISTS.categoryAccess);
+      const accessGroups = {};
+      rawAccess.forEach((it) => {
+        const email = (it.fields.Email || "").toLowerCase();
+        if (!email) return;
+        (accessGroups[email] = accessGroups[email] || []).push(it);
+      });
+      for (const email in accessGroups) {
+        const group = accessGroups[email];
+        if (group.length <= 1) continue;
+        const keep = group[0];
+        const merged = {};
+        MK_CATEGORIES.forEach((c) => { merged[c.field] = group.some((g) => g.fields[c.field] !== false); });
+        await mkUpdateItem(MK_LISTS.categoryAccess, keep.id, merged);
+        for (let i = 1; i < group.length; i++) { await mkDeleteItem(MK_LISTS.categoryAccess, group[i].id); deletedAccess++; }
+        mergedAccess++;
+      }
+
+      await reload();
+      alert(`정리 완료\n관리자 목록: ${mergedAdmins}명 정리, ${deletedAdmins}건 삭제\n카테고리 접근 권한: ${mergedAccess}명 정리, ${deletedAccess}건 삭제`);
+    } catch (e) { alert(e.message); } finally { setCleaning(false); }
   }
 
   async function toggleActive(a) {
@@ -1251,6 +1304,15 @@ function AdminsTab({ admins, reload, userEmail }) {
               : <>아직 <b>부트스트랩 상태</b> — 모든 Hyosung 계정에 열려있습니다. 아래에서 최소 1명 등록해주세요</>}
           </div>
         </div>
+      </div>
+
+      <div className="bg-white rounded-xl border p-4 mb-5 flex items-center justify-between gap-3 flex-wrap">
+        <div className="text-sm text-slate-600">
+          <span className="font-medium text-slate-700">데이터 정리</span> — 같은 이메일이 여러 번 등록돼 목록이 계속 쌓이는 것 같으면 한 번씩 실행해주세요.
+        </div>
+        <button onClick={cleanupDuplicates} disabled={cleaning} className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm border border-slate-300 hover:bg-slate-50 disabled:opacity-50">
+          <RefreshCw size={14} className={cleaning ? "animate-spin" : ""} /> {cleaning ? "정리 중..." : "중복 데이터 정리"}
+        </button>
       </div>
 
       {!admins.length && (
@@ -1461,12 +1523,22 @@ function CategoryAccessTab({ admins, categoryAccess, reload }) {
     if (!emails.length) return;
     setSaving(true);
     try {
+      // 화면에 있는(부모 state) categoryAccess/admins는 마지막 새로고침 시점 기준이라 약간 오래됐을 수 있다.
+      // "이 사람 행이 이미 있나?"를 잘못 판단해서 중복 생성하는 사고를 막기 위해, 저장 직전 서버에서 최신 값을 다시 받아온다.
+      const [freshCategoryAccess, freshAdmins] = await Promise.all([
+        mkListAll(MK_LISTS.categoryAccess),
+        mkListAll(MK_LISTS.admins),
+      ]);
+      const freshRows = freshCategoryAccess.map((x) => ({ id: x.id, ...x.fields }));
+      const freshAdminEmails = new Set(freshAdmins.map((x) => (x.fields.Email || "").toLowerCase()));
+      const freshRowFor = (email) => freshRows.find((r) => (r.Email || "").toLowerCase() === email);
+
       for (const email of emails) {
         const person = filtered.find((p) => p.email === email) || merged.find((p) => p.email === email);
         if (!person) continue;
         const changes = overrides[email];
-        const existing = rowFor(email);
-        const isAdminAlready = adminEmailSet.has(email);
+        const existing = freshRowFor(email);
+        const isAdminAlready = freshAdminEmails.has(email);
         const fields = existing ? {} : { Title: person.name || email, Email: email };
         if (!existing) MK_CATEGORIES.forEach((c) => { fields[c.field] = c.key in changes ? changes[c.key] : isAdminAlready; });
         else Object.keys(changes).forEach((catKey) => {
