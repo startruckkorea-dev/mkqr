@@ -27,7 +27,9 @@
 const GRAPH = "https://graph.microsoft.com/v1.0";
 const SITE_PATH = "startruckkorea.sharepoint.com:/sites/STK-DB:";
 const VERIFY_RADIUS_KM = 10;
-const DUPLICATE_WINDOW_HOURS = 24; // 같은 기기 핑거프린트가 같은 센터에 이 시간 안에 다시 찍으면 "중복의심"
+const DUPLICATE_WINDOW_HOURS = 24;   // 이 시간 안의 체크인만 "동일 기기 반복" 횟수 계산에 포함
+const DUPLICATE_THRESHOLD = 5;        // 같은 센터에 같은 기기가 이 횟수 이상 찍으면 "중복의심"
+const COOLDOWN_MINUTES = 5;           // 직전 체크인 후 이 시간 안에는 재시도 자체를 차단(스팸 방지)
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*", // 필요시 checkin.html이 배포된 정확한 origin으로 좁히세요
@@ -143,20 +145,29 @@ async function findCenterByToken(env, token) {
   return items.find((it) => it.fields.QrToken === token);
 }
 
-// 최근 체크인 기록을 훑어서 같은 센터에 같은 기기 핑거프린트가 이미 다녀갔는지 확인.
+// 같은 센터에 같은 기기가 최근 얼마나 자주 찍었는지 확인.
 // SharePoint List API로 날짜/텍스트 복합 필터를 걸기 번거로워, 전체를 가져온 뒤 JS에서 걸러낸다
 // (체크인 건수가 아주 많아지면 $filter=CenterId eq '...' 정도로 서버측 필터를 추가하는 게 좋음).
-async function isDuplicateDevice(env, centerId, fingerprint) {
-  if (!fingerprint) return false;
+// 반환: { cooldownActive: bool, remainingSeconds, countInWindow }
+async function checkDeviceHistory(env, centerId, fingerprint) {
+  if (!fingerprint) return { cooldownActive: false, countInWindow: 0 };
   const items = await listItems(env, "mkqr_CheckIns");
-  const cutoff = Date.now() - DUPLICATE_WINDOW_HOURS * 3600 * 1000;
-  return items.some((it) => {
-    const f = it.fields;
-    if (f.CenterId !== String(centerId)) return false;
-    if (f.DeviceFingerprint !== fingerprint) return false;
-    const t = f.ServerTimestamp ? new Date(f.ServerTimestamp).getTime() : 0;
-    return t >= cutoff;
-  });
+  const windowCutoff = Date.now() - DUPLICATE_WINDOW_HOURS * 3600 * 1000;
+  const matches = items
+    .filter((it) => it.fields.CenterId === String(centerId) && it.fields.DeviceFingerprint === fingerprint)
+    .map((it) => new Date(it.fields.ServerTimestamp || 0).getTime())
+    .filter((t) => t >= windowCutoff)
+    .sort((a, b) => b - a); // 최신순
+
+  if (!matches.length) return { cooldownActive: false, countInWindow: 0 };
+
+  const mostRecent = matches[0];
+  const elapsedMs = Date.now() - mostRecent;
+  const cooldownMs = COOLDOWN_MINUTES * 60 * 1000;
+  if (elapsedMs < cooldownMs) {
+    return { cooldownActive: true, remainingSeconds: Math.ceil((cooldownMs - elapsedMs) / 1000), countInWindow: matches.length };
+  }
+  return { cooldownActive: false, countInWindow: matches.length };
 }
 
 export default {
@@ -206,9 +217,15 @@ export default {
           verifyStatus = "GPS거부";
         }
 
-        // 위치 판정과는 별개로, 같은 기기가 최근에 같은 센터를 이미 찍었으면 최우선으로 "중복의심" 처리
-        const dup = await isDuplicateDevice(env, center.id, deviceFingerprint);
-        if (dup) verifyStatus = "중복의심";
+        // 같은 기기의 최근 이력 확인 — 5분 이내 재시도는 기록 없이 즉시 차단(스팸 방지),
+        // 그 외엔 항상 기록을 남기되 최근 24시간 내 5회 이상이면 "중복의심"으로 덮어씀
+        const history = await checkDeviceHistory(env, center.id, deviceFingerprint);
+        if (history.cooldownActive) {
+          return json({ error: `잠시 후 다시 시도해주세요 (약 ${Math.ceil(history.remainingSeconds / 60)}분 후 가능)`, cooldown: true }, 429);
+        }
+        if (history.countInWindow + 1 >= DUPLICATE_THRESHOLD) {
+          verifyStatus = "중복의심";
+        }
 
         const now = new Date().toISOString();
         const fields = {

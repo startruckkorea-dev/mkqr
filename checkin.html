@@ -161,7 +161,15 @@ form.addEventListener("submit", async (e) => {
       body: JSON.stringify(payload),
     });
     const data = await res.json();
-    if (!res.ok) throw new Error(data.error || "체크인에 실패했습니다");
+    if (!res.ok) {
+      if (res.status === 429 && data.cooldown) {
+        showStatus(data.error, "warn");
+        btn.disabled = false;
+        btn.textContent = "체크인 하기";
+        return;
+      }
+      throw new Error(data.error || "체크인에 실패했습니다");
+    }
     renderResult(data, fingerprint);
   } catch (e) {
     showStatus(e.message, "err");
