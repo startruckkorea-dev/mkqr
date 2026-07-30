@@ -721,7 +721,22 @@ function CenterEditModal({ center, onClose, onSave, onGeocode, busy }) {
         <Field label="경도 (Lng)"><input className={inputCls} value={form.Lng || ""} onChange={set("Lng")} /></Field>
       </div>
       <Field label="GPS 허용 반경 (m)">
-        <input type="number" className={inputCls} value={form.VerifyRadiusM ?? 10000} onChange={set("VerifyRadiusM")} placeholder="예: 10000 (=10km)" />
+        <input
+          type="text"
+          inputMode="numeric"
+          className={inputCls}
+          value={(() => {
+            if (form.VerifyRadiusM === "") return "";
+            const base = form.VerifyRadiusM != null ? form.VerifyRadiusM : 10000;
+            const digits = String(base).replace(/[^\d]/g, "");
+            return digits ? Number(digits).toLocaleString("ko-KR") : "";
+          })()}
+          onChange={(e) => {
+            const digits = e.target.value.replace(/[^\d]/g, "");
+            setForm((f) => ({ ...f, VerifyRadiusM: digits }));
+          }}
+          placeholder="예: 10,000 (=10km)"
+        />
         <p className="text-xs text-slate-400 mt-1">이 반경 안에서 체크인하면 "정상", 벗어나면 "검증필요"로 분류됩니다. 기본값 10,000m(10km).</p>
       </Field>
       <Field label="대표 전화번호"><input className={inputCls} value={form.Phone || ""} onChange={set("Phone")} /></Field>
