@@ -70,7 +70,7 @@ import {
   Building2, QrCode, ListChecks, LogOut, Plus, Pencil, Trash2, X,
   Download, RefreshCw, MapPin, Search, CheckCircle2, AlertTriangle,
   Upload, ExternalLink, Phone, Navigation, LayoutDashboard, ShieldCheck,
-  ArrowUpRight, ImagePlus, KeyRound, Mail, XCircle,
+  ArrowUpRight, ImagePlus, KeyRound, Mail, XCircle, Settings,
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import QRCode from "qrcode";
@@ -833,6 +833,7 @@ function QrTab({ centers, highlightId }) {
     // 기본값: 같은 저장소의 checkin.html (배포 후 실제 도메인으로 자동 대응)
     return window.location.origin + window.location.pathname.replace(/index\.html$/, "").replace(/\/$/, "") + "/checkin.html";
   });
+  const [showUrlSetting, setShowUrlSetting] = useState(false);
 
   useEffect(() => {
     centers.forEach((c) => {
@@ -859,10 +860,20 @@ function QrTab({ centers, highlightId }) {
   }
 
   return (
-    <div>
-      <Field label="체크인 페이지 기본 주소 (checkin.html 배포 URL)">
-        <input className={inputCls} value={checkinBaseUrl} onChange={(e) => setCheckinBaseUrl(e.target.value)} />
-      </Field>
+    <div className="max-w-5xl mx-auto">
+      <div className="mb-4">
+        <button onClick={() => setShowUrlSetting((v) => !v)} className="text-xs text-slate-400 hover:text-slate-600 flex items-center gap-1">
+          <Settings size={13} /> 체크인 주소 설정 {showUrlSetting ? "숨기기" : "펼치기"}
+        </button>
+        {showUrlSetting && (
+          <div className="mt-2 max-w-xl">
+            <Field label="체크인 페이지 기본 주소 (checkin.html 배포 URL)">
+              <input className={inputCls} value={checkinBaseUrl} onChange={(e) => setCheckinBaseUrl(e.target.value)} />
+            </Field>
+            <p className="text-xs text-slate-400 -mt-2">평소엔 안 건드리셔도 됩니다. 도메인이 바뀔 때만 여기서 수정해주세요.</p>
+          </div>
+        )}
+      </div>
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-4">
         {centers.filter((c) => c.Active !== false).map((c) => (
           <div key={c.id} ref={(el) => (cardRefs.current[c.id] = el)}
