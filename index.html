@@ -210,13 +210,15 @@ function parseDeviceLabel(ua) {
   else if (/Linux/i.test(ua)) os = "Linux";
 
   let browser = "기타 브라우저";
-  if (/EdgA|Edg\//i.test(ua)) browser = "Edge";
-  else if (/CriOS|Chrome/i.test(ua)) browser = "Chrome";
-  else if (/FxiOS|Firefox/i.test(ua)) browser = "Firefox";
-  else if (/SamsungBrowser/i.test(ua)) browser = "Samsung Internet";
+  let verMatch = null;
+  if (/EdgA|Edg\//i.test(ua)) { browser = "Edge"; verMatch = ua.match(/Edg[A]?\/([\d.]+)/i); }
   else if (/KAKAOTALK/i.test(ua)) browser = "카카오톡 인앱";
   else if (/NAVER/i.test(ua)) browser = "네이버 인앱";
-  else if (/Safari/i.test(ua)) browser = "Safari";
+  else if (/SamsungBrowser/i.test(ua)) { browser = "Samsung Internet"; verMatch = ua.match(/SamsungBrowser\/([\d.]+)/i); }
+  else if (/FxiOS|Firefox/i.test(ua)) { browser = "Firefox"; verMatch = ua.match(/(?:FxiOS|Firefox)\/([\d.]+)/i); }
+  else if (/CriOS|Chrome/i.test(ua)) { browser = "Chrome"; verMatch = ua.match(/(?:CriOS|Chrome)\/([\d.]+)/i); }
+  else if (/Safari/i.test(ua)) { browser = "Safari"; verMatch = ua.match(/Version\/([\d.]+)/i); }
+  if (verMatch && verMatch[1]) browser += ` ${verMatch[1].split(".")[0]}`;
 
   return `${os} · ${browser}`;
 }
@@ -609,6 +611,7 @@ function CheckInsTab({ checkins, centers, reload, periodDays, onPeriodChange }) 
               <th className="text-left px-4 py-2.5">거리</th>
               <th className="text-left px-4 py-2.5">기기</th>
               <th className="text-left px-4 py-2.5">인증코드</th>
+              <th className="text-left px-4 py-2.5">로봇확인</th>
               <th className="text-right px-4 py-2.5">관리</th>
             </tr>
           </thead>
@@ -621,8 +624,17 @@ function CheckInsTab({ checkins, centers, reload, periodDays, onPeriodChange }) 
                 <td className="px-4 py-2.5 text-slate-500">{r.PublicIP}{r.IpCity ? ` (${r.IpCity})` : ""}</td>
                 <td className="px-4 py-2.5 text-slate-500">{r.GpsAccuracy ? `±${Math.round(r.GpsAccuracy)}m` : "-"}</td>
                 <td className="px-4 py-2.5 text-slate-500">{r.DistanceKm != null ? `${Number(r.DistanceKm).toFixed(1)}km (${r.DistanceSource})` : "-"}</td>
-                <td className="px-4 py-2.5 text-slate-500 whitespace-nowrap">{parseDeviceLabel(r.UserAgent)}</td>
+                <td className="px-4 py-2.5 text-slate-500 whitespace-nowrap" title={r.UserAgent || ""}>{parseDeviceLabel(r.UserAgent)}</td>
                 <td className="px-4 py-2.5 text-slate-400 font-mono text-xs" title={r.DeviceFingerprint || ""}>{r.DeviceFingerprint ? r.DeviceFingerprint.slice(0, 8).toUpperCase() : "-"}</td>
+                <td className="px-4 py-2.5">
+                  {r.RecaptchaScore == null
+                    ? <span className="text-xs text-slate-400">미확인</span>
+                    : r.RecaptchaScore >= 0.5
+                      ? <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700">정상 ({r.RecaptchaScore.toFixed(1)})</span>
+                      : r.RecaptchaScore >= 0.3
+                        ? <span className="text-xs px-2 py-0.5 rounded-full bg-amber-100 text-amber-700">보통 ({r.RecaptchaScore.toFixed(1)})</span>
+                        : <span className="text-xs px-2 py-0.5 rounded-full bg-red-100 text-red-700">의심 ({r.RecaptchaScore.toFixed(1)})</span>}
+                </td>
                 <td className="px-4 py-2.5 text-right whitespace-nowrap">
                   {["검증필요", "GPS거부"].includes(r.VerifyStatus) && (
                     <button onClick={() => approve(r)} className="text-xs px-2 py-1 rounded-lg text-white mr-1.5" style={{ background: BRAND.accent }}>승인 처리</button>
@@ -633,7 +645,7 @@ function CheckInsTab({ checkins, centers, reload, periodDays, onPeriodChange }) 
                 </td>
               </tr>
             ))}
-            {!rows.length && <tr><td colSpan={9} className="text-center text-slate-400 py-8">체크인 기록이 없습니다</td></tr>}
+            {!rows.length && <tr><td colSpan={10} className="text-center text-slate-400 py-8">체크인 기록이 없습니다</td></tr>}
           </tbody>
         </table>
       </div>
