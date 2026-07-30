@@ -263,6 +263,7 @@ function CentersTab({ centers, reload, onCreated }) {
         Title: form.Title, Region: form.Region, CenterNameEn: form.CenterNameEn,
         CorpNameKr: form.CorpNameKr, AddressKr: form.AddressKr, AddressEn: form.AddressEn,
         Phone: form.Phone, Lat: form.Lat ? Number(form.Lat) : null, Lng: form.Lng ? Number(form.Lng) : null,
+        RedirectUrl: form.RedirectUrl || "",
         Active: form.Active !== false,
       };
       if (editing?.id) {
@@ -418,6 +419,9 @@ function CenterEditModal({ center, onClose, onSave, onGeocode, busy }) {
         <Field label="경도 (Lng)"><input className={inputCls} value={form.Lng || ""} onChange={set("Lng")} /></Field>
       </div>
       <Field label="대표 전화번호"><input className={inputCls} value={form.Phone || ""} onChange={set("Phone")} /></Field>
+      <Field label="체크인 완료 후 이동시킬 링크 (선택)">
+        <input className={inputCls} value={form.RedirectUrl || ""} onChange={set("RedirectUrl")} placeholder="예: https://www.startruckkorea.com (비워두면 완료 화면만 표시)" />
+      </Field>
       <Field label="상태">
         <select className={inputCls} value={form.Active === false ? "false" : "true"} onChange={(e) => setForm((f) => ({ ...f, Active: e.target.value === "true" }))}>
           <option value="true">활성 (QR 사용 가능)</option>
@@ -505,17 +509,36 @@ function CheckInsTab({ checkins, centers, reload }) {
   const [q, setQ] = useState("");
 
   const rows = checkins
-    .filter((r) => filter === "전체" || r.VerifyStatus === filter)
-    .filter((r) => !q || r.CenterName?.includes(q) || r.VisitorName?.includes(q))
+    .filter((r) => filter === "전체" ? r.VerifyStatus !== "차단해제" : r.VerifyStatus === filter)
+    .filter((r) => !q || r.CenterName?.includes(q))
     .sort((a, b) => new Date(b.ServerTimestamp || 0) - new Date(a.ServerTimestamp || 0));
 
   async function approve(r) {
     try { await mkUpdateItem(MK_LISTS.checkins, r.id, { VerifyStatus: "관리자승인" }); await reload(); } catch (e) { alert(e.message); }
   }
 
+  // 특정 기기가 1분 5회 초과로 30분 차단된 경우, 관리자가 그 전에 강제로 풀어줄 때 사용.
+  // Worker가 체크인마다 이 기기의 마지막 "차단해제" 기록 이후 접근만으로 차단 여부를 다시 계산하므로,
+  // 이 마커 하나만 남겨도 즉시 해당 기기의 접근이 재개된다.
+  async function unblockDevice(r) {
+    if (!r.DeviceFingerprint) { alert("이 기록엔 기기 식별코드가 없습니다."); return; }
+    if (!confirm(`"${r.CenterName}" 센터에서 인증코드 ${r.DeviceFingerprint.slice(0, 8).toUpperCase()} 기기의 차단을 즉시 해제할까요?`)) return;
+    try {
+      await mkCreateItem(MK_LISTS.checkins, {
+        Title: `차단해제 ${r.CenterName} ${new Date().toISOString().slice(0, 16).replace("T", " ")}`,
+        CenterId: r.CenterId, CenterName: r.CenterName,
+        DeviceFingerprint: r.DeviceFingerprint,
+        VerifyStatus: "차단해제",
+        ServerTimestamp: new Date().toISOString(),
+      });
+      alert("차단을 해제했습니다.");
+      await reload();
+    } catch (e) { alert(e.message); }
+  }
+
   function exportExcel() {
     const data = rows.map((r) => ({
-      센터: r.CenterName, 방문자: r.VisitorName, 시각: fmtDate(r.ServerTimestamp),
+      센터: r.CenterName, 시각: fmtDate(r.ServerTimestamp),
       공인IP: r.PublicIP, "IP위치(도시)": r.IpCity, GPS좌표: r.GpsLat ? `${r.GpsLat}, ${r.GpsLng}` : "",
       "거리(km)": r.DistanceKm, 판정: r.VerifyStatus, 인증코드: (r.DeviceFingerprint || "").slice(0, 8).toUpperCase(), 기기: r.UserAgent,
     }));
@@ -530,11 +553,11 @@ function CheckInsTab({ checkins, centers, reload }) {
       <div className="flex items-center justify-between mb-4 gap-2 flex-wrap">
         <div className="flex gap-2 items-center">
           <select value={filter} onChange={(e) => setFilter(e.target.value)} className={inputCls + " w-40"}>
-            <option>전체</option><option>정상</option><option>검증필요</option><option>GPS거부</option><option>중복의심</option><option>관리자승인</option>
+            <option>전체</option><option>정상</option><option>검증필요</option><option>GPS거부</option><option>관리자승인</option><option>차단해제</option>
           </select>
           <div className="relative">
             <Search size={15} className="absolute left-2.5 top-2.5 text-slate-400" />
-            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="센터/방문자 검색" className="pl-8 pr-3 py-2 border border-slate-300 rounded-lg text-sm w-56" />
+            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="센터 검색" className="pl-8 pr-3 py-2 border border-slate-300 rounded-lg text-sm w-56" />
           </div>
         </div>
         <div className="flex gap-2">
@@ -548,11 +571,11 @@ function CheckInsTab({ checkins, centers, reload }) {
             <tr>
               <th className="text-left px-4 py-2.5">판정</th>
               <th className="text-left px-4 py-2.5">센터</th>
-              <th className="text-left px-4 py-2.5">방문자</th>
               <th className="text-left px-4 py-2.5">시각(KST)</th>
               <th className="text-left px-4 py-2.5">공인 IP</th>
               <th className="text-left px-4 py-2.5">GPS 정확도</th>
               <th className="text-left px-4 py-2.5">거리</th>
+              <th className="text-left px-4 py-2.5">인증코드</th>
               <th className="text-right px-4 py-2.5">관리</th>
             </tr>
           </thead>
@@ -561,14 +584,17 @@ function CheckInsTab({ checkins, centers, reload }) {
               <tr key={r.id} className="border-t hover:bg-slate-50">
                 <td className="px-4 py-2.5"><Badge status={r.VerifyStatus} /></td>
                 <td className="px-4 py-2.5 font-medium text-slate-800">{r.CenterName}</td>
-                <td className="px-4 py-2.5 text-slate-600">{r.VisitorName || "-"}</td>
                 <td className="px-4 py-2.5 text-slate-500">{fmtDate(r.ServerTimestamp)}</td>
                 <td className="px-4 py-2.5 text-slate-500">{r.PublicIP}{r.IpCity ? ` (${r.IpCity})` : ""}</td>
                 <td className="px-4 py-2.5 text-slate-500">{r.GpsAccuracy ? `±${Math.round(r.GpsAccuracy)}m` : "-"}</td>
                 <td className="px-4 py-2.5 text-slate-500">{r.DistanceKm != null ? `${Number(r.DistanceKm).toFixed(1)}km (${r.DistanceSource})` : "-"}</td>
-                <td className="px-4 py-2.5 text-right">
-                  {["검증필요", "GPS거부", "중복의심"].includes(r.VerifyStatus) && (
-                    <button onClick={() => approve(r)} className="text-xs px-2 py-1 rounded-lg text-white" style={{ background: BRAND.accent }}>승인 처리</button>
+                <td className="px-4 py-2.5 text-slate-400 font-mono text-xs">{r.DeviceFingerprint ? r.DeviceFingerprint.slice(0, 8).toUpperCase() : "-"}</td>
+                <td className="px-4 py-2.5 text-right whitespace-nowrap">
+                  {["검증필요", "GPS거부"].includes(r.VerifyStatus) && (
+                    <button onClick={() => approve(r)} className="text-xs px-2 py-1 rounded-lg text-white mr-1.5" style={{ background: BRAND.accent }}>승인 처리</button>
+                  )}
+                  {r.DeviceFingerprint && (
+                    <button onClick={() => unblockDevice(r)} className="text-xs px-2 py-1 rounded-lg border border-slate-300 text-slate-500 hover:bg-slate-50">차단해제</button>
                   )}
                 </td>
               </tr>

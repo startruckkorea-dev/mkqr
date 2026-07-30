@@ -18,8 +18,8 @@
  *      wrangler secret put MK_CLIENT_ID
  *      wrangler secret put MK_CLIENT_SECRET
  *      wrangler secret put MK_TENANT_ID
- * 6) SharePoint STK-DB 사이트에 리스트 3개 생성 (컬럼명은 README.md 스키마 참고):
- *      mkqr_Centers / mkqr_Staff / mkqr_CheckIns
+ * 6) SharePoint STK-DB 사이트에 리스트 3개 생성 (컬럼 스키마는 대화 중 안내받은 내용 참고):
+ *      mkqr_Centers (RedirectUrl 컬럼 포함) / mkqr_Staff / mkqr_CheckIns
  * 7) wrangler.toml의 route/도메인 설정 후 `wrangler deploy`
  * 8) index.html의 CHECKIN_API_BASE, checkin.html의 API_BASE를 실제 배포 URL로 교체
  */
@@ -27,9 +27,9 @@
 const GRAPH = "https://graph.microsoft.com/v1.0";
 const SITE_PATH = "startruckkorea.sharepoint.com:/sites/STK-DB:";
 const VERIFY_RADIUS_KM = 10;
-const DUPLICATE_WINDOW_HOURS = 24;   // 이 시간 안의 체크인만 "동일 기기 반복" 횟수 계산에 포함
-const DUPLICATE_THRESHOLD = 5;        // 같은 센터에 같은 기기가 이 횟수 이상 찍으면 "중복의심"
-const COOLDOWN_MINUTES = 5;           // 직전 체크인 후 이 시간 안에는 재시도 자체를 차단(스팸 방지)
+const RATE_LIMIT_WINDOW_MS = 60 * 1000;        // 1분
+const RATE_LIMIT_COUNT = 5;                     // 이 시간 안에 이 횟수 초과 접근하면 차단
+const RATE_LIMIT_BLOCK_MS = 30 * 60 * 1000;     // 30분 차단
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*", // 필요시 checkin.html이 배포된 정확한 origin으로 좁히세요
@@ -145,29 +145,38 @@ async function findCenterByToken(env, token) {
   return items.find((it) => it.fields.QrToken === token);
 }
 
-// 같은 센터에 같은 기기가 최근 얼마나 자주 찍었는지 확인.
-// SharePoint List API로 날짜/텍스트 복합 필터를 걸기 번거로워, 전체를 가져온 뒤 JS에서 걸러낸다
-// (체크인 건수가 아주 많아지면 $filter=CenterId eq '...' 정도로 서버측 필터를 추가하는 게 좋음).
-// 반환: { cooldownActive: bool, remainingSeconds, countInWindow }
-async function checkDeviceHistory(env, centerId, fingerprint) {
-  if (!fingerprint) return { cooldownActive: false, countInWindow: 0 };
+// 1분 안에 같은 기기가 같은 센터에 5회 초과 접근했는지 확인하고, 그렇다면 30분 차단 상태를 계산한다.
+// 차단 여부는 저장된 상태값이 아니라 mkqr_CheckIns 기록만으로 매번 다시 계산한다:
+//  1) 관리자가 "차단해제" 마커를 남기면, 그 시점 이후의 기록만 갖고 판단한다.
+//  2) 남은 기록을 시간순으로 훑으면서, 어느 시점이든 최근 1분 안에 5건이 몰려있으면
+//     그 5번째 기록 시각 + 30분을 차단 해제 시각(blockUntil)으로 잡는다 (가장 늦은 값 사용).
+// SharePoint List API로 복합 필터를 걸기 번거로워 전체를 가져온 뒤 JS에서 계산한다
+// (체크인 건수가 많아지면 $filter=CenterId eq '...' 정도의 서버측 필터 추가를 권장).
+async function computeBlockStatus(env, centerId, fingerprint) {
+  if (!fingerprint) return { blocked: false };
   const items = await listItems(env, "mkqr_CheckIns");
-  const windowCutoff = Date.now() - DUPLICATE_WINDOW_HOURS * 3600 * 1000;
-  const matches = items
-    .filter((it) => it.fields.CenterId === String(centerId) && it.fields.DeviceFingerprint === fingerprint)
+  const sameDevice = items.filter((it) => it.fields.CenterId === String(centerId) && it.fields.DeviceFingerprint === fingerprint);
+
+  const lastOverride = sameDevice
+    .filter((it) => it.fields.VerifyStatus === "차단해제")
+    .reduce((max, it) => Math.max(max, new Date(it.fields.ServerTimestamp || 0).getTime()), 0);
+
+  const events = sameDevice
+    .filter((it) => it.fields.VerifyStatus !== "차단해제")
     .map((it) => new Date(it.fields.ServerTimestamp || 0).getTime())
-    .filter((t) => t >= windowCutoff)
-    .sort((a, b) => b - a); // 최신순
+    .filter((t) => t > lastOverride)
+    .sort((a, b) => a - b);
 
-  if (!matches.length) return { cooldownActive: false, countInWindow: 0 };
-
-  const mostRecent = matches[0];
-  const elapsedMs = Date.now() - mostRecent;
-  const cooldownMs = COOLDOWN_MINUTES * 60 * 1000;
-  if (elapsedMs < cooldownMs) {
-    return { cooldownActive: true, remainingSeconds: Math.ceil((cooldownMs - elapsedMs) / 1000), countInWindow: matches.length };
+  let blockUntil = 0;
+  for (let i = 0; i < events.length; i++) {
+    let count = 0;
+    for (let j = i; j >= 0 && events[i] - events[j] <= RATE_LIMIT_WINDOW_MS; j--) count++;
+    if (count >= RATE_LIMIT_COUNT) blockUntil = Math.max(blockUntil, events[i] + RATE_LIMIT_BLOCK_MS);
   }
-  return { cooldownActive: false, countInWindow: matches.length };
+
+  const now = Date.now();
+  if (blockUntil > now) return { blocked: true, remainingMinutes: Math.ceil((blockUntil - now) / 60000) };
+  return { blocked: false };
 }
 
 export default {
@@ -181,17 +190,26 @@ export default {
         if (!token) return json({ error: "잘못된 요청입니다" }, 400);
         const center = await findCenterByToken(env, token);
         if (!center || center.fields.Active === false) return json({ error: "유효하지 않은 QR 코드입니다" }, 404);
-        return json({ name: center.fields.Title });
+        return json({ name: center.fields.Title, redirectUrl: center.fields.RedirectUrl || "" });
       }
 
       if (url.pathname === "/api/checkin" && request.method === "POST") {
         const body = await request.json();
-        const { token, name, phone, gps, clientTimestamp, deviceId, deviceFingerprint, userAgent } = body;
-        if (!token || !name) return json({ error: "이름을 입력해주세요" }, 400);
+        const { token, gps, clientTimestamp, deviceId, deviceFingerprint, userAgent } = body;
+        if (!token) return json({ error: "잘못된 요청입니다" }, 400);
 
         const center = await findCenterByToken(env, token);
         if (!center || center.fields.Active === false) return json({ error: "유효하지 않은 QR 코드입니다" }, 404);
         const c = center.fields;
+
+        // 1분 안에 5회 초과 접근이면 기록을 남기지 않고 즉시 차단 응답 (스팸 로그 방지)
+        const block = await computeBlockStatus(env, center.id, deviceFingerprint);
+        if (block.blocked) {
+          return json({
+            blocked: true,
+            error: `동일 기기 및 동일 위치 등으로 다수 접근이 확인되었습니다. ${block.remainingMinutes}분 뒤 또는 관리자의 해당 기기 설정 허용 이후 다시 QR을 통한 링크 접속이 가능합니다.`,
+          }, 429);
+        }
 
         // Cloudflare가 넘겨주는 실제 접속 IP — 클라이언트가 조작할 수 없는 신뢰 가능한 공인 IP
         const publicIp = request.headers.get("cf-connecting-ip") || "unknown";
@@ -217,23 +235,11 @@ export default {
           verifyStatus = "GPS거부";
         }
 
-        // 같은 기기의 최근 이력 확인 — 5분 이내 재시도는 기록 없이 즉시 차단(스팸 방지),
-        // 그 외엔 항상 기록을 남기되 최근 24시간 내 5회 이상이면 "중복의심"으로 덮어씀
-        const history = await checkDeviceHistory(env, center.id, deviceFingerprint);
-        if (history.cooldownActive) {
-          return json({ error: `잠시 후 다시 시도해주세요 (약 ${Math.ceil(history.remainingSeconds / 60)}분 후 가능)`, cooldown: true }, 429);
-        }
-        if (history.countInWindow + 1 >= DUPLICATE_THRESHOLD) {
-          verifyStatus = "중복의심";
-        }
-
         const now = new Date().toISOString();
         const fields = {
           Title: `${c.Title} ${now.slice(0, 16).replace("T", " ")}`,
           CenterId: String(center.id),
           CenterName: c.Title,
-          VisitorName: name,
-          VisitorPhone: phone || "",
           ServerTimestamp: now,
           ClientTimestamp: clientTimestamp || "",
           PublicIP: publicIp,
@@ -252,7 +258,7 @@ export default {
         };
         await createItem(env, "mkqr_CheckIns", fields);
 
-        return json({ verifyStatus, distanceKm: fields.DistanceKm, gpsUsed });
+        return json({ verifyStatus, distanceKm: fields.DistanceKm, gpsUsed, redirectUrl: c.RedirectUrl || "" });
       }
 
       return json({ error: "not found" }, 404);

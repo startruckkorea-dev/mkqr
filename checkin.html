@@ -8,24 +8,20 @@
   * { box-sizing: border-box; }
   html, body { margin: 0; padding: 0; font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif; background: linear-gradient(145deg,#0f2744 0%,#101B34 100%); min-height: 100vh; }
   .wrap { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 24px 16px; }
-  .card { background: #fff; border-radius: 18px; padding: 32px 24px; width: 100%; max-width: 380px; box-shadow: 0 20px 60px rgba(0,0,0,.3); }
-  .logo { font-size: 2rem; text-align: center; margin-bottom: 8px; }
-  h1 { font-size: 1.05rem; font-weight: 700; color: #101B34; text-align: center; margin: 0 0 4px; }
-  .center-name { text-align: center; color: #2F7B7A; font-weight: 600; font-size: 1.15rem; margin-bottom: 4px; }
-  .sub { text-align: center; color: #8A94A6; font-size: .82rem; margin-bottom: 22px; }
-  label { display: block; font-size: .78rem; color: #64748B; margin-bottom: 4px; margin-top: 14px; }
-  input { width: 100%; border: 1px solid #cbd5e0; border-radius: 10px; padding: 11px 12px; font-size: .95rem; font-family: inherit; }
-  input:focus { outline: none; border-color: #2F7B7A; box-shadow: 0 0 0 3px rgba(47,123,122,.15); }
-  .btn { margin-top: 22px; width: 100%; background: linear-gradient(135deg,#2F7B7A,#1A2B4C); color: #fff; border: none; border-radius: 10px; padding: 14px 0; font-size: .95rem; font-weight: 600; cursor: pointer; }
-  .btn:disabled { background: #cbd5e0; cursor: not-allowed; }
-  .status { text-align: center; padding: 10px; border-radius: 10px; font-size: .82rem; margin-top: 14px; display: none; }
-  .status.show { display: block; }
-  .status.ok { background: #ECFDF5; color: #047857; }
-  .status.warn { background: #FFFBEB; color: #B45309; }
-  .status.err { background: #FEF2F2; color: #B91C1C; }
-  .result-icon { font-size: 2.4rem; text-align: center; margin-bottom: 8px; }
-  .result-title { text-align: center; font-weight: 700; font-size: 1.05rem; margin-bottom: 4px; }
-  .result-desc { text-align: center; color: #64748B; font-size: .85rem; line-height: 1.5; }
+  .card { background: #fff; border-radius: 18px; padding: 36px 24px; width: 100%; max-width: 380px; box-shadow: 0 20px 60px rgba(0,0,0,.3); text-align: center; }
+  .logo { font-size: 2.2rem; margin-bottom: 10px; }
+  h1 { font-size: 1.05rem; font-weight: 700; color: #101B34; margin: 0 0 4px; }
+  .center-name { color: #2F7B7A; font-weight: 600; font-size: 1.15rem; margin-bottom: 4px; }
+  .sub { color: #8A94A6; font-size: .82rem; margin-bottom: 20px; }
+  .spinner { width: 34px; height: 34px; border-radius: 50%; border: 3px solid #E4F1F0; border-top-color: #2F7B7A; margin: 18px auto; animation: spin .85s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .state-text { color: #64748B; font-size: .85rem; margin-top: 8px; }
+  .result-icon { font-size: 2.4rem; margin-bottom: 8px; }
+  .result-title { font-weight: 700; font-size: 1.05rem; margin-bottom: 6px; color: #101B34; }
+  .result-desc { color: #64748B; font-size: .85rem; line-height: 1.6; }
+  .auth-code { margin-top: 16px; font-size: .72rem; color: #94a3b8; }
+  .block-box { background: #FEF2F2; border-radius: 12px; padding: 16px; margin-top: 14px; }
+  .block-box .result-desc { color: #B91C1C; }
   .foot { text-align: center; color: rgba(255,255,255,.5); font-size: 11px; margin-top: 16px; }
 </style>
 </head>
@@ -36,37 +32,32 @@
     <h1>방문 체크인</h1>
     <div class="center-name" id="center-name">불러오는 중...</div>
     <div class="sub">Star Truck Korea · Campaign Visit Verification</div>
-
-    <form id="form" style="display:none">
-      <label>이름 *</label>
-      <input id="f-name" required placeholder="이름을 입력하세요" />
-      <label>연락처 (선택)</label>
-      <input id="f-phone" placeholder="010-0000-0000" />
-      <button type="submit" class="btn" id="btn-submit">체크인 하기</button>
-      <div class="status" id="status"></div>
-    </form>
-
+    <div id="state-area">
+      <div class="spinner"></div>
+      <div class="state-text" id="state-text">확인 중입니다...</div>
+    </div>
     <div id="result" style="display:none"></div>
   </div>
 </div>
 <div class="foot">© 2026 Star Truck Korea</div>
 
 <script>
-// ⚠️ 배포 시 실제 Cloudflare Worker 주소로 교체 (worker/ 폴더 README 참고)
+// ⚠️ 배포 시 실제 Cloudflare Worker 주소로 교체
 const API_BASE = "https://mkqr-worker.mkqr.workers.dev";
 
 const params = new URLSearchParams(location.search);
 const token = params.get("t");
 const centerNameEl = document.getElementById("center-name");
-const form = document.getElementById("form");
-const statusEl = document.getElementById("status");
-const btn = document.getElementById("btn-submit");
+const stateArea = document.getElementById("state-area");
+const stateText = document.getElementById("state-text");
 const resultEl = document.getElementById("result");
-const card = document.getElementById("card");
 
-function showStatus(msg, kind) {
-  statusEl.textContent = msg;
-  statusEl.className = "status show " + kind;
+function setState(text) { stateText.textContent = text; }
+
+function showFinal(html) {
+  stateArea.style.display = "none";
+  resultEl.style.display = "block";
+  resultEl.innerHTML = html;
 }
 
 function getDeviceId() {
@@ -79,7 +70,7 @@ function getDeviceId() {
 }
 
 // 기기 핑거프린트 — localStorage(mkqr_device_id)는 브라우저 데이터를 지우면 바로 초기화되지만,
-// 화면/캔버스/시간대 등 하드웨어·환경 신호를 조합한 이 값은 지워지지 않아 같은 기기의 반복 체크인을
+// 화면/캔버스/시간대 등 하드웨어·환경 신호를 조합한 이 값은 지워지지 않아 같은 기기의 반복 접근을
 // 어느 정도 더 잡아낼 수 있다 (완벽하게 우회를 막지는 못함 — 어뷰징 난이도를 높이는 용도).
 async function getDeviceFingerprint() {
   const parts = [
@@ -103,25 +94,6 @@ async function getDeviceFingerprint() {
   return Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-async function init() {
-  if (!token) {
-    centerNameEl.textContent = "잘못된 접근입니다";
-    showStatus("QR 코드를 다시 스캔해주세요.", "err");
-    statusEl.classList.add("show");
-    return;
-  }
-  try {
-    const res = await fetch(`${API_BASE}/api/center?t=${encodeURIComponent(token)}`);
-    const data = await res.json();
-    if (!res.ok || !data.name) throw new Error(data.error || "센터 정보를 찾을 수 없습니다");
-    centerNameEl.textContent = data.name;
-    form.style.display = "block";
-  } catch (e) {
-    centerNameEl.textContent = "센터 정보를 불러올 수 없습니다";
-    showStatus(e.message, "err");
-  }
-}
-
 function getGps() {
   return new Promise((resolve) => {
     if (!navigator.geolocation) { resolve(null); return; }
@@ -133,20 +105,66 @@ function getGps() {
   });
 }
 
-form.addEventListener("submit", async (e) => {
-  e.preventDefault();
-  btn.disabled = true;
-  btn.textContent = "위치 확인 중...";
-  showStatus("위치 정보를 확인하고 있습니다...", "warn");
+function renderSuccess(data, fingerprint) {
+  const ok = data.verifyStatus === "정상";
+  let desc;
+  if (ok) desc = "방문 위치가 정상적으로 확인되었습니다.<br>감사합니다.";
+  else if (data.gpsUsed) desc = "현재 위치가 센터 반경(10km)을 벗어나 있어<br>담당자 확인 후 처리됩니다.";
+  else desc = "위치 정보 확인이 어려워<br>담당자 확인 후 처리됩니다.";
 
+  const authCode = fingerprint ? fingerprint.slice(0, 8).toUpperCase() : "";
+  showFinal(`
+    <div class="result-icon">${ok ? "✅" : "⚠️"}</div>
+    <div class="result-title">${ok ? "체크인 완료" : "체크인 접수 (확인 필요)"}</div>
+    <div class="result-desc">${desc}</div>
+    ${authCode ? `<div class="auth-code">인증코드 ${authCode}</div>` : ""}
+  `);
+}
+
+function renderBlocked(message) {
+  showFinal(`
+    <div class="result-icon">🚫</div>
+    <div class="result-title">접속이 제한되었습니다</div>
+    <div class="block-box"><div class="result-desc">${message}</div></div>
+  `);
+}
+
+function renderError(message) {
+  showFinal(`
+    <div class="result-icon">⚠️</div>
+    <div class="result-title">처리할 수 없습니다</div>
+    <div class="result-desc">${message}</div>
+  `);
+}
+
+async function run() {
+  if (!token) {
+    centerNameEl.textContent = "잘못된 접근입니다";
+    renderError("QR 코드를 다시 스캔해주세요.");
+    return;
+  }
+
+  // 1) 센터 정보 조회
+  let centerInfo;
+  try {
+    const res = await fetch(`${API_BASE}/api/center?t=${encodeURIComponent(token)}`);
+    centerInfo = await res.json();
+    if (!res.ok || !centerInfo.name) throw new Error(centerInfo.error || "센터 정보를 찾을 수 없습니다");
+    centerNameEl.textContent = centerInfo.name;
+  } catch (e) {
+    centerNameEl.textContent = "센터 정보를 불러올 수 없습니다";
+    renderError(e.message);
+    return;
+  }
+
+  // 2) 위치/기기정보 수집 (사용자 입력 없이 자동 진행)
+  setState("위치 정보를 확인하고 있습니다...");
   const gps = await getGps();
   const fingerprint = await getDeviceFingerprint().catch(() => "");
-  btn.textContent = "체크인 처리 중...";
+  setState("체크인 처리 중입니다...");
 
   const payload = {
     token,
-    name: document.getElementById("f-name").value.trim(),
-    phone: document.getElementById("f-phone").value.trim(),
     gps,
     clientTimestamp: new Date().toISOString(),
     deviceId: getDeviceId(),
@@ -154,51 +172,34 @@ form.addEventListener("submit", async (e) => {
     userAgent: navigator.userAgent,
   };
 
+  // 3) 자동 체크인 요청
+  let data;
   try {
     const res = await fetch(`${API_BASE}/api/checkin`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
-    const data = await res.json();
+    data = await res.json();
     if (!res.ok) {
-      if (res.status === 429 && data.cooldown) {
-        showStatus(data.error, "warn");
-        btn.disabled = false;
-        btn.textContent = "체크인 하기";
-        return;
-      }
+      if (res.status === 429 && data.blocked) { renderBlocked(data.error); return; }
       throw new Error(data.error || "체크인에 실패했습니다");
     }
-    renderResult(data, fingerprint);
   } catch (e) {
-    showStatus(e.message, "err");
-    btn.disabled = false;
-    btn.textContent = "체크인 하기";
+    renderError(e.message);
+    return;
   }
-});
 
-function renderResult(data, fingerprint) {
-  form.style.display = "none";
-  resultEl.style.display = "block";
-  const ok = data.verifyStatus === "정상";
-  const isDup = data.verifyStatus === "중복의심";
-  let desc;
-  if (isDup) desc = "동일 기기로 최근 체크인 이력이 확인되어<br>담당자 확인 후 처리됩니다.";
-  else if (ok) desc = "방문 위치가 정상적으로 확인되었습니다.<br>감사합니다.";
-  else if (data.gpsUsed) desc = "현재 위치가 센터 반경(10km)을 벗어나 있어<br>담당자 확인 후 처리됩니다.";
-  else desc = "위치 정보 확인이 어려워<br>담당자 확인 후 처리됩니다.";
-
-  const authCode = fingerprint ? fingerprint.slice(0, 8).toUpperCase() : "";
-  resultEl.innerHTML = `
-    <div class="result-icon">${ok ? "✅" : "⚠️"}</div>
-    <div class="result-title">${ok ? "체크인 완료" : "체크인 접수 (확인 필요)"}</div>
-    <div class="result-desc">${desc}</div>
-    ${authCode ? `<div style="text-align:center;margin-top:14px;font-size:.72rem;color:#94a3b8">인증코드 ${authCode}</div>` : ""}
-  `;
+  // 4) 센터별 이동 링크가 설정돼 있으면 바로 이동, 없으면 완료 화면만 표시
+  if (data.redirectUrl) {
+    setState("이동 중입니다...");
+    location.replace(data.redirectUrl);
+    return;
+  }
+  renderSuccess(data, fingerprint);
 }
 
-init();
+run();
 </script>
 </body>
 </html>
