@@ -346,14 +346,18 @@ function CentersTab({ centers, reload, onCreated }) {
       const wb = XLSX.read(buf, { type: "array" });
       const sheet = wb.Sheets[wb.SheetNames[0]]; // 첫 번째 시트 사용 (시트명 무관)
       const rows = XLSX.utils.sheet_to_json(sheet, { header: 1 });
+      const existingTitles = new Set(centers.map((c) => c.Title));
+      const existingRegions = new Set(centers.map((c) => c.Region).filter(Boolean));
       let created = 0, skipped = 0;
+      const regionNotices = []; // 센터명은 새것이지만 지역은 기존에 이미 있는 경우 (참고용, 등록은 진행)
       for (let r = 1; r < rows.length; r++) { // 0행은 헤더이므로 1행부터
         const row = rows[r] || [];
         const nameKr = row[1] ? String(row[1]).trim() : "";
         if (!nameKr) continue; // 센터명 없는 빈 줄은 스킵
+        const region = row[0] ? String(row[0]).trim() : "";
         const fields = {
           Title: nameKr,
-          Region: row[0] ? String(row[0]).trim() : "",
+          Region: region,
           CenterNameEn: row[2] ? String(row[2]).trim() : "",
           CorpNameKr: row[3] ? String(row[3]).trim() : "",
           AddressKr: row[4] ? String(row[4]).trim() : "",
@@ -363,11 +367,18 @@ function CentersTab({ centers, reload, onCreated }) {
           VerifyRadiusM: row[7] ? Number(row[7]) : 10000,
           Active: true,
         };
-        if (centers.some((c) => c.Title === fields.Title)) { skipped++; continue; } // 중복 스킵
+        if (existingTitles.has(fields.Title)) { skipped++; continue; } // 센터명 중복 → 진짜 중복이니 건너뜀
+        if (region && existingRegions.has(region)) { regionNotices.push(fields.Title); } // 지역만 중복 → 등록은 진행, 안내만
         await mkCreateItem(MK_LISTS.centers, fields);
+        existingTitles.add(fields.Title); // 같은 파일 안에서도 중복 방지
+        if (region) existingRegions.add(region);
         created++;
       }
-      alert(`${created}개 센터를 가져왔습니다.${skipped ? ` (이미 있는 센터명 ${skipped}건은 건너뜀)` : ""}\n주소만 채워졌으니 각 센터에서 "좌표 찾기"로 위경도를 채워주세요.`);
+      let msg = `${created}개 센터를 가져왔습니다.`;
+      if (skipped) msg += `\n센터명 중복 ${skipped}건은 건너뜀.`;
+      if (regionNotices.length) msg += `\n\n※ 같은 지역에 이미 다른 센터가 있는 신규 등록건 (참고용, 정상 등록됨):\n${regionNotices.join(", ")}`;
+      msg += `\n\n주소만 채워졌으니 각 센터에서 "좌표 찾기"로 위경도를 채워주세요.`;
+      alert(msg);
       await reload();
     } catch (e) { alert("가져오기 실패: " + e.message); } finally { setBusy(false); if (fileRef.current) fileRef.current.value = ""; }
   }
