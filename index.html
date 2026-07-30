@@ -70,7 +70,7 @@ import {
   Building2, QrCode, ListChecks, LogOut, Plus, Pencil, Trash2, X,
   Download, RefreshCw, MapPin, Search, CheckCircle2, AlertTriangle,
   Upload, ExternalLink, Phone, Navigation, LayoutDashboard, ShieldCheck,
-  ArrowUpRight, ImagePlus,
+  ArrowUpRight, ImagePlus, KeyRound,
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import QRCode from "qrcode";
@@ -120,7 +120,19 @@ async function apiGet(path, token) {
 /* ------------------------------------------------------------------
  * mkqr_* SharePoint 목록 — GUID 하드코딩 없이 displayName으로 조회/캐싱 (ICS와 동일 패턴)
  * ------------------------------------------------------------------ */
-const MK_LISTS = { centers: "mkqr_Centers", staff: "mkqr_Staff", checkins: "mkqr_CheckIns", admins: "mkqr_Admins" };
+const MK_LISTS = { centers: "mkqr_Centers", staff: "mkqr_Staff", checkins: "mkqr_CheckIns", admins: "mkqr_Admins", categoryAccess: "mkqr_CategoryAccess" };
+
+// 화면 탭(=ICS의 "카테고리")과 그 접근 권한을 저장할 때 쓰는 SharePoint 컬럼명 매핑.
+// mkqr_CategoryAccess 목록: Email(한 줄 텍스트) + Access_* 5개(예/아니요). 특정 사용자의 행 자체가 없거나
+// 특정 컬럼이 비어있으면 "허용"으로 간주 (기본값이 거부가 아니라 허용이어야, 나중에 카테고리를 추가해도
+// 기존 관리자가 갑자기 접근을 잃는 사고가 안 남).
+const MK_CATEGORIES = [
+  { key: "overview", label: "Overview", field: "Access_overview" },
+  { key: "centers", label: "센터 관리", field: "Access_centers" },
+  { key: "qr", label: "QR 코드", field: "Access_qr" },
+  { key: "checkins", label: "체크인 기록", field: "Access_checkins" },
+  { key: "admins", label: "관리자 전용(설정/권한)", field: "Access_admins" },
+];
 const _mkListIds = {};
 
 async function getMkListId(listName) {
@@ -1294,11 +1306,110 @@ function AdminsTab({ admins, reload, userEmail }) {
   );
 }
 
+/* ------------------------------------------------------------------ */
+/* 카테고리 접근 권한 탭 — 관리자별로 화면(탭) 단위 접근을 체크박스로 관리      */
+/* ------------------------------------------------------------------ */
+function CategoryAccessTab({ admins, categoryAccess, reload }) {
+  const [q, setQ] = useState("");
+  const [savingKey, setSavingKey] = useState(null); // "adminId:catKey" — 저장 중인 셀만 살짝 비활성화
+
+  const filteredAdmins = admins.filter((a) => !q || (a.Title || "").includes(q) || (a.Email || "").toLowerCase().includes(q.toLowerCase()));
+
+  function rowFor(email) {
+    return categoryAccess.find((r) => (r.Email || "").toLowerCase() === (email || "").toLowerCase());
+  }
+
+  async function toggle(admin, cat) {
+    const email = (admin.Email || "").toLowerCase();
+    const existing = rowFor(email);
+    const cellKey = `${admin.id}:${cat.key}`;
+    setSavingKey(cellKey);
+    try {
+      const currentVal = existing ? existing[cat.field] !== false : true; // 행 없으면 기본 허용 상태
+      if (existing) {
+        await mkUpdateItem(MK_LISTS.categoryAccess, existing.id, { [cat.field]: !currentVal });
+      } else {
+        // 행이 아직 없으면 전체 카테고리를 "허용(true)"으로 깔고, 지금 끄려는 것만 false로 새로 생성
+        const fields = { Title: admin.Title || email, Email: email };
+        MK_CATEGORIES.forEach((c) => { fields[c.field] = c.key === cat.key ? !currentVal : true; });
+        await mkCreateItem(MK_LISTS.categoryAccess, fields);
+      }
+      await reload();
+    } catch (e) { alert(e.message); } finally { setSavingKey(null); }
+  }
+
+  return (
+    <div>
+      <div className="bg-blue-50 border border-blue-100 rounded-xl p-4 mb-5 text-sm text-blue-900 flex gap-3">
+        <KeyRound size={18} className="text-blue-500 shrink-0 mt-0.5" />
+        <div>
+          관리자별로 화면 단위 접근 권한을 체크박스로 켜고 끌 수 있습니다. 변경 즉시 저장되고 바로 반영됩니다.
+          <b> 아직 행이 없는(체크 설정을 한 번도 안 바꾼) 관리자는 전체 화면에 접근 가능</b>한 기본 상태입니다.
+        </div>
+      </div>
+
+      <div className="relative mb-4 max-w-xs">
+        <Search size={15} className="absolute left-2.5 top-2.5 text-slate-400" />
+        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="관리자 검색" className="pl-8 pr-3 py-2 border border-slate-300 rounded-lg text-sm w-full" />
+      </div>
+
+      <div className="bg-white rounded-xl border overflow-hidden overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead className="bg-slate-50 text-slate-500 text-xs">
+            <tr>
+              <th className="text-left px-4 py-2.5">관리자</th>
+              {MK_CATEGORIES.map((c) => (
+                <th key={c.key} className="text-center px-3 py-2.5 whitespace-nowrap">{c.label}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {filteredAdmins.map((a) => {
+              const row = rowFor(a.Email);
+              return (
+                <tr key={a.id} className="border-t hover:bg-slate-50">
+                  <td className="px-4 py-2.5">
+                    <div className="flex items-center gap-2.5">
+                      <div className="w-7 h-7 rounded-full flex items-center justify-center text-white text-[11px] font-semibold shrink-0" style={{ background: BRAND.navy }}>
+                        {(a.Title || a.Email || "?").charAt(0).toUpperCase()}
+                      </div>
+                      <div className="min-w-0">
+                        <div className="font-medium text-slate-800 truncate text-xs">{a.Title}</div>
+                        <div className="text-[11px] text-slate-400 truncate">{a.Email}</div>
+                      </div>
+                    </div>
+                  </td>
+                  {MK_CATEGORIES.map((c) => {
+                    const checked = row ? row[c.field] !== false : true;
+                    const cellKey = `${a.id}:${c.key}`;
+                    return (
+                      <td key={c.key} className="text-center px-3 py-2.5">
+                        <input type="checkbox" checked={checked} disabled={savingKey === cellKey}
+                          onChange={() => toggle(a, c)} className="w-4 h-4 cursor-pointer" />
+                      </td>
+                    );
+                  })}
+                </tr>
+              );
+            })}
+            {!filteredAdmins.length && (
+              <tr><td colSpan={MK_CATEGORIES.length + 1} className="text-center text-slate-400 py-10">
+                {admins.length ? "검색 결과가 없습니다" : "먼저 \"관리자 설정\"에서 관리자를 등록해주세요"}
+              </td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 function App({ userEmail }) {
   const [tab, setTab] = useState("overview");
   const [centers, setCenters] = useState([]);
   const [checkins, setCheckins] = useState([]);
   const [admins, setAdmins] = useState([]);
+  const [categoryAccess, setCategoryAccess] = useState([]);
   const [checkinPeriodDays, setCheckinPeriodDays] = useState(30); // 체크인 기록은 목록이 커질 수 있어 기본 최근 30일만 조회
   const [loading, setLoading] = useState(true);
   const [highlightId, setHighlightId] = useState(null);
@@ -1313,14 +1424,16 @@ function App({ userEmail }) {
         const since = new Date(Date.now() - periodDays * 24 * 3600 * 1000).toISOString();
         checkinQuery = `&$filter=fields/ServerTimestamp ge '${since}'`;
       }
-      const [c, k, a] = await Promise.all([
+      const [c, k, a, ca] = await Promise.all([
         mkListAll(MK_LISTS.centers),
         mkListAll(MK_LISTS.checkins, checkinQuery),
         mkListAll(MK_LISTS.admins).catch(() => []), // 목록이 아직 없을 수도 있으니 실패해도 무시
+        mkListAll(MK_LISTS.categoryAccess).catch(() => []),
       ]);
       setCenters(c.map((x) => ({ id: x.id, ...x.fields })));
       setCheckins(k.map((x) => ({ id: x.id, ...x.fields })));
       setAdmins(a.map((x) => ({ id: x.id, ...x.fields })));
+      setCategoryAccess(ca.map((x) => ({ id: x.id, ...x.fields })));
     } catch (e) { console.error(e); alert("데이터 로딩 실패: " + e.message); }
     setLoading(false);
   }
@@ -1339,13 +1452,32 @@ function App({ userEmail }) {
     setTimeout(() => setHighlightId(null), 5000);
   }
 
-  const nav = [
-    { id: "overview", label: "Overview", icon: LayoutDashboard },
-    { id: "centers", label: "센터 관리", icon: Building2 },
-    { id: "qr", label: "QR 코드", icon: QrCode },
-    { id: "checkins", label: "체크인 기록", icon: ListChecks, badge: needsVerify },
-    { id: "admins", label: "관리자 설정", icon: ShieldCheck },
+  // 로그인한 사용자의 카테고리별 접근 권한 — 본인 행이 없거나 특정 컬럼이 비어있으면 "허용"으로 간주.
+  const myAccessRow = categoryAccess.find((r) => (r.Email || "").toLowerCase() === (userEmail || "").toLowerCase());
+  function canAccess(catKey) {
+    if (!myAccessRow) return true;
+    const cat = MK_CATEGORIES.find((c) => c.key === catKey);
+    const val = myAccessRow[cat.field];
+    return val !== false;
+  }
+
+  const allNav = [
+    { id: "overview", label: "Overview", icon: LayoutDashboard, cat: "overview" },
+    { id: "centers", label: "센터 관리", icon: Building2, cat: "centers" },
+    { id: "qr", label: "QR 코드", icon: QrCode, cat: "qr" },
+    { id: "checkins", label: "체크인 기록", icon: ListChecks, badge: needsVerify, cat: "checkins" },
   ];
+  const adminNav = [
+    { id: "admins", label: "관리자 설정", icon: ShieldCheck, cat: "admins" },
+    { id: "categoryAccess", label: "카테고리 접근 권한", icon: KeyRound, cat: "admins" },
+  ];
+  const nav = [...allNav, ...adminNav].filter((n) => canAccess(n.cat));
+  const visibleAdminNav = adminNav.filter((n) => canAccess(n.cat));
+  const visibleMainNav = allNav.filter((n) => canAccess(n.cat));
+
+  useEffect(() => {
+    if (!loading && nav.length && !nav.some((n) => n.id === tab)) setTab(nav[0].id);
+  }, [loading, myAccessRow]);
 
   return (
     <div className="min-h-screen flex" style={{ background: "#F5F6F8" }}>
@@ -1357,13 +1489,24 @@ function App({ userEmail }) {
           <p className="text-slate-400 text-[10px] text-center mt-1.5">MKQR · 방문인증 QR</p>
         </div>
         <nav className="flex-1 py-3">
-          {nav.map((n) => (
+          {visibleMainNav.map((n) => (
             <button key={n.id} onClick={() => setTab(n.id)}
               className={`w-full flex items-center gap-2.5 px-5 py-2.5 text-sm ${tab === n.id ? "bg-white/10 text-white" : "text-white/60 hover:text-white/90"}`}>
               <n.icon size={16} /> {n.label}
               {!!n.badge && <span className="ml-auto bg-amber-400 text-amber-900 text-[10px] font-bold px-1.5 py-0.5 rounded-full">{n.badge}</span>}
             </button>
           ))}
+          {visibleAdminNav.length > 0 && (
+            <>
+              <div className="px-5 pt-4 pb-1.5 text-[10px] font-semibold text-white/30 tracking-wide">관리자 전용</div>
+              {visibleAdminNav.map((n) => (
+                <button key={n.id} onClick={() => setTab(n.id)}
+                  className={`w-full flex items-center gap-2.5 px-5 py-2.5 text-sm ${tab === n.id ? "bg-white/10 text-white" : "text-white/60 hover:text-white/90"}`}>
+                  <n.icon size={16} /> {n.label}
+                </button>
+              ))}
+            </>
+          )}
         </nav>
         <div className="px-5 py-3 border-t border-white/10 text-[10px] text-white/30">© 2026 Star Truck Korea</div>
       </aside>
@@ -1394,6 +1537,7 @@ function App({ userEmail }) {
             {tab === "qr" && <QrTab centers={centers} highlightId={highlightId} />}
             {tab === "checkins" && <CheckInsTab checkins={checkins} centers={centers} reload={reload} periodDays={checkinPeriodDays} onPeriodChange={changeCheckinPeriod} />}
             {tab === "admins" && <AdminsTab admins={admins} reload={reload} userEmail={userEmail} />}
+            {tab === "categoryAccess" && <CategoryAccessTab admins={admins} categoryAccess={categoryAccess} reload={reload} />}
           </>
         )}
       </main>
