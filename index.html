@@ -530,7 +530,7 @@ function QrTab({ centers, highlightId }) {
 /* ------------------------------------------------------------------ */
 /* 체크인 기록 탭                                                       */
 /* ------------------------------------------------------------------ */
-function CheckInsTab({ checkins, centers, reload }) {
+function CheckInsTab({ checkins, centers, reload, periodDays, onPeriodChange }) {
   const [filter, setFilter] = useState("전체");
   const [q, setQ] = useState("");
 
@@ -566,7 +566,7 @@ function CheckInsTab({ checkins, centers, reload }) {
     const data = rows.map((r) => ({
       센터: r.CenterName, 시각: fmtDate(r.ServerTimestamp),
       공인IP: r.PublicIP, "IP위치(도시)": r.IpCity, GPS좌표: r.GpsLat ? `${r.GpsLat}, ${r.GpsLng}` : "",
-      "거리(km)": r.DistanceKm, 판정: r.VerifyStatus, 기기요약: parseDeviceLabel(r.UserAgent), 인증코드: (r.DeviceFingerprint || "").slice(0, 8).toUpperCase(), 기기ID: r.DeviceId, UserAgent원본: r.UserAgent,
+      "거리(km)": r.DistanceKm, 판정: r.VerifyStatus, reCAPTCHA점수: r.RecaptchaScore, 기기요약: parseDeviceLabel(r.UserAgent), 인증코드: (r.DeviceFingerprint || "").slice(0, 8).toUpperCase(), 기기ID: r.DeviceId, UserAgent원본: r.UserAgent,
     }));
     const ws = XLSX.utils.json_to_sheet(data);
     const wb = XLSX.utils.book_new();
@@ -578,6 +578,12 @@ function CheckInsTab({ checkins, centers, reload }) {
     <div>
       <div className="flex items-center justify-between mb-4 gap-2 flex-wrap">
         <div className="flex gap-2 items-center">
+          <select value={periodDays} onChange={(e) => onPeriodChange(Number(e.target.value))} className={inputCls + " w-36"} title="조회 기간 (목록이 커질수록 넓은 기간 조회는 느려질 수 있음)">
+            <option value={7}>최근 7일</option>
+            <option value={30}>최근 30일</option>
+            <option value={90}>최근 90일</option>
+            <option value={0}>전체 (느릴 수 있음)</option>
+          </select>
           <select value={filter} onChange={(e) => setFilter(e.target.value)} className={inputCls + " w-40"}>
             <option>전체</option><option>정상</option><option>검증필요</option><option>GPS거부</option><option>관리자승인</option><option>차단해제</option>
           </select>
@@ -642,19 +648,35 @@ function App({ userEmail }) {
   const [tab, setTab] = useState("centers");
   const [centers, setCenters] = useState([]);
   const [checkins, setCheckins] = useState([]);
+  const [checkinPeriodDays, setCheckinPeriodDays] = useState(30); // 체크인 기록은 목록이 커질 수 있어 기본 최근 30일만 조회
   const [loading, setLoading] = useState(true);
   const [highlightId, setHighlightId] = useState(null);
 
-  async function reload() {
+  async function reload(periodDays = checkinPeriodDays) {
     setLoading(true);
     try {
-      const [c, k] = await Promise.all([mkListAll(MK_LISTS.centers), mkListAll(MK_LISTS.checkins)]);
+      // 체크인 기록은 커질수록 무거워지므로 ServerTimestamp 기준 최근 기간만 서버에서 걸러서 가져온다.
+      // "전체"(periodDays=0)를 고르면 필터 없이 전부 가져온다 — 데이터가 많으면 느릴 수 있음.
+      let checkinQuery = "";
+      if (periodDays > 0) {
+        const since = new Date(Date.now() - periodDays * 24 * 3600 * 1000).toISOString();
+        checkinQuery = `&$filter=fields/ServerTimestamp ge '${since}'`;
+      }
+      const [c, k] = await Promise.all([
+        mkListAll(MK_LISTS.centers),
+        mkListAll(MK_LISTS.checkins, checkinQuery),
+      ]);
       setCenters(c.map((x) => ({ id: x.id, ...x.fields })));
       setCheckins(k.map((x) => ({ id: x.id, ...x.fields })));
     } catch (e) { console.error(e); alert("데이터 로딩 실패: " + e.message); }
     setLoading(false);
   }
   useEffect(() => { reload(); }, []);
+
+  function changeCheckinPeriod(days) {
+    setCheckinPeriodDays(days);
+    reload(days);
+  }
 
   const needsVerify = checkins.filter((r) => r.VerifyStatus === "검증필요").length;
 
@@ -694,7 +716,7 @@ function App({ userEmail }) {
           <>
             {tab === "centers" && <CentersTab centers={centers} reload={reload} onCreated={handleCenterCreated} />}
             {tab === "qr" && <QrTab centers={centers} highlightId={highlightId} />}
-            {tab === "checkins" && <CheckInsTab checkins={checkins} centers={centers} reload={reload} />}
+            {tab === "checkins" && <CheckInsTab checkins={checkins} centers={centers} reload={reload} periodDays={checkinPeriodDays} onPeriodChange={changeCheckinPeriod} />}
           </>
         )}
       </main>

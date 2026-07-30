@@ -14,12 +14,13 @@
  * 3) PnP PowerShell 또는 Graph API로 STK-DB 사이트에 이 App의 Sites.Selected 쓰기 권한 부여
  *    (Grant-PnPAzureADAppSitePermission 참고 — 기존 STK 인트라 백업 자동화 때 쓰신 PnP 모듈 재사용 가능)
  * 4) 인증서/시크릿 → 새 클라이언트 시크릿 생성 (만료일 등록 필수, 캘린더에 갱신 알림 권장)
- * 5) wrangler secret put 으로 아래 3개 값을 이 Worker에 등록:
+ * 5) wrangler secret put 으로 아래 값들을 이 Worker에 등록:
  *      wrangler secret put MK_CLIENT_ID
  *      wrangler secret put MK_CLIENT_SECRET
  *      wrangler secret put MK_TENANT_ID
+ *      wrangler secret put MK_RECAPTCHA_SECRET   (reCAPTCHA v3 비밀 키, 선택)
  * 6) SharePoint STK-DB 사이트에 리스트 3개 생성 (컬럼 스키마는 대화 중 안내받은 내용 참고):
- *      mkqr_Centers (RedirectUrl 컬럼 포함) / mkqr_Staff / mkqr_CheckIns
+ *      mkqr_Centers (RedirectUrl 컬럼 포함) / mkqr_Staff / mkqr_CheckIns (RecaptchaScore 컬럼 포함, 숫자형)
  * 7) wrangler.toml의 route/도메인 설정 후 `wrangler deploy`
  * 8) index.html의 CHECKIN_API_BASE, checkin.html의 API_BASE를 실제 배포 URL로 교체
  */
@@ -95,13 +96,23 @@ async function listItems(env, listName, filterQuery = "") {
   let items = [];
   let url = `${GRAPH}/sites/${siteId}/lists/${listId}/items?expand=fields&$top=200${filterQuery}`;
   while (url) {
-    const res = await fetch(url, { headers: { Authorization: "Bearer " + token } });
+    const res = await fetch(url, {
+      headers: { Authorization: "Bearer " + token, Prefer: "HonorNonIndexedQueriesWarningMayFailRandomly" },
+    });
     const data = await res.json();
     if (!res.ok) throw new Error(JSON.stringify(data));
     items = items.concat(data.value || []);
     url = data["@odata.nextLink"] || null;
   }
   return items;
+}
+
+// 체크인 기록이 수천 건 쌓여도 매번 전체를 긁지 않도록, ServerTimestamp 기준으로 최근 것만 서버측 필터링해서 가져온다.
+// mkqr_CheckIns 목록의 ServerTimestamp 컬럼에 "인덱스"를 걸어두는 걸 권장 (목록 설정 → 인덱스 걸린 열 → 만들기).
+// 인덱스가 없어도 Prefer 헤더 덕분에 동작은 하지만, 목록이 5,000건을 넘어가면 느려지거나 실패할 수 있다.
+async function listRecentCheckins(env, sinceMs) {
+  const sinceIso = new Date(sinceMs).toISOString();
+  return listItems(env, "mkqr_CheckIns", `&$filter=fields/ServerTimestamp ge '${sinceIso}'`);
 }
 
 async function createItem(env, listName, fields) {
@@ -139,6 +150,24 @@ async function ipGeolocate(ip) {
   }
 }
 
+// reCAPTCHA v3 서버측 검증. 토큰이 없거나 시크릿이 아직 설정 안 됐거나 Google 쪽에 문제가 있어도
+// 체크인 자체를 막지는 않는다 (광고차단기 등으로 스크립트가 막히는 경우가 흔해서, 실패해도 그냥
+// score를 null로 두고 넘어가고 다른 신호(GPS/IP/기기 반복)로 계속 검증한다).
+async function verifyRecaptcha(env, token, remoteIp) {
+  if (!token || !env.MK_RECAPTCHA_SECRET) return null;
+  try {
+    const body = new URLSearchParams({ secret: env.MK_RECAPTCHA_SECRET, response: token, remoteip: remoteIp || "" });
+    const res = await fetch("https://www.google.com/recaptcha/api/siteverify", {
+      method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body,
+    });
+    const data = await res.json();
+    if (!data.success) return null;
+    return typeof data.score === "number" ? data.score : null;
+  } catch (e) {
+    return null;
+  }
+}
+
 async function findCenterByToken(env, token) {
   // SharePoint 서식 필드는 대소문자/공백에 예민할 수 있어 전체 조회 후 JS로 비교 (센터 수가 적어 부담 없음)
   const items = await listItems(env, "mkqr_Centers");
@@ -150,11 +179,11 @@ async function findCenterByToken(env, token) {
 //  1) 관리자가 "차단해제" 마커를 남기면, 그 시점 이후의 기록만 갖고 판단한다.
 //  2) 남은 기록을 시간순으로 훑으면서, 어느 시점이든 최근 1분 안에 5건이 몰려있으면
 //     그 5번째 기록 시각 + 30분을 차단 해제 시각(blockUntil)으로 잡는다 (가장 늦은 값 사용).
-// SharePoint List API로 복합 필터를 걸기 번거로워 전체를 가져온 뒤 JS에서 계산한다
-// (체크인 건수가 많아지면 $filter=CenterId eq '...' 정도의 서버측 필터 추가를 권장).
+// 전체 이력이 아니라 최근 2시간치만 조회한다 (차단 판정에 필요한 범위는 최대 30분+여유분이면 충분,
+// 목록이 아무리 커져도 이 조회량은 늘어나지 않는다).
 async function computeBlockStatus(env, centerId, fingerprint) {
   if (!fingerprint) return { blocked: false };
-  const items = await listItems(env, "mkqr_CheckIns");
+  const items = await listRecentCheckins(env, Date.now() - 2 * 3600 * 1000);
   const sameDevice = items.filter((it) => it.fields.CenterId === String(centerId) && it.fields.DeviceFingerprint === fingerprint);
 
   const lastOverride = sameDevice
@@ -195,7 +224,7 @@ export default {
 
       if (url.pathname === "/api/checkin" && request.method === "POST") {
         const body = await request.json();
-        const { token, gps, clientTimestamp, deviceId, deviceFingerprint, userAgent } = body;
+        const { token, gps, clientTimestamp, deviceId, deviceFingerprint, userAgent, recaptchaToken } = body;
         if (!token) return json({ error: "잘못된 요청입니다" }, 400);
 
         const center = await findCenterByToken(env, token);
@@ -219,6 +248,8 @@ export default {
         if (publicIp !== "unknown") ipLoc = await ipGeolocate(publicIp);
         const ipCity = ipLoc?.city || cfCity || "";
 
+        const recaptchaScore = await verifyRecaptcha(env, recaptchaToken, publicIp);
+
         let distKm = null, source = "없음", verifyStatus = "검증필요", gpsUsed = false;
         const hasCenterCoord = c.Lat != null && c.Lng != null;
 
@@ -233,6 +264,11 @@ export default {
           verifyStatus = distKm <= VERIFY_RADIUS_KM ? "정상" : "검증필요";
         } else if (!gps) {
           verifyStatus = "GPS거부";
+        }
+
+        // reCAPTCHA 점수가 낮으면(봇 의심) 위치가 맞았더라도 검증필요로 내림
+        if (recaptchaScore != null && recaptchaScore < 0.3 && verifyStatus === "정상") {
+          verifyStatus = "검증필요";
         }
 
         const now = new Date().toISOString();
@@ -255,6 +291,7 @@ export default {
           UserAgent: userAgent || "",
           DeviceId: deviceId || "",
           DeviceFingerprint: deviceFingerprint || "",
+          RecaptchaScore: recaptchaScore,
         };
         await createItem(env, "mkqr_CheckIns", fields);
 

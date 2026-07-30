@@ -4,6 +4,8 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0" />
 <title>방문 체크인 · Star Truck Korea</title>
+<!-- reCAPTCHA v3: 화면엔 아무것도 안 보이고 배경에서 점수만 매김. Jimmy님이 사이트 키 알려주시면 아래 YOUR_RECAPTCHA_SITE_KEY 교체 -->
+<script src="https://www.google.com/recaptcha/api.js?render=YOUR_RECAPTCHA_SITE_KEY"></script>
 <style>
   * { box-sizing: border-box; }
   html, body { margin: 0; padding: 0; font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif; background: linear-gradient(145deg,#0f2744 0%,#101B34 100%); min-height: 100vh; }
@@ -44,6 +46,8 @@
 <script>
 // ⚠️ 배포 시 실제 Cloudflare Worker 주소로 교체
 const API_BASE = "https://mkqr-worker.mkqr.workers.dev";
+// ⚠️ Google reCAPTCHA 관리 콘솔에서 받은 사이트 키로 교체 (위 <script> 태그의 render= 값도 같이 교체해야 함)
+const RECAPTCHA_SITE_KEY = "YOUR_RECAPTCHA_SITE_KEY";
 
 const params = new URLSearchParams(location.search);
 const token = params.get("t");
@@ -105,6 +109,19 @@ function getGps() {
   });
 }
 
+// reCAPTCHA v3 토큰 발급 — 화면엔 아무것도 안 뜨고 배경에서 처리됨.
+// 광고차단기 등으로 스크립트 자체가 막혀도 체크인 흐름은 계속 진행되도록 실패시 null 반환.
+function getRecaptchaToken() {
+  return new Promise((resolve) => {
+    if (typeof grecaptcha === "undefined" || RECAPTCHA_SITE_KEY === "YOUR_RECAPTCHA_SITE_KEY") { resolve(null); return; }
+    try {
+      grecaptcha.ready(() => {
+        grecaptcha.execute(RECAPTCHA_SITE_KEY, { action: "checkin" }).then(resolve).catch(() => resolve(null));
+      });
+    } catch (e) { resolve(null); }
+  });
+}
+
 function renderSuccess(data, fingerprint) {
   const ok = data.verifyStatus === "정상";
   let desc;
@@ -161,6 +178,7 @@ async function run() {
   setState("위치 정보를 확인하고 있습니다...");
   const gps = await getGps();
   const fingerprint = await getDeviceFingerprint().catch(() => "");
+  const recaptchaToken = await getRecaptchaToken();
   setState("체크인 처리 중입니다...");
 
   const payload = {
@@ -170,6 +188,7 @@ async function run() {
     deviceId: getDeviceId(),
     deviceFingerprint: fingerprint,
     userAgent: navigator.userAgent,
+    recaptchaToken,
   };
 
   // 3) 자동 체크인 요청
