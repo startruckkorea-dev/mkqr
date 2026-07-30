@@ -1654,12 +1654,11 @@ function App({ userEmail }) {
     { id: "admins", label: "관리자 설정", icon: ShieldCheck, cat: "admins" },
     { id: "categoryAccess", label: "카테고리 접근 권한", icon: KeyRound, cat: "admins" },
   ];
-  const nav = [...allNav, ...adminNav].filter((n) => canAccess(n.cat));
-  const visibleAdminNav = adminNav.filter((n) => canAccess(n.cat));
-  const visibleMainNav = allNav.filter((n) => canAccess(n.cat));
+  const nav = [...allNav, ...adminNav]; // 항상 전체 표시 — 권한 없는 항목은 숨기지 않고 흐릿하게 비활성화만 함
+  const accessibleNav = nav.filter((n) => canAccess(n.cat));
 
   useEffect(() => {
-    if (!loading && nav.length && !nav.some((n) => n.id === tab)) setTab(nav[0].id);
+    if (!loading && accessibleNav.length && !accessibleNav.some((n) => n.id === tab)) setTab(accessibleNav[0].id);
   }, [loading, myAccessRow]);
 
   return (
@@ -1672,24 +1671,31 @@ function App({ userEmail }) {
           <p className="text-slate-400 text-[10px] text-center mt-1.5">MKQR · 방문인증 QR</p>
         </div>
         <nav className="flex-1 py-3 overflow-y-auto">
-          {visibleMainNav.map((n) => (
-            <button key={n.id} onClick={() => setTab(n.id)}
-              className={`w-full flex items-center gap-2.5 px-5 py-2.5 text-sm ${tab === n.id ? "bg-white/10 text-white" : "text-white/60 hover:text-white/90"}`}>
-              <n.icon size={16} /> {n.label}
-              {!!n.badge && <span className="ml-auto bg-amber-400 text-amber-900 text-[10px] font-bold px-1.5 py-0.5 rounded-full">{n.badge}</span>}
-            </button>
-          ))}
-          {visibleAdminNav.length > 0 && (
-            <>
-              <div className="px-5 pt-4 pb-1.5 text-[10px] font-semibold text-white/30 tracking-wide">관리자 전용</div>
-              {visibleAdminNav.map((n) => (
-                <button key={n.id} onClick={() => setTab(n.id)}
-                  className={`w-full flex items-center gap-2.5 px-5 py-2.5 text-sm ${tab === n.id ? "bg-white/10 text-white" : "text-white/60 hover:text-white/90"}`}>
-                  <n.icon size={16} /> {n.label}
-                </button>
-              ))}
-            </>
-          )}
+          {allNav.map((n) => {
+            const allowed = canAccess(n.cat);
+            return (
+              <button key={n.id} onClick={() => allowed && setTab(n.id)} disabled={!allowed} title={!allowed ? "접근 권한이 없습니다" : undefined}
+                className={`w-full flex items-center gap-2.5 px-5 py-2.5 text-sm ${
+                  !allowed ? "text-white/20 cursor-not-allowed" : tab === n.id ? "bg-white/10 text-white" : "text-white/60 hover:text-white/90"
+                }`}>
+                <n.icon size={16} /> {n.label}
+                {!!n.badge && allowed && <span className="ml-auto bg-amber-400 text-amber-900 text-[10px] font-bold px-1.5 py-0.5 rounded-full">{n.badge}</span>}
+              </button>
+            );
+          })}
+          <div className="px-5 pt-4 pb-1.5 text-[10px] font-semibold text-white/30 tracking-wide">관리자 전용</div>
+          {adminNav.map((n) => {
+            const allowed = canAccess(n.cat);
+            return (
+              <button key={n.id} onClick={() => allowed && setTab(n.id)} disabled={!allowed} title={!allowed ? "접근 권한이 없습니다" : undefined}
+                className={`w-full flex items-center gap-2.5 px-5 py-2.5 text-sm ${
+                  !allowed ? "text-white/20 cursor-not-allowed" : tab === n.id ? "bg-white/10 text-white" : "text-white/60 hover:text-white/90"
+                }`}>
+                <n.icon size={16} /> {n.label}
+                {!!n.badge && allowed && <span className="ml-auto bg-amber-400 text-amber-900 text-[10px] font-bold px-1.5 py-0.5 rounded-full">{n.badge}</span>}
+              </button>
+            );
+          })}
         </nav>
         <div className="px-5 py-3 border-t border-white/10 text-[10px] text-white/30">MKQR</div>
       </aside>
@@ -1713,7 +1719,12 @@ function App({ userEmail }) {
             </button>
           </div>
         </div>
-        {loading ? <div className="text-slate-400 text-sm">불러오는 중...</div> : (
+        {loading ? <div className="text-slate-400 text-sm">불러오는 중...</div> : !canAccess(nav.find((n) => n.id === tab)?.cat) ? (
+          <div className="bg-white rounded-xl border p-10 text-center">
+            <ShieldCheck size={28} className="mx-auto text-slate-300 mb-2" />
+            <div className="text-slate-500 text-sm">이 화면에 대한 접근 권한이 없습니다.</div>
+          </div>
+        ) : (
           <>
             {tab === "overview" && <OverviewTab centers={centers} checkins={checkins} admins={admins} setTab={setTab} />}
             {tab === "centers" && <CentersTab centers={centers} reload={reload} onCreated={handleCenterCreated} />}
