@@ -1802,6 +1802,7 @@ function App({ userEmail }) {
   const [loading, setLoading] = useState(true);
   const [hasLoadedOnce, setHasLoadedOnce] = useState(false); // 최초 로딩에만 전체화면 로딩 표시 — 그 이후 새로고침은 화면을 안 갈아엎음
   const [highlightId, setHighlightId] = useState(null);
+  const [permDeniedPopup, setPermDeniedPopup] = useState(false); // 권한 없는 카테고리 클릭 시 안내 팝업
 
   async function reload(periodDays = checkinPeriodDays) {
     setLoading(true);
@@ -1881,9 +1882,9 @@ function App({ userEmail }) {
           {allNav.map((n) => {
             const allowed = canAccess(n.cat);
             return (
-              <button key={n.id} onClick={() => allowed && setTab(n.id)} disabled={!allowed} title={!allowed ? "접근 권한이 없습니다" : undefined}
+              <button key={n.id} onClick={() => allowed ? setTab(n.id) : setPermDeniedPopup(true)}
                 className={`w-full flex items-center gap-2.5 px-5 py-2.5 text-sm ${
-                  !allowed ? "text-white/20 cursor-not-allowed" : tab === n.id ? "bg-white/10 text-white" : "text-white/60 hover:text-white/90"
+                  !allowed ? "text-white/20 hover:text-white/40" : tab === n.id ? "bg-white/10 text-white" : "text-white/60 hover:text-white/90"
                 }`}>
                 <n.icon size={16} /> {n.label}
                 {!!n.badge && allowed && <span className="ml-auto bg-amber-400 text-amber-900 text-[10px] font-bold px-1.5 py-0.5 rounded-full">{n.badge}</span>}
@@ -1894,9 +1895,9 @@ function App({ userEmail }) {
           {adminNav.map((n) => {
             const allowed = canAccess(n.cat);
             return (
-              <button key={n.id} onClick={() => allowed && setTab(n.id)} disabled={!allowed} title={!allowed ? "접근 권한이 없습니다" : undefined}
+              <button key={n.id} onClick={() => allowed ? setTab(n.id) : setPermDeniedPopup(true)}
                 className={`w-full flex items-center gap-2.5 px-5 py-2.5 text-sm ${
-                  !allowed ? "text-white/20 cursor-not-allowed" : tab === n.id ? "bg-white/10 text-white" : "text-white/60 hover:text-white/90"
+                  !allowed ? "text-white/20 hover:text-white/40" : tab === n.id ? "bg-white/10 text-white" : "text-white/60 hover:text-white/90"
                 }`}>
                 <n.icon size={16} /> {n.label}
                 {!!n.badge && allowed && <span className="ml-auto bg-amber-400 text-amber-900 text-[10px] font-bold px-1.5 py-0.5 rounded-full">{n.badge}</span>}
@@ -1946,6 +1947,18 @@ function App({ userEmail }) {
           <div>This system is internally developed by Star Truck Korea IT Dept. Unauthorized access is strictly prohibited.</div>
         </div>
       </main>
+
+      {permDeniedPopup && (
+        <Modal title="접근 권한 없음" onClose={() => setPermDeniedPopup(false)}>
+          <div className="text-center py-2">
+            <ShieldCheck size={28} className="mx-auto text-slate-300 mb-3" />
+            <p className="text-sm text-slate-600">이 카테고리에 접근 권한이 없습니다.<br />관리자에게 문의해주세요.</p>
+          </div>
+          <div className="flex justify-end mt-2">
+            <button onClick={() => setPermDeniedPopup(false)} className="px-4 py-2 text-sm rounded-lg text-white" style={{ background: BRAND.accent }}>확인</button>
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }
