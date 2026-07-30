@@ -989,8 +989,8 @@ function CheckInsTab({ checkins, centers, reload, periodDays, onPeriodChange }) 
           <button onClick={exportExcel} className="flex items-center gap-1.5 px-3 py-2 border border-slate-300 rounded-lg text-sm hover:bg-slate-50"><Download size={14} /> Excel 내보내기</button>
         </div>
       </div>
-      <div className="bg-white rounded-xl border overflow-hidden overflow-x-auto">
-        <table className="w-full text-sm table-fixed">
+      <div className="bg-white rounded-xl border overflow-hidden overflow-x-auto w-fit max-w-full">
+        <table className="text-sm table-fixed">
           <colgroup>
             <col style={{ width: "90px" }} />
             <col style={{ width: "110px" }} />
