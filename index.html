@@ -834,15 +834,19 @@ function QrTab({ centers, highlightId }) {
     return window.location.origin + window.location.pathname.replace(/index\.html$/, "").replace(/\/$/, "") + "/checkin.html";
   });
   const [showUrlSetting, setShowUrlSetting] = useState(false);
+  const [q, setQ] = useState("");
+
+  const activeCenters = centers.filter((c) => c.Active !== false);
+  const filtered = activeCenters.filter((c) => !q || c.Title?.includes(q) || c.Region?.includes(q) || c.AddressKr?.includes(q));
 
   useEffect(() => {
-    centers.forEach((c) => {
+    filtered.forEach((c) => {
       const el = canvasRefs.current[c.id];
       if (!el || !c.QrToken) return;
       const url = `${checkinBaseUrl}?t=${c.QrToken}`;
       QRCode.toCanvas(el, url, { width: 180, margin: 1, color: { dark: BRAND.navy, light: "#ffffff" } });
     });
-  }, [centers, checkinBaseUrl]);
+  }, [centers, checkinBaseUrl, q]);
 
   useEffect(() => {
     if (highlightId && cardRefs.current[highlightId]) {
@@ -861,21 +865,25 @@ function QrTab({ centers, highlightId }) {
 
   return (
     <div className="max-w-5xl mx-auto">
-      <div className="mb-4">
+      <div className="mb-4 flex items-center justify-between flex-wrap gap-2">
+        <div className="relative">
+          <Search size={15} className="absolute left-2.5 top-2.5 text-slate-400" />
+          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="센터명/지역/주소로 QR 검색" className="pl-8 pr-3 py-2 border border-slate-300 rounded-lg text-sm w-64" />
+        </div>
         <button onClick={() => setShowUrlSetting((v) => !v)} className="text-xs text-slate-400 hover:text-slate-600 flex items-center gap-1">
           <Settings size={13} /> 체크인 주소 설정 {showUrlSetting ? "숨기기" : "펼치기"}
         </button>
-        {showUrlSetting && (
-          <div className="mt-2 max-w-xl">
-            <Field label="체크인 페이지 기본 주소 (checkin.html 배포 URL)">
-              <input className={inputCls} value={checkinBaseUrl} onChange={(e) => setCheckinBaseUrl(e.target.value)} />
-            </Field>
-            <p className="text-xs text-slate-400 -mt-2">평소엔 안 건드리셔도 됩니다. 도메인이 바뀔 때만 여기서 수정해주세요.</p>
-          </div>
-        )}
       </div>
+      {showUrlSetting && (
+        <div className="mb-4 max-w-xl">
+          <Field label="체크인 페이지 기본 주소 (checkin.html 배포 URL)">
+            <input className={inputCls} value={checkinBaseUrl} onChange={(e) => setCheckinBaseUrl(e.target.value)} />
+          </Field>
+          <p className="text-xs text-slate-400 -mt-2">평소엔 안 건드리셔도 됩니다. 도메인이 바뀔 때만 여기서 수정해주세요.</p>
+        </div>
+      )}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-4">
-        {centers.filter((c) => c.Active !== false).map((c) => (
+        {filtered.map((c) => (
           <div key={c.id} ref={(el) => (cardRefs.current[c.id] = el)}
             className={`bg-white border rounded-xl p-4 text-center ${c.id === highlightId ? "ring-2 ring-offset-2" : ""}`}
             style={c.id === highlightId ? { borderColor: BRAND.accent, boxShadow: `0 0 0 2px ${BRAND.accent}` } : {}}>
@@ -891,7 +899,8 @@ function QrTab({ centers, highlightId }) {
             </a>
           </div>
         ))}
-        {!centers.length && <div className="col-span-4 text-center text-slate-400 py-10">먼저 "센터 관리"에서 센터를 등록해주세요</div>}
+        {!activeCenters.length && <div className="col-span-4 text-center text-slate-400 py-10">먼저 "센터 관리"에서 센터를 등록해주세요</div>}
+        {activeCenters.length > 0 && !filtered.length && <div className="col-span-4 text-center text-slate-400 py-10">검색 결과가 없습니다</div>}
       </div>
     </div>
   );
