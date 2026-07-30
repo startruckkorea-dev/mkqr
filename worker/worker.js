@@ -28,6 +28,8 @@
 const GRAPH = "https://graph.microsoft.com/v1.0";
 const SITE_PATH = "startruckkorea.sharepoint.com:/sites/STK-DB:";
 const VERIFY_RADIUS_M_DEFAULT = 10000; // 센터에 별도 설정이 없을 때 쓰는 기본 허용 반경(m)
+const EXTRA_REVIEW_DISTANCE_M = 300;    // 센터 반경 설정과 별개로 항상 적용되는 촘촘한 기준
+const EXTRA_REVIEW_RECAPTCHA_MIN = 0.5; // 이 값 이상(=사람처럼 행동)인데도 300m 넘게 떨어졌으면 관리자 확인 필요
 const RATE_LIMIT_WINDOW_MS = 60 * 1000;        // 1분
 const RATE_LIMIT_COUNT = 5;                     // 이 시간 안에 이 횟수 초과 접근하면 차단
 const RATE_LIMIT_BLOCK_MS = 30 * 60 * 1000;     // 30분 차단
@@ -269,6 +271,14 @@ export default {
 
         // reCAPTCHA 점수가 낮으면(봇 의심) 위치가 맞았더라도 검증필요로 내림
         if (recaptchaScore != null && recaptchaScore < 0.3 && verifyStatus === "정상") {
+          verifyStatus = "검증필요";
+        }
+
+        // 센터 허용 반경과는 별개로 항상 적용되는 규칙: 300m 넘게 떨어졌는데 reCAPTCHA 점수가
+        // 사람처럼 행동했다고 볼 만큼 높으면(0.5 이상) — 반경 안이라 "정상"으로 판정됐더라도
+        // 한 번 더 관리자가 눈으로 확인하도록 "검증필요"로 내린다.
+        if (verifyStatus === "정상" && distKm != null && distKm * 1000 >= EXTRA_REVIEW_DISTANCE_M
+            && recaptchaScore != null && recaptchaScore >= EXTRA_REVIEW_RECAPTCHA_MIN) {
           verifyStatus = "검증필요";
         }
 
