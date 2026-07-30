@@ -1337,28 +1337,61 @@ function AdminsTab({ admins, reload, userEmail }) {
 /* ------------------------------------------------------------------ */
 function CategoryAccessTab({ admins, categoryAccess, reload }) {
   const [q, setQ] = useState("");
-  const [savingKey, setSavingKey] = useState(null); // "adminId:catKey" — 저장 중인 셀만 살짝 비활성화
+  const [directory, setDirectory] = useState([]);
+  const [dirError, setDirError] = useState(false);
+  const [savingKey, setSavingKey] = useState(null); // "email:catKey" — 저장 중인 셀만 살짝 비활성화
 
-  const filteredAdmins = admins.filter((a) => !q || (a.Title || "").includes(q) || (a.Email || "").toLowerCase().includes(q.toLowerCase()));
+  useEffect(() => {
+    loadEmployeeDirectory()
+      .then((list) => setDirectory(list))
+      .catch((e) => { console.warn("[MKQR] 직원 디렉토리 로딩 실패:", e.message); setDirError(true); });
+  }, []);
+
+  const adminEmailSet = new Set(admins.map((a) => (a.Email || "").toLowerCase()));
+
+  // 표에 띄울 전체 인원: 전사 직원 디렉토리 + (디렉토리엔 없지만 이미 관리자/권한 기록이 있는 이메일도 누락 없이 포함)
+  const dirEmails = new Set(directory.map((d) => d.email));
+  const extraEmails = new Set([
+    ...admins.map((a) => (a.Email || "").toLowerCase()),
+    ...categoryAccess.map((r) => (r.Email || "").toLowerCase()),
+  ]);
+  const merged = [...directory];
+  extraEmails.forEach((email) => {
+    if (email && !dirEmails.has(email)) {
+      const adminRow = admins.find((a) => (a.Email || "").toLowerCase() === email);
+      merged.push({ name: (adminRow && adminRow.Title) || email, email, dept: "" });
+    }
+  });
+
+  const qq = q.trim().toLowerCase();
+  const filtered = qq
+    ? merged.filter((p) => p.name.toLowerCase().includes(qq) || p.email.includes(qq) || (p.dept || "").toLowerCase().includes(qq))
+    : merged;
 
   function rowFor(email) {
-    return categoryAccess.find((r) => (r.Email || "").toLowerCase() === (email || "").toLowerCase());
+    return categoryAccess.find((r) => (r.Email || "").toLowerCase() === email);
   }
 
-  async function toggle(admin, cat) {
-    const email = (admin.Email || "").toLowerCase();
+  async function toggle(person, cat) {
+    const email = person.email;
     const existing = rowFor(email);
-    const cellKey = `${admin.id}:${cat.key}`;
+    const isAdminAlready = adminEmailSet.has(email);
+    const cellKey = `${email}:${cat.key}`;
     setSavingKey(cellKey);
     try {
-      const currentVal = existing ? existing[cat.field] !== false : true; // 행 없으면 기본 허용 상태
+      // 이미 관리자였던 사람은 명시적 기록 없으면 기본 허용, 아직 관리자가 아니었던 사람은 기본 비허용에서 시작.
+      const currentVal = existing ? existing[cat.field] !== false : isAdminAlready;
+      const newVal = !currentVal;
       if (existing) {
-        await mkUpdateItem(MK_LISTS.categoryAccess, existing.id, { [cat.field]: !currentVal });
+        await mkUpdateItem(MK_LISTS.categoryAccess, existing.id, { [cat.field]: newVal });
       } else {
-        // 행이 아직 없으면 전체 카테고리를 "허용(true)"으로 깔고, 지금 끄려는 것만 false로 새로 생성
-        const fields = { Title: admin.Title || email, Email: email };
-        MK_CATEGORIES.forEach((c) => { fields[c.field] = c.key === cat.key ? !currentVal : true; });
+        const fields = { Title: person.name || email, Email: email };
+        MK_CATEGORIES.forEach((c) => { fields[c.field] = c.key === cat.key ? newVal : isAdminAlready; });
         await mkCreateItem(MK_LISTS.categoryAccess, fields);
+      }
+      // 아직 관리자 목록(mkqr_Admins)에 없는 사람에게 권한을 켜주는 거면, 로그인 자체가 가능하도록 같이 등록해준다.
+      if (newVal && !isAdminAlready) {
+        await mkCreateItem(MK_LISTS.admins, { Title: person.name || email, Email: email, Active: true });
       }
       await reload();
     } catch (e) { alert(e.message); } finally { setSavingKey(null); }
@@ -1369,62 +1402,68 @@ function CategoryAccessTab({ admins, categoryAccess, reload }) {
       <div className="bg-blue-50 border border-blue-100 rounded-xl p-4 mb-5 text-sm text-blue-900 flex gap-3">
         <KeyRound size={18} className="text-blue-500 shrink-0 mt-0.5" />
         <div>
-          관리자별로 화면 단위 접근 권한을 체크박스로 켜고 끌 수 있습니다. 변경 즉시 저장되고 바로 반영됩니다.
-          <b> 아직 행이 없는(체크 설정을 한 번도 안 바꾼) 관리자는 전체 화면에 접근 가능</b>한 기본 상태입니다.
+          전 직원을 대상으로 화면 단위 접근 권한을 체크박스로 부여·변경합니다. 변경 즉시 저장·반영됩니다.
+          <b> 체크하면 그 사람이 아직 관리자가 아니어도 자동으로 관리자 목록에 등록되어 로그인도 함께 가능해집니다.</b>
+          {" "}이미 등록된 관리자는 별도 기록이 없으면 기본적으로 전체 화면에 접근 가능한 상태입니다.
         </div>
       </div>
 
       <div className="relative mb-4 max-w-xs">
         <Search size={15} className="absolute left-2.5 top-2.5 text-slate-400" />
-        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="관리자 검색" className="pl-8 pr-3 py-2 border border-slate-300 rounded-lg text-sm w-full" />
+        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="이름/이메일/부서 검색" className="pl-8 pr-3 py-2 border border-slate-300 rounded-lg text-sm w-full" />
       </div>
+      {dirError && <p className="text-xs text-amber-600 mb-3">전 직원 명부를 불러오지 못해, 이미 등록된 관리자만 표시됩니다.</p>}
 
-      <div className="bg-white rounded-xl border overflow-hidden overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead className="bg-slate-50 text-slate-500 text-xs">
-            <tr>
-              <th className="text-left px-4 py-2.5">관리자</th>
-              {MK_CATEGORIES.map((c) => (
-                <th key={c.key} className="text-center px-3 py-2.5 whitespace-nowrap">{c.label}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {filteredAdmins.map((a) => {
-              const row = rowFor(a.Email);
-              return (
-                <tr key={a.id} className="border-t hover:bg-slate-50">
-                  <td className="px-4 py-2.5">
-                    <div className="flex items-center gap-2.5">
-                      <div className="w-7 h-7 rounded-full flex items-center justify-center text-white text-[11px] font-semibold shrink-0" style={{ background: BRAND.navy }}>
-                        {(a.Title || a.Email || "?").charAt(0).toUpperCase()}
+      <div className="bg-white rounded-xl border overflow-hidden">
+        <div className="overflow-auto max-h-[560px]">
+          <table className="w-full text-sm">
+            <thead className="bg-slate-50 text-slate-500 text-xs sticky top-0 z-10">
+              <tr>
+                <th className="text-left px-4 py-2.5 bg-slate-50">사용자</th>
+                {MK_CATEGORIES.map((c) => (
+                  <th key={c.key} className="text-center px-3 py-2.5 whitespace-nowrap bg-slate-50">{c.label}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map((p) => {
+                const row = rowFor(p.email);
+                const isAdminAlready = adminEmailSet.has(p.email);
+                return (
+                  <tr key={p.email} className="border-t hover:bg-slate-50">
+                    <td className="px-4 py-2.5">
+                      <div className="flex items-center gap-2.5">
+                        <div className={`w-7 h-7 rounded-full flex items-center justify-center text-white text-[11px] font-semibold shrink-0`} style={{ background: isAdminAlready ? BRAND.navy : "#CBD5E1" }}>
+                          {p.name.charAt(0).toUpperCase()}
+                        </div>
+                        <div className="min-w-0">
+                          <div className="font-medium text-slate-800 truncate text-xs flex items-center gap-1.5">
+                            {p.name}
+                            {isAdminAlready && <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-700 font-normal">관리자</span>}
+                          </div>
+                          <div className="text-[11px] text-slate-400 truncate">{p.email}{p.dept ? ` · ${p.dept}` : ""}</div>
+                        </div>
                       </div>
-                      <div className="min-w-0">
-                        <div className="font-medium text-slate-800 truncate text-xs">{a.Title}</div>
-                        <div className="text-[11px] text-slate-400 truncate">{a.Email}</div>
-                      </div>
-                    </div>
-                  </td>
-                  {MK_CATEGORIES.map((c) => {
-                    const checked = row ? row[c.field] !== false : true;
-                    const cellKey = `${a.id}:${c.key}`;
-                    return (
-                      <td key={c.key} className="text-center px-3 py-2.5">
-                        <input type="checkbox" checked={checked} disabled={savingKey === cellKey}
-                          onChange={() => toggle(a, c)} className="w-4 h-4 cursor-pointer" />
-                      </td>
-                    );
-                  })}
-                </tr>
-              );
-            })}
-            {!filteredAdmins.length && (
-              <tr><td colSpan={MK_CATEGORIES.length + 1} className="text-center text-slate-400 py-10">
-                {admins.length ? "검색 결과가 없습니다" : "먼저 \"관리자 설정\"에서 관리자를 등록해주세요"}
-              </td></tr>
-            )}
-          </tbody>
-        </table>
+                    </td>
+                    {MK_CATEGORIES.map((c) => {
+                      const checked = row ? row[c.field] !== false : isAdminAlready;
+                      const cellKey = `${p.email}:${c.key}`;
+                      return (
+                        <td key={c.key} className="text-center px-3 py-2.5">
+                          <input type="checkbox" checked={checked} disabled={savingKey === cellKey}
+                            onChange={() => toggle(p, c)} className="w-4 h-4 cursor-pointer" />
+                        </td>
+                      );
+                    })}
+                  </tr>
+                );
+              })}
+              {!filtered.length && (
+                <tr><td colSpan={MK_CATEGORIES.length + 1} className="text-center text-slate-400 py-10">검색 결과가 없습니다</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
   );
@@ -1595,7 +1634,9 @@ function AccessDenied({ userEmail, adminEmails }) {
             </div>
           </div>
         )}
-        <button onClick={() => msalApp.logoutRedirect()} className="text-sm text-slate-400 hover:text-slate-700 underline">로그아웃</button>
+        <a href="https://aps.startruckkorea.com/" className="inline-flex items-center gap-1.5 text-sm text-slate-600 bg-slate-50 border border-slate-200 rounded-full px-4 py-2 hover:bg-slate-100">
+          <ArrowUpRight size={14} /> APS로 돌아가기
+        </a>
       </div>
     </div>
   );
