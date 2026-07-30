@@ -664,11 +664,13 @@ function CheckInsTab({ checkins, centers, reload, periodDays, onPeriodChange }) 
       <div className="bg-blue-50 border border-blue-100 rounded-xl p-4 mb-4 flex gap-3">
         <AlertTriangle size={18} className="text-blue-500 shrink-0 mt-0.5" />
         <div className="text-sm text-blue-900 leading-relaxed">
-          <span className="font-medium">"검증필요" 자동 분류 기준 안내</span>
+          <span className="font-medium">자동 판정 기준 안내</span>
           <ul className="mt-1 space-y-0.5 text-blue-800/90 text-[13px] list-disc list-inside">
-            <li>센터에 설정된 <b>허용 반경(기본 10km)을 벗어난 경우</b></li>
-            <li>반경 안이라도 <b>거리 300m 이상</b> 떨어졌고, reCAPTCHA 점수가 <b>0.5 이상</b>(=사람처럼 행동한 접근)인 경우 — 한 번 더 눈으로 확인하시라는 의미로 함께 표시됩니다</li>
-            <li>위치 정보(GPS) 동의를 거부한 경우</li>
+            <li><b>검증필요</b> — 센터별 허용 반경(기본 10km)을 벗어난 경우</li>
+            <li><b>검증필요</b> — 반경 안이라도 거리 300m 이상 + reCAPTCHA 0.5 이상(사람처럼 행동)인 경우, 한 번 더 확인차 표시</li>
+            <li><b>검증필요</b> — reCAPTCHA 점수 0.3 미만(봇처럼 행동)인 경우</li>
+            <li><b>GPS거부</b> — 위치 정보 제공에 동의하지 않은 경우</li>
+            <li><b>자동 30분 차단</b> — 같은 기기가 1분 안에 5회 초과 접근하면 그 즉시 접속 자체가 막힙니다 (기록도 안 남음). 급하면 "차단해제" 버튼으로 조기 해제 가능</li>
           </ul>
         </div>
       </div>
