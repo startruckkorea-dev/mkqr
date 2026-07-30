@@ -128,7 +128,7 @@ function renderSuccess(data, fingerprint) {
   const ok = data.verifyStatus === "정상";
   let desc;
   if (ok) desc = "방문 위치가 정상적으로 확인되었습니다.<br>감사합니다.";
-  else if (data.gpsUsed) desc = "현재 위치가 센터 반경(10km)을 벗어나 있어<br>담당자 확인 후 처리됩니다.";
+  else if (data.gpsUsed) desc = "현재 위치가 센터의 허용 범위를 벗어나 있어<br>담당자 확인 후 처리됩니다.";
   else desc = "위치 정보 확인이 어려워<br>담당자 확인 후 처리됩니다.";
 
   const authCode = fingerprint ? fingerprint.slice(0, 8).toUpperCase() : "";

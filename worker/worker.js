@@ -27,7 +27,7 @@
 
 const GRAPH = "https://graph.microsoft.com/v1.0";
 const SITE_PATH = "startruckkorea.sharepoint.com:/sites/STK-DB:";
-const VERIFY_RADIUS_KM = 10;
+const VERIFY_RADIUS_M_DEFAULT = 10000; // 센터에 별도 설정이 없을 때 쓰는 기본 허용 반경(m)
 const RATE_LIMIT_WINDOW_MS = 60 * 1000;        // 1분
 const RATE_LIMIT_COUNT = 5;                     // 이 시간 안에 이 횟수 초과 접근하면 차단
 const RATE_LIMIT_BLOCK_MS = 30 * 60 * 1000;     // 30분 차단
@@ -252,16 +252,17 @@ export default {
 
         let distKm = null, source = "없음", verifyStatus = "검증필요", gpsUsed = false;
         const hasCenterCoord = c.Lat != null && c.Lng != null;
+        const radiusKm = (c.VerifyRadiusM != null ? Number(c.VerifyRadiusM) : VERIFY_RADIUS_M_DEFAULT) / 1000;
 
         if (gps && gps.lat != null && hasCenterCoord) {
           distKm = distanceKm(gps.lat, gps.lng, c.Lat, c.Lng);
           source = "GPS";
           gpsUsed = true;
-          verifyStatus = distKm <= VERIFY_RADIUS_KM ? "정상" : "검증필요";
+          verifyStatus = distKm <= radiusKm ? "정상" : "검증필요";
         } else if (ipLoc && hasCenterCoord) {
           distKm = distanceKm(ipLoc.lat, ipLoc.lng, c.Lat, c.Lng);
           source = "IP";
-          verifyStatus = distKm <= VERIFY_RADIUS_KM ? "정상" : "검증필요";
+          verifyStatus = distKm <= radiusKm ? "정상" : "검증필요";
         } else if (!gps) {
           verifyStatus = "GPS거부";
         }

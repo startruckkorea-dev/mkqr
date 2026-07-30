@@ -291,6 +291,7 @@ function CentersTab({ centers, reload, onCreated }) {
         CorpNameKr: form.CorpNameKr, AddressKr: form.AddressKr, AddressEn: form.AddressEn,
         Phone: form.Phone, Lat: form.Lat ? Number(form.Lat) : null, Lng: form.Lng ? Number(form.Lng) : null,
         RedirectUrl: form.RedirectUrl || "",
+        VerifyRadiusM: form.VerifyRadiusM ? Number(form.VerifyRadiusM) : 10000,
         Active: form.Active !== false,
       };
       if (editing?.id) {
@@ -325,10 +326,10 @@ function CentersTab({ centers, reload, onCreated }) {
 
   // mkqr 전용 가져오기 양식 다운로드 — "템플릿 다운로드" 버튼에서 사용
   function downloadTemplate() {
-    const header = ["지역", "센터명(필수)", "센터명(영문)", "법인명", "주소(필수)", "주소(영문)", "전화번호"];
-    const example = ["Seoul/Gyeonggi", "곤지암센터", "Gonjiam Center", "㈜스타트럭코리아", "경기도 광주시 곤지암읍 평촌길 100-9", "", "031-000-0000"];
+    const header = ["지역", "센터명(필수)", "센터명(영문)", "법인명", "주소(필수)", "주소(영문)", "전화번호", "GPS허용반경(m)"];
+    const example = ["Seoul/Gyeonggi", "곤지암센터", "Gonjiam Center", "㈜스타트럭코리아", "경기도 광주시 곤지암읍 평촌길 100-9", "", "031-000-0000", "10000"];
     const ws = XLSX.utils.aoa_to_sheet([header, example]);
-    ws["!cols"] = [{ wch: 16 }, { wch: 16 }, { wch: 18 }, { wch: 20 }, { wch: 36 }, { wch: 24 }, { wch: 16 }];
+    ws["!cols"] = [{ wch: 16 }, { wch: 16 }, { wch: 18 }, { wch: 20 }, { wch: 36 }, { wch: 24 }, { wch: 16 }, { wch: 16 }];
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "센터목록");
     XLSX.writeFile(wb, "MKQR_센터등록_양식.xlsx");
@@ -356,6 +357,7 @@ function CentersTab({ centers, reload, onCreated }) {
           AddressEn: row[5] ? String(row[5]).trim() : "",
           Phone: row[6] ? String(row[6]).trim() : "",
           QrToken: randomToken(),
+          VerifyRadiusM: row[7] ? Number(row[7]) : 10000,
           Active: true,
         };
         if (centers.some((c) => c.Title === fields.Title)) { skipped++; continue; } // 중복 스킵
@@ -380,7 +382,7 @@ function CentersTab({ centers, reload, onCreated }) {
           </button>
           <input ref={fileRef} type="file" accept=".xlsx" className="hidden" onChange={(e) => e.target.files[0] && importExcel(e.target.files[0])} />
           <button onClick={() => fileRef.current.click()} disabled={busy} className="flex items-center gap-1.5 px-3 py-2 border border-slate-300 rounded-lg text-sm hover:bg-slate-50">
-            <Upload size={15} /> 엑셀 일괄 가져오기
+            <Upload size={15} /> 엑셀 일괄 등록하기
           </button>
           <button onClick={() => setEditing({})} className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm text-white" style={{ background: BRAND.accent }}>
             <Plus size={15} /> 센터 추가
@@ -445,6 +447,10 @@ function CenterEditModal({ center, onClose, onSave, onGeocode, busy }) {
         <Field label="위도 (Lat)"><input className={inputCls} value={form.Lat || ""} onChange={set("Lat")} /></Field>
         <Field label="경도 (Lng)"><input className={inputCls} value={form.Lng || ""} onChange={set("Lng")} /></Field>
       </div>
+      <Field label="GPS 허용 반경 (m)">
+        <input type="number" className={inputCls} value={form.VerifyRadiusM ?? 10000} onChange={set("VerifyRadiusM")} placeholder="예: 10000 (=10km)" />
+        <p className="text-xs text-slate-400 mt-1">이 반경 안에서 체크인하면 "정상", 벗어나면 "검증필요"로 분류됩니다. 기본값 10,000m(10km).</p>
+      </Field>
       <Field label="대표 전화번호"><input className={inputCls} value={form.Phone || ""} onChange={set("Phone")} /></Field>
       <Field label="체크인 완료 후 이동시킬 링크 (선택)">
         <input className={inputCls} value={form.RedirectUrl || ""} onChange={set("RedirectUrl")} placeholder="예: https://www.startruckkorea.com (비워두면 완료 화면만 표시)" />
