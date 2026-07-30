@@ -401,13 +401,13 @@ function CentersTab({ centers, reload, onCreated }) {
           </thead>
           <tbody>
             {filtered.map((c) => (
-              <tr key={c.id} className="border-t hover:bg-slate-50">
+              <tr key={c.id} onClick={() => setEditing(c)} className="border-t hover:bg-slate-50 cursor-pointer">
                 <td className="px-4 py-2.5 text-slate-500">{c.Region}</td>
                 <td className="px-4 py-2.5 font-medium text-slate-800">{c.Title}</td>
                 <td className="px-4 py-2.5 text-slate-500 max-w-xs truncate">{c.AddressKr}</td>
                 <td className="px-4 py-2.5 text-slate-500">{c.Lat && c.Lng ? `${Number(c.Lat).toFixed(4)}, ${Number(c.Lng).toFixed(4)}` : <span className="text-amber-600">미설정</span>}</td>
                 <td className="px-4 py-2.5">{c.Active === false ? <span className="text-slate-400">비활성</span> : <span className="text-emerald-600">활성</span>}</td>
-                <td className="px-4 py-2.5 text-right">
+                <td className="px-4 py-2.5 text-right" onClick={(e) => e.stopPropagation()}>
                   <button onClick={() => setEditing(c)} className="text-slate-400 hover:text-slate-700 mr-2"><Pencil size={15} /></button>
                   <button onClick={() => remove(c)} className="text-slate-400 hover:text-red-600"><Trash2 size={15} /></button>
                 </td>
