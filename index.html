@@ -376,6 +376,18 @@ function Badge({ status }) {
   return <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${map[status] || "bg-slate-100 text-slate-600"}`}>{status || "-"}</span>;
 }
 
+// 저장/정리 등 시간이 걸리는 작업 중에 화면 전체를 덮어서 다른 클릭이 안 되게 막는 오버레이.
+function BlockingOverlay({ message }) {
+  return (
+    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-[100]">
+      <div className="bg-white rounded-xl px-8 py-6 flex flex-col items-center gap-3 shadow-xl">
+        <div className="w-8 h-8 rounded-full border-4 border-slate-200 animate-spin" style={{ borderTopColor: BRAND.accent }} />
+        <div className="text-sm text-slate-600">{message}</div>
+      </div>
+    </div>
+  );
+}
+
 function Modal({ title, onClose, children, wide }) {
   return (
     <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4" onClick={onClose}>
@@ -1284,6 +1296,8 @@ function AdminsTab({ admins, reload, userEmail }) {
 
   return (
     <div>
+      {(cleaning || busy) && <BlockingOverlay message={cleaning ? "중복 데이터를 정리하고 있습니다..." : "처리하고 있습니다..."} />}
+
       <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-5">
         <div className="bg-white rounded-xl border p-4 flex items-center gap-3">
           <div className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0" style={{ background: BRAND.accentSoft }}>
@@ -1643,6 +1657,8 @@ function CategoryAccessTab({ admins, categoryAccess, reload }) {
           </table>
         </div>
       </div>
+
+      {saving && <BlockingOverlay message="변경사항을 반영하고 있습니다..." />}
 
       {savedPopup != null && (
         <Modal title="반영 완료" onClose={() => setSavedPopup(null)}>
