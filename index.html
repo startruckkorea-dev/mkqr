@@ -974,7 +974,7 @@ function CheckInsTab({ checkins, centers, reload, periodDays, onPeriodChange }) 
             <option value={7}>최근 7일</option>
             <option value={30}>최근 30일</option>
             <option value={90}>최근 90일</option>
-            <option value={0}>전체 (느릴 수 있음)</option>
+            <option value={0}>전체</option>
           </select>
           <select value={filter} onChange={(e) => setFilter(e.target.value)} className={inputCls + " w-40"}>
             <option>전체</option><option>정상</option><option>검증필요</option><option>GPS거부</option><option>관리자승인</option><option>차단해제</option>
@@ -1001,7 +1001,7 @@ function CheckInsTab({ checkins, centers, reload, periodDays, onPeriodChange }) 
             <col style={{ width: "150px" }} />
             <col style={{ width: "100px" }} />
             <col style={{ width: "110px" }} />
-            <col style={{ width: "170px" }} />
+            <col style={{ width: "190px" }} />
           </colgroup>
           <thead className="bg-slate-50 text-slate-500 text-xs">
             <tr>
@@ -1014,7 +1014,7 @@ function CheckInsTab({ checkins, centers, reload, periodDays, onPeriodChange }) 
               <th className="text-left px-4 py-2.5">기기</th>
               <th className="text-left px-4 py-2.5">인증코드</th>
               <th className="text-left px-4 py-2.5">로봇확인</th>
-              <th className="text-right px-4 py-2.5">관리</th>
+              <th className="text-right pl-3 pr-6 py-2.5">관리</th>
             </tr>
           </thead>
           <tbody>
@@ -1037,7 +1037,7 @@ function CheckInsTab({ checkins, centers, reload, periodDays, onPeriodChange }) 
                         ? <span className="text-xs px-2 py-0.5 rounded-full bg-amber-100 text-amber-700">보통 ({r.RecaptchaScore.toFixed(1)})</span>
                         : <span className="text-xs px-2 py-0.5 rounded-full bg-red-100 text-red-700">의심 ({r.RecaptchaScore.toFixed(1)})</span>}
                 </td>
-                <td className="px-4 py-2.5 text-right whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
+                <td className="pl-3 pr-6 py-2.5 text-right whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
                   {["검증필요", "GPS거부"].includes(r.VerifyStatus) && (
                     <button onClick={() => approve(r)} className="text-xs px-2 py-1 rounded-lg text-white mr-1.5" style={{ background: BRAND.accent }}>승인 처리</button>
                   )}
