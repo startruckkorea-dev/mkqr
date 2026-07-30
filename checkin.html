@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0" />
 <title>방문 체크인 · Star Truck Korea</title>
 <!-- reCAPTCHA v3: 화면엔 아무것도 안 보이고 배경에서 점수만 매김. Jimmy님이 사이트 키 알려주시면 아래 YOUR_RECAPTCHA_SITE_KEY 교체 -->
-<script src="https://www.google.com/recaptcha/api.js?render=REDACTED_LEAKED_SECRET"></script>
+<script src="https://www.google.com/recaptcha/api.js?render=6LfNeGwtAAAAAHN1aN-Je7ywl5zfi3BExCACNqEA"></script>
 <style>
   * { box-sizing: border-box; }
   html, body { margin: 0; padding: 0; font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif; background: linear-gradient(145deg,#0f2744 0%,#101B34 100%); min-height: 100vh; }
@@ -47,7 +47,7 @@
 // ⚠️ 배포 시 실제 Cloudflare Worker 주소로 교체
 const API_BASE = "https://mkqr-worker.mkqr.workers.dev";
 // ⚠️ Google reCAPTCHA 관리 콘솔에서 받은 사이트 키로 교체 (위 <script> 태그의 render= 값도 같이 교체해야 함)
-const RECAPTCHA_SITE_KEY = "REDACTED_LEAKED_SECRET";
+const RECAPTCHA_SITE_KEY = "6LfNeGwtAAAAAHN1aN-Je7ywl5zfi3BExCACNqEA";
 
 const params = new URLSearchParams(location.search);
 const token = params.get("t");
