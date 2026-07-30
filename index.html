@@ -1800,6 +1800,7 @@ function App({ userEmail }) {
   const [categoryAccess, setCategoryAccess] = useState([]);
   const [checkinPeriodDays, setCheckinPeriodDays] = useState(30); // 체크인 기록은 목록이 커질 수 있어 기본 최근 30일만 조회
   const [loading, setLoading] = useState(true);
+  const [hasLoadedOnce, setHasLoadedOnce] = useState(false); // 최초 로딩에만 전체화면 로딩 표시 — 그 이후 새로고침은 화면을 안 갈아엎음
   const [highlightId, setHighlightId] = useState(null);
 
   async function reload(periodDays = checkinPeriodDays) {
@@ -1824,6 +1825,7 @@ function App({ userEmail }) {
       setCategoryAccess(ca.map((x) => ({ id: x.id, ...x.fields })));
     } catch (e) { console.error(e); alert("데이터 로딩 실패: " + e.message); }
     setLoading(false);
+    setHasLoadedOnce(true);
   }
   useEffect(() => { reload(); }, []);
 
@@ -1924,7 +1926,7 @@ function App({ userEmail }) {
             </button>
           </div>
         </div>
-        {loading ? <div className="text-slate-400 text-sm">불러오는 중...</div> : !canAccess(nav.find((n) => n.id === tab)?.cat) ? (
+        {!hasLoadedOnce ? <div className="text-slate-400 text-sm">불러오는 중...</div> : !canAccess(nav.find((n) => n.id === tab)?.cat) ? (
           <div className="bg-white rounded-xl border p-10 text-center">
             <ShieldCheck size={28} className="mx-auto text-slate-300 mb-2" />
             <div className="text-slate-500 text-sm">이 화면에 대한 접근 권한이 없습니다.</div>
