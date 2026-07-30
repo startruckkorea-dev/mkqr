@@ -1053,7 +1053,6 @@ function CheckInsTab({ checkins, centers, reload, periodDays, onPeriodChange }) 
             <option value={7}>최근 7일</option>
             <option value={30}>최근 30일</option>
             <option value={90}>최근 90일</option>
-            <option value={0}>전체</option>
           </select>
           <select value={filter} onChange={(e) => setFilter(e.target.value)} className={inputCls + " w-40"}>
             <option>전체</option><option>정상</option><option>검증필요</option><option>GPS거부</option><option>관리자승인</option><option>차단해제</option>
@@ -1597,7 +1596,7 @@ function App({ userEmail }) {
   // "관리자"는 더 이상 별도 목록(mkqr_Admins)이 아니라, 카테고리 접근 권한에서 "카테고리 접근 권한(Access_admins)"이
   // 체크된 사람을 그때그때 계산한 값 — 진짜 전체 화면 접근 가능한 사람만 여기 들어간다.
   const admins = categoryAccess.filter((r) => r.Access_admins === true).map((r) => ({ id: r.id, Title: r.Title, Email: r.Email, Active: true }));
-  const [checkinPeriodDays, setCheckinPeriodDays] = useState(30); // 체크인 기록은 목록이 커질 수 있어 기본 최근 30일만 조회
+  const [checkinPeriodDays, setCheckinPeriodDays] = useState(7); // 체크인 기록은 목록이 커질 수 있어 기본 최근 7일만 조회 (최대 90일, "전체"는 없음)
   const [loading, setLoading] = useState(true);
   const [hasLoadedOnce, setHasLoadedOnce] = useState(false); // 최초 로딩에만 전체화면 로딩 표시 — 그 이후 새로고침은 화면을 안 갈아엎음
   const [highlightId, setHighlightId] = useState(null);
