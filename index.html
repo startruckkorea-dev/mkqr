@@ -295,41 +295,46 @@ function CentersTab({ centers, reload, onCreated }) {
     } catch (e) { alert("좌표 조회 실패: " + e.message); }
   }
 
-  // 엑셀 일괄 가져오기 — "서비스센터직원관리대장" 원본 구조("Service Network Overall Summary" 시트)를 그대로 파싱
+  // mkqr 전용 가져오기 양식 다운로드 — "템플릿 다운로드" 버튼에서 사용
+  function downloadTemplate() {
+    const header = ["지역", "센터명(필수)", "센터명(영문)", "법인명", "주소(필수)", "주소(영문)", "전화번호"];
+    const example = ["Seoul/Gyeonggi", "곤지암센터", "Gonjiam Center", "㈜스타트럭코리아", "경기도 광주시 곤지암읍 평촌길 100-9", "", "031-000-0000"];
+    const ws = XLSX.utils.aoa_to_sheet([header, example]);
+    ws["!cols"] = [{ wch: 16 }, { wch: 16 }, { wch: 18 }, { wch: 20 }, { wch: 36 }, { wch: 24 }, { wch: 16 }];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "센터목록");
+    XLSX.writeFile(wb, "MKQR_센터등록_양식.xlsx");
+  }
+
+  // 엑셀 일괄 가져오기 — 위 템플릿(1행 헤더: 지역/센터명/센터명영문/법인명/주소/주소영문/전화번호)을 그대로 파싱
   async function importExcel(file) {
     setBusy(true);
     try {
       const buf = await file.arrayBuffer();
       const wb = XLSX.read(buf, { type: "array" });
-      const sheet = wb.Sheets["Service Network Overall Summary"];
-      if (!sheet) throw new Error('시트 "Service Network Overall Summary"를 찾을 수 없습니다.');
+      const sheet = wb.Sheets[wb.SheetNames[0]]; // 첫 번째 시트 사용 (시트명 무관)
       const rows = XLSX.utils.sheet_to_json(sheet, { header: 1 });
-      let lastRegion = "";
-      let created = 0;
-      for (let r = 3; r < rows.length; r++) {
+      let created = 0, skipped = 0;
+      for (let r = 1; r < rows.length; r++) { // 0행은 헤더이므로 1행부터
         const row = rows[r] || [];
-        const no = row[0];
-        if (no === undefined || no === null || no === "") continue;
-        const region = row[1] ? String(row[1]).trim() : lastRegion;
-        if (row[1]) lastRegion = region;
-        const nameKr = row[3] ? String(row[3]).trim() : String(row[2] || "").trim();
-        if (!nameKr) continue;
+        const nameKr = row[1] ? String(row[1]).trim() : "";
+        if (!nameKr) continue; // 센터명 없는 빈 줄은 스킵
         const fields = {
           Title: nameKr,
-          Region: region,
-          CenterNameEn: row[4] ? String(row[4]).trim() : "",
-          CorpNameKr: row[5] ? String(row[5]).trim() : "",
-          AddressKr: row[7] ? String(row[7]).trim() : "",
-          AddressEn: row[8] ? String(row[8]).trim() : "",
-          Phone: row[16] ? String(row[16]).trim() : "",
+          Region: row[0] ? String(row[0]).trim() : "",
+          CenterNameEn: row[2] ? String(row[2]).trim() : "",
+          CorpNameKr: row[3] ? String(row[3]).trim() : "",
+          AddressKr: row[4] ? String(row[4]).trim() : "",
+          AddressEn: row[5] ? String(row[5]).trim() : "",
+          Phone: row[6] ? String(row[6]).trim() : "",
           QrToken: randomToken(),
           Active: true,
         };
-        if (centers.some((c) => c.Title === fields.Title)) continue; // 중복 스킵
+        if (centers.some((c) => c.Title === fields.Title)) { skipped++; continue; } // 중복 스킵
         await mkCreateItem(MK_LISTS.centers, fields);
         created++;
       }
-      alert(`${created}개 센터를 가져왔습니다. (주소만 채워졌으니 각 센터에서 "좌표 찾기"로 위경도를 채워주세요)`);
+      alert(`${created}개 센터를 가져왔습니다.${skipped ? ` (이미 있는 센터명 ${skipped}건은 건너뜀)` : ""}\n주소만 채워졌으니 각 센터에서 "좌표 찾기"로 위경도를 채워주세요.`);
       await reload();
     } catch (e) { alert("가져오기 실패: " + e.message); } finally { setBusy(false); if (fileRef.current) fileRef.current.value = ""; }
   }
@@ -342,6 +347,9 @@ function CentersTab({ centers, reload, onCreated }) {
           <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="센터명/지역/주소 검색" className="pl-8 pr-3 py-2 border border-slate-300 rounded-lg text-sm w-64" />
         </div>
         <div className="flex gap-2">
+          <button onClick={downloadTemplate} className="flex items-center gap-1.5 px-3 py-2 border border-slate-300 rounded-lg text-sm hover:bg-slate-50">
+            <Download size={15} /> 템플릿 다운로드
+          </button>
           <input ref={fileRef} type="file" accept=".xlsx" className="hidden" onChange={(e) => e.target.files[0] && importExcel(e.target.files[0])} />
           <button onClick={() => fileRef.current.click()} disabled={busy} className="flex items-center gap-1.5 px-3 py-2 border border-slate-300 rounded-lg text-sm hover:bg-slate-50">
             <Upload size={15} /> 엑셀 일괄 가져오기
