@@ -195,6 +195,32 @@ function randomToken(len = 10) {
   return s;
 }
 
+// User-Agent 문자열을 "iPhone · Safari" 같은 짧은 기기 설명으로 변환 — 체크인 기록에서 어떤 장비로
+// 접근했는지 한눈에 보기 위함. 완벽한 기기 판별은 아니고 대략적인 OS/브라우저 구분용.
+function parseDeviceLabel(ua) {
+  if (!ua) return "-";
+  let os = "기타 OS";
+  if (/iPhone/i.test(ua)) os = "iPhone";
+  else if (/iPad/i.test(ua)) os = "iPad";
+  else if (/Android/i.test(ua)) {
+    const m = ua.match(/Android[^;)]*;\s*([^;)]+)/i);
+    os = m && m[1] ? `Android(${m[1].trim().slice(0, 18)})` : "Android";
+  } else if (/Macintosh/i.test(ua)) os = "Mac";
+  else if (/Windows/i.test(ua)) os = "Windows";
+  else if (/Linux/i.test(ua)) os = "Linux";
+
+  let browser = "기타 브라우저";
+  if (/EdgA|Edg\//i.test(ua)) browser = "Edge";
+  else if (/CriOS|Chrome/i.test(ua)) browser = "Chrome";
+  else if (/FxiOS|Firefox/i.test(ua)) browser = "Firefox";
+  else if (/SamsungBrowser/i.test(ua)) browser = "Samsung Internet";
+  else if (/KAKAOTALK/i.test(ua)) browser = "카카오톡 인앱";
+  else if (/NAVER/i.test(ua)) browser = "네이버 인앱";
+  else if (/Safari/i.test(ua)) browser = "Safari";
+
+  return `${os} · ${browser}`;
+}
+
 // Haversine 거리(km) — 관리자 화면에서 좌표 확인용. 실제 체크인 판정은 Worker가 서버측에서 동일 공식으로 계산.
 function distanceKm(lat1, lng1, lat2, lng2) {
   const R = 6371;
@@ -540,7 +566,7 @@ function CheckInsTab({ checkins, centers, reload }) {
     const data = rows.map((r) => ({
       센터: r.CenterName, 시각: fmtDate(r.ServerTimestamp),
       공인IP: r.PublicIP, "IP위치(도시)": r.IpCity, GPS좌표: r.GpsLat ? `${r.GpsLat}, ${r.GpsLng}` : "",
-      "거리(km)": r.DistanceKm, 판정: r.VerifyStatus, 인증코드: (r.DeviceFingerprint || "").slice(0, 8).toUpperCase(), 기기: r.UserAgent,
+      "거리(km)": r.DistanceKm, 판정: r.VerifyStatus, 기기요약: parseDeviceLabel(r.UserAgent), 인증코드: (r.DeviceFingerprint || "").slice(0, 8).toUpperCase(), 기기ID: r.DeviceId, UserAgent원본: r.UserAgent,
     }));
     const ws = XLSX.utils.json_to_sheet(data);
     const wb = XLSX.utils.book_new();
@@ -575,6 +601,7 @@ function CheckInsTab({ checkins, centers, reload }) {
               <th className="text-left px-4 py-2.5">공인 IP</th>
               <th className="text-left px-4 py-2.5">GPS 정확도</th>
               <th className="text-left px-4 py-2.5">거리</th>
+              <th className="text-left px-4 py-2.5">기기</th>
               <th className="text-left px-4 py-2.5">인증코드</th>
               <th className="text-right px-4 py-2.5">관리</th>
             </tr>
@@ -588,7 +615,8 @@ function CheckInsTab({ checkins, centers, reload }) {
                 <td className="px-4 py-2.5 text-slate-500">{r.PublicIP}{r.IpCity ? ` (${r.IpCity})` : ""}</td>
                 <td className="px-4 py-2.5 text-slate-500">{r.GpsAccuracy ? `±${Math.round(r.GpsAccuracy)}m` : "-"}</td>
                 <td className="px-4 py-2.5 text-slate-500">{r.DistanceKm != null ? `${Number(r.DistanceKm).toFixed(1)}km (${r.DistanceSource})` : "-"}</td>
-                <td className="px-4 py-2.5 text-slate-400 font-mono text-xs">{r.DeviceFingerprint ? r.DeviceFingerprint.slice(0, 8).toUpperCase() : "-"}</td>
+                <td className="px-4 py-2.5 text-slate-500 whitespace-nowrap">{parseDeviceLabel(r.UserAgent)}</td>
+                <td className="px-4 py-2.5 text-slate-400 font-mono text-xs" title={r.DeviceFingerprint || ""}>{r.DeviceFingerprint ? r.DeviceFingerprint.slice(0, 8).toUpperCase() : "-"}</td>
                 <td className="px-4 py-2.5 text-right whitespace-nowrap">
                   {["검증필요", "GPS거부"].includes(r.VerifyStatus) && (
                     <button onClick={() => approve(r)} className="text-xs px-2 py-1 rounded-lg text-white mr-1.5" style={{ background: BRAND.accent }}>승인 처리</button>
@@ -599,7 +627,7 @@ function CheckInsTab({ checkins, centers, reload }) {
                 </td>
               </tr>
             ))}
-            {!rows.length && <tr><td colSpan={8} className="text-center text-slate-400 py-8">체크인 기록이 없습니다</td></tr>}
+            {!rows.length && <tr><td colSpan={9} className="text-center text-slate-400 py-8">체크인 기록이 없습니다</td></tr>}
           </tbody>
         </table>
       </div>
