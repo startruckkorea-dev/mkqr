@@ -1118,53 +1118,94 @@ function OverviewTab({ centers, checkins, admins, setTab }) {
     const t = r.ServerTimestamp ? new Date(r.ServerTimestamp).getTime() : 0;
     return t >= Date.now() - 30 * 24 * 3600 * 1000;
   }).length;
+  const recent = [...checkins].sort((a, b) => new Date(b.ServerTimestamp || 0) - new Date(a.ServerTimestamp || 0)).slice(0, 5);
+
+  const stats = [
+    { label: "활성 센터", value: activeCenters, suffix: ` / ${centers.length}`, icon: Building2, color: "text-emerald-600", bg: "bg-emerald-50", tab: "centers" },
+    { label: "최근 30일 체크인", value: last30, icon: QrCode, color: "text-blue-600", bg: "bg-blue-50", tab: "checkins" },
+    { label: "검증필요 (확인 대기)", value: needsVerify, icon: AlertTriangle, color: "text-amber-600", bg: "bg-amber-50", tab: "checkins" },
+    { label: "등록된 관리자", value: admins.filter((a) => a.Active !== false).length, icon: ShieldCheck, color: "text-indigo-600", bg: "bg-indigo-50", tab: "admins" },
+  ];
 
   return (
     <div>
-      <div className="bg-white rounded-xl border p-5 mb-5">
-        <h3 className="font-semibold text-slate-800 mb-1.5">MKQR이란?</h3>
-        <p className="text-sm text-slate-500 leading-relaxed">
-          센터/업체별 QR 코드를 발급해서, 방문자가 로그인 없이 QR만 스캔하면 자동으로 시각·위치(GPS/IP)·기기 정보를 기록하고
-          센터 반경 안인지 자동 검증하는 캠페인 방문 인증 시스템입니다. 어뷰징 방지를 위한 기기 핑거프린트, reCAPTCHA,
-          짧은 시간 반복 접근 자동 차단 기능이 포함되어 있습니다.
-        </p>
+      <div className="rounded-2xl p-6 mb-5 text-white relative overflow-hidden" style={{ background: `linear-gradient(135deg, ${BRAND.navy}, #1A3A5C)` }}>
+        <div className="relative z-10">
+          <div className="flex items-center gap-2 mb-2">
+            <div className="w-8 h-8 rounded-lg bg-white/10 flex items-center justify-center"><QrCode size={16} /></div>
+            <h3 className="font-semibold">MKQR이란?</h3>
+          </div>
+          <p className="text-sm text-white/70 leading-relaxed max-w-3xl">
+            센터/업체별 QR 코드를 발급해서, 방문자가 로그인 없이 QR만 스캔하면 자동으로 시각·위치(GPS/IP)·기기 정보를 기록하고
+            센터 반경 안인지 자동 검증하는 캠페인 방문 인증 시스템입니다. 어뷰징 방지를 위한 기기 핑거프린트, reCAPTCHA,
+            짧은 시간 반복 접근 자동 차단 기능이 포함되어 있습니다.
+          </p>
+        </div>
+        <div className="absolute -right-6 -bottom-10 w-40 h-40 rounded-full bg-white/5" />
+        <div className="absolute right-16 -top-10 w-24 h-24 rounded-full bg-white/5" />
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5">
-        <div className="bg-white rounded-xl border p-4 cursor-pointer hover:border-slate-300" onClick={() => setTab("centers")}>
-          <div className="text-xl font-semibold text-slate-800">{activeCenters}<span className="text-sm font-normal text-slate-400"> / {centers.length}</span></div>
-          <div className="text-xs text-slate-400 mt-0.5">활성 센터</div>
-        </div>
-        <div className="bg-white rounded-xl border p-4 cursor-pointer hover:border-slate-300" onClick={() => setTab("checkins")}>
-          <div className="text-xl font-semibold text-slate-800">{last30}</div>
-          <div className="text-xs text-slate-400 mt-0.5">최근 30일 체크인</div>
-        </div>
-        <div className="bg-white rounded-xl border p-4 cursor-pointer hover:border-slate-300" onClick={() => setTab("checkins")}>
-          <div className="text-xl font-semibold text-slate-800">{needsVerify}</div>
-          <div className="text-xs text-slate-400 mt-0.5">검증필요 (확인 대기)</div>
-        </div>
-        <div className="bg-white rounded-xl border p-4 cursor-pointer hover:border-slate-300" onClick={() => setTab("admins")}>
-          <div className="text-xl font-semibold text-slate-800">{admins.filter((a) => a.Active !== false).length}</div>
-          <div className="text-xs text-slate-400 mt-0.5">등록된 관리자</div>
-        </div>
+        {stats.map((s) => (
+          <div key={s.label} onClick={() => setTab(s.tab)}
+            className="bg-white rounded-xl border p-4 cursor-pointer hover:border-slate-300 hover:shadow-sm transition-all flex items-center gap-3">
+            <div className={`w-10 h-10 rounded-lg flex items-center justify-center shrink-0 ${s.bg}`}>
+              <s.icon size={18} className={s.color} />
+            </div>
+            <div>
+              <div className="text-xl font-semibold text-slate-800">{s.value}{s.suffix && <span className="text-sm font-normal text-slate-400">{s.suffix}</span>}</div>
+              <div className="text-xs text-slate-400">{s.label}</div>
+            </div>
+          </div>
+        ))}
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <button onClick={() => setTab("centers")} className="bg-white rounded-xl border p-4 text-left hover:shadow-md hover:border-slate-300 transition-all">
-          <Building2 size={18} className="mb-2" style={{ color: BRAND.accent }} />
-          <div className="font-medium text-sm text-slate-800 mb-0.5">센터 관리</div>
-          <div className="text-xs text-slate-400">업체 등록, 정보 수정, GPS 허용 반경 설정</div>
-        </button>
-        <button onClick={() => setTab("qr")} className="bg-white rounded-xl border p-4 text-left hover:shadow-md hover:border-slate-300 transition-all">
-          <QrCode size={18} className="mb-2" style={{ color: BRAND.accent }} />
-          <div className="font-medium text-sm text-slate-800 mb-0.5">QR 코드</div>
-          <div className="text-xs text-slate-400">센터별 QR 생성/다운로드</div>
-        </button>
-        <button onClick={() => setTab("checkins")} className="bg-white rounded-xl border p-4 text-left hover:shadow-md hover:border-slate-300 transition-all">
-          <ListChecks size={18} className="mb-2" style={{ color: BRAND.accent }} />
-          <div className="font-medium text-sm text-slate-800 mb-0.5">체크인 기록</div>
-          <div className="text-xs text-slate-400">방문 기록 조회 및 검증 처리</div>
-        </button>
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+        <div className="lg:col-span-2 bg-white rounded-xl border overflow-hidden">
+          <div className="px-4 py-3 border-b flex items-center justify-between">
+            <span className="text-sm font-medium text-slate-700">최근 체크인</span>
+            <button onClick={() => setTab("checkins")} className="text-xs text-slate-400 hover:text-slate-700">전체 보기 →</button>
+          </div>
+          {recent.length ? (
+            <div>
+              {recent.map((r) => (
+                <div key={r.id} className="px-4 py-2.5 border-b last:border-0 flex items-center justify-between hover:bg-slate-50">
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <Badge status={r.VerifyStatus} />
+                    <span className="text-sm text-slate-700 truncate">{r.CenterName}</span>
+                  </div>
+                  <span className="text-xs text-slate-400 shrink-0 ml-2">{fmtDate(r.ServerTimestamp)}</span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="text-center text-slate-400 text-sm py-10">아직 체크인 기록이 없습니다</div>
+          )}
+        </div>
+
+        <div className="flex flex-col gap-3">
+          <button onClick={() => setTab("centers")} className="bg-white rounded-xl border p-4 text-left hover:shadow-md hover:border-slate-300 transition-all flex items-center gap-3">
+            <div className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0" style={{ background: BRAND.accentSoft }}><Building2 size={16} style={{ color: BRAND.accent }} /></div>
+            <div>
+              <div className="font-medium text-sm text-slate-800">센터 관리</div>
+              <div className="text-xs text-slate-400">업체 등록·수정, GPS 반경 설정</div>
+            </div>
+          </button>
+          <button onClick={() => setTab("qr")} className="bg-white rounded-xl border p-4 text-left hover:shadow-md hover:border-slate-300 transition-all flex items-center gap-3">
+            <div className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0" style={{ background: BRAND.accentSoft }}><QrCode size={16} style={{ color: BRAND.accent }} /></div>
+            <div>
+              <div className="font-medium text-sm text-slate-800">QR 코드</div>
+              <div className="text-xs text-slate-400">센터별 QR 생성/다운로드</div>
+            </div>
+          </button>
+          <button onClick={() => setTab("checkins")} className="bg-white rounded-xl border p-4 text-left hover:shadow-md hover:border-slate-300 transition-all flex items-center gap-3">
+            <div className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0" style={{ background: BRAND.accentSoft }}><ListChecks size={16} style={{ color: BRAND.accent }} /></div>
+            <div>
+              <div className="font-medium text-sm text-slate-800">체크인 기록</div>
+              <div className="text-xs text-slate-400">방문 기록 조회 및 검증 처리</div>
+            </div>
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -1230,57 +1271,6 @@ function AdminsTab({ admins, reload, userEmail }) {
     } catch (e) { alert(e.message); } finally { setBusy(false); }
   }
 
-  // 예전 버그(반영/추가 시 캐시된 데이터 기준으로 중복 판단)로 이미 쌓인 중복 행을 정리하는 도구.
-  // 같은 이메일의 여러 행을 하나로 합치되, 값은 "하나라도 켜져 있으면 켜진 것으로" 보수적으로 병합한 뒤 나머지는 삭제한다.
-  const [cleaning, setCleaning] = useState(false);
-  async function cleanupDuplicates() {
-    if (!confirm("mkqr_Admins와 mkqr_CategoryAccess 목록에서 같은 이메일의 중복 행을 찾아 하나로 합치고 나머지는 삭제합니다. 계속할까요?")) return;
-    setCleaning(true);
-    try {
-      let mergedAdmins = 0, deletedAdmins = 0, mergedAccess = 0, deletedAccess = 0;
-
-      // mkqr_Admins 중복 정리
-      const rawAdmins = await mkListAll(MK_LISTS.admins);
-      const adminGroups = {};
-      rawAdmins.forEach((it) => {
-        const email = (it.fields.Email || "").toLowerCase();
-        if (!email) return;
-        (adminGroups[email] = adminGroups[email] || []).push(it);
-      });
-      for (const email in adminGroups) {
-        const group = adminGroups[email];
-        if (group.length <= 1) continue;
-        const keep = group[0];
-        const anyActive = group.some((g) => g.fields.Active !== false);
-        await mkUpdateItem(MK_LISTS.admins, keep.id, { Active: anyActive });
-        for (let i = 1; i < group.length; i++) { await mkDeleteItem(MK_LISTS.admins, group[i].id); deletedAdmins++; }
-        mergedAdmins++;
-      }
-
-      // mkqr_CategoryAccess 중복 정리
-      const rawAccess = await mkListAll(MK_LISTS.categoryAccess);
-      const accessGroups = {};
-      rawAccess.forEach((it) => {
-        const email = (it.fields.Email || "").toLowerCase();
-        if (!email) return;
-        (accessGroups[email] = accessGroups[email] || []).push(it);
-      });
-      for (const email in accessGroups) {
-        const group = accessGroups[email];
-        if (group.length <= 1) continue;
-        const keep = group[0];
-        const merged = {};
-        MK_CATEGORIES.forEach((c) => { merged[c.field] = group.some((g) => g.fields[c.field] !== false); });
-        await mkUpdateItem(MK_LISTS.categoryAccess, keep.id, merged);
-        for (let i = 1; i < group.length; i++) { await mkDeleteItem(MK_LISTS.categoryAccess, group[i].id); deletedAccess++; }
-        mergedAccess++;
-      }
-
-      await reload();
-      alert(`정리 완료\n관리자 목록: ${mergedAdmins}명 정리, ${deletedAdmins}건 삭제\n카테고리 접근 권한: ${mergedAccess}명 정리, ${deletedAccess}건 삭제`);
-    } catch (e) { alert(e.message); } finally { setCleaning(false); }
-  }
-
   async function toggleActive(a) {
     try { await mkUpdateItem(MK_LISTS.admins, a.id, { Active: a.Active === false }); await reload(); } catch (e) { alert(e.message); }
   }
@@ -1296,7 +1286,7 @@ function AdminsTab({ admins, reload, userEmail }) {
 
   return (
     <div>
-      {(cleaning || busy) && <BlockingOverlay message={cleaning ? "중복 데이터를 정리하고 있습니다..." : "처리하고 있습니다..."} />}
+      {busy && <BlockingOverlay message="처리하고 있습니다..." />}
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-5">
         <div className="bg-white rounded-xl border p-4 flex items-center gap-3">
@@ -1318,15 +1308,6 @@ function AdminsTab({ admins, reload, userEmail }) {
               : <>아직 <b>부트스트랩 상태</b> — 모든 Hyosung 계정에 열려있습니다. 아래에서 최소 1명 등록해주세요</>}
           </div>
         </div>
-      </div>
-
-      <div className="bg-white rounded-xl border p-4 mb-5 flex items-center justify-between gap-3 flex-wrap">
-        <div className="text-sm text-slate-600">
-          <span className="font-medium text-slate-700">데이터 정리</span> — 같은 이메일이 여러 번 등록돼 목록이 계속 쌓이는 것 같으면 한 번씩 실행해주세요.
-        </div>
-        <button onClick={cleanupDuplicates} disabled={cleaning} className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm border border-slate-300 hover:bg-slate-50 disabled:opacity-50">
-          <RefreshCw size={14} className={cleaning ? "animate-spin" : ""} /> {cleaning ? "정리 중..." : "중복 데이터 정리"}
-        </button>
       </div>
 
       {!admins.length && (
