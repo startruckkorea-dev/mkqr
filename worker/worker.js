@@ -142,7 +142,10 @@ function distanceKm(lat1, lng1, lat2, lng2) {
 
 async function ipGeolocate(ip) {
   try {
-    const res = await fetch(`https://ipapi.co/${ip}/json/`);
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 5000);
+    const res = await fetch(`https://ipapi.co/${ip}/json/`, { signal: controller.signal });
+    clearTimeout(timer);
     if (!res.ok) return null;
     const d = await res.json();
     if (d.error || d.latitude == null) return null;
@@ -159,9 +162,12 @@ async function verifyRecaptcha(env, token, remoteIp) {
   if (!token || !env.MK_RECAPTCHA_SECRET) return null;
   try {
     const body = new URLSearchParams({ secret: env.MK_RECAPTCHA_SECRET, response: token, remoteip: remoteIp || "" });
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 5000);
     const res = await fetch("https://www.google.com/recaptcha/api/siteverify", {
-      method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body,
+      method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body, signal: controller.signal,
     });
+    clearTimeout(timer);
     const data = await res.json();
     if (!data.success) return null;
     return typeof data.score === "number" ? data.score : null;
@@ -246,11 +252,12 @@ export default {
         const publicIp = request.headers.get("cf-connecting-ip") || "unknown";
         const cfCity = request.cf ? [request.cf.city, request.cf.region].filter(Boolean).join(" ") : "";
 
-        let ipLoc = null;
-        if (publicIp !== "unknown") ipLoc = await ipGeolocate(publicIp);
+        // 서로 관련 없는 외부 호출(IP 위치조회, reCAPTCHA 검증)은 순서대로 기다리지 않고 동시에 실행해서 지연을 줄인다.
+        const [ipLoc, recaptchaScore] = await Promise.all([
+          publicIp !== "unknown" ? ipGeolocate(publicIp) : Promise.resolve(null),
+          verifyRecaptcha(env, recaptchaToken, publicIp),
+        ]);
         const ipCity = ipLoc?.city || cfCity || "";
-
-        const recaptchaScore = await verifyRecaptcha(env, recaptchaToken, publicIp);
 
         let distKm = null, source = "없음", verifyStatus = "검증필요", gpsUsed = false;
         const hasCenterCoord = c.Lat != null && c.Lng != null;

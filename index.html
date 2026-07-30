@@ -70,7 +70,7 @@ import {
   Building2, QrCode, ListChecks, LogOut, Plus, Pencil, Trash2, X,
   Download, RefreshCw, MapPin, Search, CheckCircle2, AlertTriangle,
   Upload, ExternalLink, Phone, Navigation, LayoutDashboard, ShieldCheck,
-  ArrowUpRight, ImagePlus, KeyRound, Mail,
+  ArrowUpRight, ImagePlus, KeyRound, Mail, XCircle,
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import QRCode from "qrcode";
@@ -542,12 +542,15 @@ function CentersTab({ centers, reload, onCreated }) {
   }
 
   const activeCount = centers.filter((c) => c.Active !== false).length;
-  const missingCoordCount = centers.filter((c) => !(c.Lat && c.Lng)).length;
+  const inactiveCenters = centers.filter((c) => c.Active === false);
+  const missingCoordCenters = centers.filter((c) => !(c.Lat && c.Lng));
+  const [statModal, setStatModal] = useState(null); // { title, items: [{Title, sub}] } | null
 
   return (
     <div>
-      <div className="grid grid-cols-3 gap-3 mb-5">
-        <div className="bg-white rounded-xl border p-4 flex items-center gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5">
+        <div onClick={() => setStatModal({ title: "전체 센터", items: centers.map((c) => ({ Title: c.Title, sub: c.Region })) })}
+          className="bg-white rounded-xl border p-4 flex items-center gap-3 cursor-pointer hover:border-slate-300 hover:shadow-sm transition-all">
           <div className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0" style={{ background: BRAND.accentSoft }}>
             <Building2 size={17} style={{ color: BRAND.accent }} />
           </div>
@@ -556,7 +559,8 @@ function CentersTab({ centers, reload, onCreated }) {
             <div className="text-xs text-slate-400">전체 센터 (QR 최대 {MAX_CENTERS}개)</div>
           </div>
         </div>
-        <div className="bg-white rounded-xl border p-4 flex items-center gap-3">
+        <div onClick={() => setStatModal({ title: "활성 센터", items: centers.filter((c) => c.Active !== false).map((c) => ({ Title: c.Title, sub: c.Region })) })}
+          className="bg-white rounded-xl border p-4 flex items-center gap-3 cursor-pointer hover:border-slate-300 hover:shadow-sm transition-all">
           <div className="w-9 h-9 rounded-lg bg-emerald-50 flex items-center justify-center shrink-0">
             <CheckCircle2 size={17} className="text-emerald-600" />
           </div>
@@ -565,16 +569,44 @@ function CentersTab({ centers, reload, onCreated }) {
             <div className="text-xs text-slate-400">활성 (QR 사용 가능)</div>
           </div>
         </div>
-        <div className="bg-white rounded-xl border p-4 flex items-center gap-3">
+        <div onClick={() => setStatModal({ title: "비활성 센터", items: inactiveCenters.map((c) => ({ Title: c.Title, sub: c.Region })) })}
+          className="bg-white rounded-xl border p-4 flex items-center gap-3 cursor-pointer hover:border-slate-300 hover:shadow-sm transition-all">
+          <div className="w-9 h-9 rounded-lg bg-slate-100 flex items-center justify-center shrink-0">
+            <XCircle size={17} className="text-slate-400" />
+          </div>
+          <div>
+            <div className="text-xl font-semibold text-slate-800">{inactiveCenters.length}</div>
+            <div className="text-xs text-slate-400">비활성</div>
+          </div>
+        </div>
+        <div onClick={() => setStatModal({ title: "좌표 미설정 센터", items: missingCoordCenters.map((c) => ({ Title: c.Title, sub: c.AddressKr || "주소 미입력" })) })}
+          className="bg-white rounded-xl border p-4 flex items-center gap-3 cursor-pointer hover:border-slate-300 hover:shadow-sm transition-all">
           <div className="w-9 h-9 rounded-lg bg-amber-50 flex items-center justify-center shrink-0">
             <MapPin size={17} className="text-amber-600" />
           </div>
           <div>
-            <div className="text-xl font-semibold text-slate-800">{missingCoordCount}</div>
+            <div className="text-xl font-semibold text-slate-800">{missingCoordCenters.length}</div>
             <div className="text-xs text-slate-400">좌표 미설정</div>
           </div>
         </div>
       </div>
+
+      {statModal && (
+        <Modal title={statModal.title} onClose={() => setStatModal(null)}>
+          {statModal.items.length ? (
+            <div className="space-y-1 max-h-80 overflow-y-auto">
+              {statModal.items.map((it, i) => (
+                <div key={i} className="flex items-center justify-between px-3 py-2 rounded-lg hover:bg-slate-50 text-sm">
+                  <span className="font-medium text-slate-700">{it.Title}</span>
+                  <span className="text-xs text-slate-400">{it.sub}</span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="text-center text-slate-400 text-sm py-6">해당하는 센터가 없습니다</div>
+          )}
+        </Modal>
+      )}
 
       <div className="flex items-center justify-between mb-4 gap-2 flex-wrap">
         <div className="relative">
@@ -1340,6 +1372,7 @@ function CategoryAccessTab({ admins, categoryAccess, reload }) {
   const [directory, setDirectory] = useState([]);
   const [dirError, setDirError] = useState(false);
   const [savingKey, setSavingKey] = useState(null); // "email:catKey" — 저장 중인 셀만 살짝 비활성화
+  const [bulkSaving, setBulkSaving] = useState(null); // 전체선택 처리 중인 카테고리 key
 
   useEffect(() => {
     loadEmployeeDirectory()
@@ -1371,30 +1404,56 @@ function CategoryAccessTab({ admins, categoryAccess, reload }) {
   function rowFor(email) {
     return categoryAccess.find((r) => (r.Email || "").toLowerCase() === email);
   }
+  function isChecked(person, cat) {
+    const row = rowFor(person.email);
+    const isAdminAlready = adminEmailSet.has(person.email);
+    return row ? row[cat.field] !== false : isAdminAlready;
+  }
 
-  async function toggle(person, cat) {
+  // 한 사람의 한 카테고리를 특정 값(value)으로 저장. "관리자 전용"을 켜는(true) 경우엔 나머지 4개 카테고리도
+  // 전부 같이 켜준다 — 관리자 전용 접근을 준다는 건 결국 전체 화면을 다 볼 수 있어야 한다는 뜻이라서.
+  async function setValue(person, cat, value) {
     const email = person.email;
     const existing = rowFor(email);
     const isAdminAlready = adminEmailSet.has(email);
-    const cellKey = `${email}:${cat.key}`;
+    const cascadeAll = cat.key === "admins" && value === true;
+
+    const fields = existing ? {} : { Title: person.name || email, Email: email };
+    if (cascadeAll) {
+      MK_CATEGORIES.forEach((c) => { fields[c.field] = true; });
+    } else {
+      if (!existing) MK_CATEGORIES.forEach((c) => { fields[c.field] = c.key === cat.key ? value : isAdminAlready; });
+      else fields[cat.field] = value;
+    }
+
+    if (existing) await mkUpdateItem(MK_LISTS.categoryAccess, existing.id, fields);
+    else await mkCreateItem(MK_LISTS.categoryAccess, fields);
+
+    if (value && !isAdminAlready) {
+      await mkCreateItem(MK_LISTS.admins, { Title: person.name || email, Email: email, Active: true });
+    }
+  }
+
+  async function toggle(person, cat) {
+    const cellKey = `${person.email}:${cat.key}`;
     setSavingKey(cellKey);
     try {
-      // 이미 관리자였던 사람은 명시적 기록 없으면 기본 허용, 아직 관리자가 아니었던 사람은 기본 비허용에서 시작.
-      const currentVal = existing ? existing[cat.field] !== false : isAdminAlready;
-      const newVal = !currentVal;
-      if (existing) {
-        await mkUpdateItem(MK_LISTS.categoryAccess, existing.id, { [cat.field]: newVal });
-      } else {
-        const fields = { Title: person.name || email, Email: email };
-        MK_CATEGORIES.forEach((c) => { fields[c.field] = c.key === cat.key ? newVal : isAdminAlready; });
-        await mkCreateItem(MK_LISTS.categoryAccess, fields);
-      }
-      // 아직 관리자 목록(mkqr_Admins)에 없는 사람에게 권한을 켜주는 거면, 로그인 자체가 가능하도록 같이 등록해준다.
-      if (newVal && !isAdminAlready) {
-        await mkCreateItem(MK_LISTS.admins, { Title: person.name || email, Email: email, Active: true });
-      }
+      await setValue(person, cat, !isChecked(person, cat));
       await reload();
     } catch (e) { alert(e.message); } finally { setSavingKey(null); }
+  }
+
+  // 카테고리 헤더의 "전체선택" 체크박스 — 지금 화면에 보이는(검색 필터 적용된) 사람들 전체에 대해 한 번에 켜거나 끈다.
+  const allCheckedForCat = (cat) => filtered.length > 0 && filtered.every((p) => isChecked(p, cat));
+  async function toggleAllForCat(cat) {
+    const target = !allCheckedForCat(cat);
+    setBulkSaving(cat.key);
+    try {
+      for (const p of filtered) {
+        if (isChecked(p, cat) !== target) await setValue(p, cat, target);
+      }
+      await reload();
+    } catch (e) { alert(e.message); } finally { setBulkSaving(null); }
   }
 
   return (
@@ -1404,7 +1463,7 @@ function CategoryAccessTab({ admins, categoryAccess, reload }) {
         <div>
           전 직원을 대상으로 화면 단위 접근 권한을 체크박스로 부여·변경합니다. 변경 즉시 저장·반영됩니다.
           <b> 체크하면 그 사람이 아직 관리자가 아니어도 자동으로 관리자 목록에 등록되어 로그인도 함께 가능해집니다.</b>
-          {" "}이미 등록된 관리자는 별도 기록이 없으면 기본적으로 전체 화면에 접근 가능한 상태입니다.
+          {" "}<b>"관리자 전용"을 체크하면 나머지 4개 화면도 전부 같이 켜집니다.</b> 각 열 맨 위 체크박스로 전체 선택도 가능합니다.
         </div>
       </div>
 
@@ -1421,13 +1480,18 @@ function CategoryAccessTab({ admins, categoryAccess, reload }) {
               <tr>
                 <th className="text-left px-4 py-2.5 bg-slate-50">사용자</th>
                 {MK_CATEGORIES.map((c) => (
-                  <th key={c.key} className="text-center px-3 py-2.5 whitespace-nowrap bg-slate-50">{c.label}</th>
+                  <th key={c.key} className="text-center px-3 py-2.5 whitespace-nowrap bg-slate-50">
+                    <div className="flex flex-col items-center gap-1">
+                      <input type="checkbox" checked={allCheckedForCat(c)} disabled={bulkSaving === c.key}
+                        onChange={() => toggleAllForCat(c)} className="w-4 h-4 cursor-pointer" title="전체 선택/해제" />
+                      <span>{c.label}</span>
+                    </div>
+                  </th>
                 ))}
               </tr>
             </thead>
             <tbody>
               {filtered.map((p) => {
-                const row = rowFor(p.email);
                 const isAdminAlready = adminEmailSet.has(p.email);
                 return (
                   <tr key={p.email} className="border-t hover:bg-slate-50">
@@ -1446,11 +1510,10 @@ function CategoryAccessTab({ admins, categoryAccess, reload }) {
                       </div>
                     </td>
                     {MK_CATEGORIES.map((c) => {
-                      const checked = row ? row[c.field] !== false : isAdminAlready;
                       const cellKey = `${p.email}:${c.key}`;
                       return (
                         <td key={c.key} className="text-center px-3 py-2.5">
-                          <input type="checkbox" checked={checked} disabled={savingKey === cellKey}
+                          <input type="checkbox" checked={isChecked(p, c)} disabled={savingKey === cellKey || bulkSaving}
                             onChange={() => toggle(p, c)} className="w-4 h-4 cursor-pointer" />
                         </td>
                       );
@@ -1528,11 +1591,11 @@ function App({ userEmail }) {
 
   const allNav = [
     { id: "overview", label: "Overview", icon: LayoutDashboard, cat: "overview" },
+  ];
+  const adminNav = [
     { id: "centers", label: "센터 관리", icon: Building2, cat: "centers" },
     { id: "qr", label: "QR 코드", icon: QrCode, cat: "qr" },
     { id: "checkins", label: "체크인 기록", icon: ListChecks, badge: needsVerify, cat: "checkins" },
-  ];
-  const adminNav = [
     { id: "admins", label: "관리자 설정", icon: ShieldCheck, cat: "admins" },
     { id: "categoryAccess", label: "카테고리 접근 권한", icon: KeyRound, cat: "admins" },
   ];
@@ -1545,7 +1608,7 @@ function App({ userEmail }) {
   }, [loading, myAccessRow]);
 
   return (
-    <div className="min-h-screen flex" style={{ background: "#F5F6F8" }}>
+    <div className="h-screen flex overflow-hidden" style={{ background: "#F5F6F8" }}>
       <aside className="w-56 shrink-0 text-white flex flex-col" style={{ background: BRAND.navy }}>
         <div className="px-4 pt-5 pb-4 border-b border-white/10">
           <div className="bg-white rounded-lg px-3 py-2 flex items-center justify-center">
@@ -1553,7 +1616,7 @@ function App({ userEmail }) {
           </div>
           <p className="text-slate-400 text-[10px] text-center mt-1.5">MKQR · 방문인증 QR</p>
         </div>
-        <nav className="flex-1 py-3">
+        <nav className="flex-1 py-3 overflow-y-auto">
           {visibleMainNav.map((n) => (
             <button key={n.id} onClick={() => setTab(n.id)}
               className={`w-full flex items-center gap-2.5 px-5 py-2.5 text-sm ${tab === n.id ? "bg-white/10 text-white" : "text-white/60 hover:text-white/90"}`}>
