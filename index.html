@@ -1294,7 +1294,7 @@ function AdminsTab({ admins, reload, userEmail }) {
   const activeCount = admins.filter((a) => a.Active !== false).length;
 
   return (
-    <div>
+    <div className="max-w-3xl">
       {busy && <BlockingOverlay message="처리하고 있습니다..." />}
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-5">
@@ -1377,7 +1377,7 @@ function AdminsTab({ admins, reload, userEmail }) {
           : <p className="text-xs text-slate-400 mt-2">STK HR 시스템과 연동된 정보를 읽어와서 이름/이메일/부서로 검색해서 바로 추가할 수 있습니다.</p>}
       </div>
 
-      <div className="flex items-center justify-between mb-3 gap-2 flex-wrap max-w-2xl">
+      <div className="flex items-center justify-between mb-3 gap-2 flex-wrap">
         <div className="relative max-w-xs flex-1 min-w-[200px]">
           <Search size={15} className="absolute left-2.5 top-2.5 text-slate-400" />
           <input value={listQuery} onChange={(e) => setListQuery(e.target.value)} placeholder="등록된 관리자 검색" className="pl-8 pr-3 py-2 border border-slate-300 rounded-lg text-sm w-full" />
@@ -1385,7 +1385,7 @@ function AdminsTab({ admins, reload, userEmail }) {
         <span className="text-xs text-slate-400">총 {listFiltered.length}명</span>
       </div>
 
-      <div className="bg-white rounded-xl border overflow-hidden max-w-2xl">
+      <div className="bg-white rounded-xl border overflow-hidden">
         <table className="w-full text-sm table-fixed">
           <colgroup>
             <col style={{ width: "auto" }} />
@@ -1444,7 +1444,7 @@ function AdminsTab({ admins, reload, userEmail }) {
       </div>
 
       {listFiltered.length > 0 && (
-        <div className="flex items-center justify-between mt-3 text-sm max-w-2xl">
+        <div className="flex items-center justify-between mt-3 text-sm">
           <div className="text-slate-400 text-xs">
             총 {listFiltered.length}명 중 {(listPageSafe - 1) * LIST_PAGE_SIZE + 1}–{Math.min(listPageSafe * LIST_PAGE_SIZE, listFiltered.length)}명 표시
           </div>
@@ -1636,7 +1636,11 @@ function CategoryAccessTab({ admins, categoryAccess, reload }) {
       {dirError && <p className="text-xs text-amber-600 mb-3">전 직원 명부를 불러오지 못해, 이미 등록된 관리자만 표시됩니다.</p>}
 
       <div className="bg-white rounded-xl border overflow-hidden">
-        <table className="w-full text-sm">
+        <table className="w-full text-sm table-fixed">
+            <colgroup>
+              <col style={{ width: "30%" }} />
+              {MK_CATEGORIES.map((c) => <col key={c.key} style={{ width: "14%" }} />)}
+            </colgroup>
             <thead className="bg-slate-50 text-slate-500 text-xs">
               <tr>
                 <th className="text-left px-4 py-3">사용자</th>
