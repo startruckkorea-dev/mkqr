@@ -1129,11 +1129,11 @@ function OverviewTab({ centers, checkins, admins, setTab }) {
     { label: "활성 센터", value: activeCenters, suffix: ` / ${centers.length}`, icon: Building2, color: "text-emerald-600", bg: "bg-emerald-50", tab: "centers" },
     { label: "최근 30일 체크인", value: last30, icon: QrCode, color: "text-blue-600", bg: "bg-blue-50", tab: "checkins" },
     { label: "검증필요 (확인 대기)", value: needsVerify, icon: AlertTriangle, color: "text-amber-600", bg: "bg-amber-50", tab: "checkins" },
-    { label: "등록된 관리자", value: admins.filter((a) => a.Active !== false).length, icon: ShieldCheck, color: "text-indigo-600", bg: "bg-indigo-50", tab: "admins" },
+    { label: "등록된 관리자", value: admins.length, icon: ShieldCheck, color: "text-indigo-600", bg: "bg-indigo-50", tab: "categoryAccess" },
   ];
 
   return (
-    <div>
+    <div className="max-w-5xl mx-auto">
       <div className="rounded-2xl p-6 mb-5 text-white relative overflow-hidden" style={{ background: `linear-gradient(135deg, ${BRAND.navy}, #1A3A5C)` }}>
         <div className="relative z-10">
           <div className="flex items-center gap-2 mb-2">
