@@ -353,6 +353,40 @@ function parseDeviceLabel(ua) {
 }
 
 // Haversine 거리(km) — 관리자 화면에서 좌표 확인용. 실제 체크인 판정은 Worker가 서버측에서 동일 공식으로 계산.
+// Worker(worker.js)의 computeBlockStatus와 동일한 규칙(1분 내 5회 초과 → 30분 차단)을 관리자 화면에서도
+// 그대로 계산해서, "차단해제" 버튼을 진짜 차단된 기기에만 보여준다. checkins는 이미 화면에 불러온 데이터라
+// 별도 API 호출 없이 여기서 바로 계산 가능.
+function computeBlockedDevices(allCheckins) {
+  const WINDOW_MS = 60 * 1000, COUNT = 5, BLOCK_MS = 30 * 60 * 1000;
+  const groups = {};
+  allCheckins.forEach((r) => {
+    if (!r.DeviceFingerprint || !r.CenterId) return;
+    const key = `${r.CenterId}|${r.DeviceFingerprint}`;
+    (groups[key] = groups[key] || []).push(r);
+  });
+  const now = Date.now();
+  const blocked = {}; // key -> 남은 분
+  Object.keys(groups).forEach((key) => {
+    const list = groups[key];
+    const lastOverride = list
+      .filter((r) => r.VerifyStatus === "차단해제")
+      .reduce((max, r) => Math.max(max, new Date(r.ServerTimestamp || 0).getTime()), 0);
+    const events = list
+      .filter((r) => r.VerifyStatus !== "차단해제")
+      .map((r) => new Date(r.ServerTimestamp || 0).getTime())
+      .filter((t) => t > lastOverride)
+      .sort((a, b) => a - b);
+    let blockUntil = 0;
+    for (let i = 0; i < events.length; i++) {
+      let count = 0;
+      for (let j = i; j >= 0 && events[i] - events[j] <= WINDOW_MS; j--) count++;
+      if (count >= COUNT) blockUntil = Math.max(blockUntil, events[i] + BLOCK_MS);
+    }
+    if (blockUntil > now) blocked[key] = Math.ceil((blockUntil - now) / 60000);
+  });
+  return blocked;
+}
+
 function distanceKm(lat1, lng1, lat2, lng2) {
   const R = 6371;
   const toRad = (d) => (d * Math.PI) / 180;
@@ -962,15 +996,17 @@ function CheckInsTab({ checkins, centers, reload, periodDays, onPeriodChange }) 
     XLSX.writeFile(wb, `MKQR_체크인기록_${new Date().toISOString().slice(0, 10)}.xlsx`);
   }
 
-  // "차단해제" 버튼은 매 행마다 다 보여주면 "이 행이 차단됨"처럼 오해하기 쉬워서,
-  // 같은 센터+기기 조합당 가장 최근 행(=정렬상 처음 만나는 행)에만 한 번 보여준다.
-  const unblockRowIds = new Set();
+  // "차단해제" 버튼은 이제 실제로 지금 차단 중인 기기에만 보여준다 (예전엔 최근 행마다 항상 떠서 오해가 있었음).
+  const blockedDevices = computeBlockedDevices(checkins);
+  const unblockRowInfo = {}; // rowId -> 남은 분
   {
     const seenKeys = new Set();
     for (const r of rows) {
-      if (!r.DeviceFingerprint) continue;
+      if (!r.DeviceFingerprint || !r.CenterId) continue;
       const key = `${r.CenterId}|${r.DeviceFingerprint}`;
-      if (!seenKeys.has(key)) { seenKeys.add(key); unblockRowIds.add(r.id); }
+      if (seenKeys.has(key)) continue;
+      seenKeys.add(key);
+      if (blockedDevices[key] != null) unblockRowInfo[r.id] = blockedDevices[key];
     }
   }
 
@@ -1081,8 +1117,11 @@ function CheckInsTab({ checkins, centers, reload, periodDays, onPeriodChange }) 
                   {["검증필요", "GPS거부"].includes(r.VerifyStatus) && (
                     <button onClick={() => approve(r)} className="text-xs px-2 py-1 rounded-lg text-white mr-1.5" style={{ background: BRAND.accent }}>승인 처리</button>
                   )}
-                  {unblockRowIds.has(r.id) && (
-                    <button onClick={() => unblockDevice(r)} title="이 기기가 1분 내 5회 초과 접근으로 30분 차단된 상태라면, 기다리지 않고 지금 바로 차단을 풀어줍니다." className="text-xs px-2 py-1 rounded-lg border border-slate-300 text-slate-500 hover:bg-slate-50">차단해제</button>
+                  {unblockRowInfo[r.id] != null && (
+                    <button onClick={() => unblockDevice(r)} title="지금 차단 중인 기기입니다. 눌러서 즉시 해제할 수 있습니다."
+                      className="text-xs px-2 py-1 rounded-lg border border-red-200 text-red-600 bg-red-50 hover:bg-red-100">
+                      차단됨 ({unblockRowInfo[r.id]}분) · 해제
+                    </button>
                   )}
                 </td>
               </tr>
