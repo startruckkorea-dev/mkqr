@@ -92,7 +92,7 @@ const GRAPH = "https://graph.microsoft.com/v1.0";
 // mkqr 은 로그인 없는 외부 방문자가 스캔하므로, 관리자 화면(이 파일, MSAL 로그인)과
 // 달리 체크인 기록 저장은 Cloudflare Worker가 앱 자격증명으로 대신 처리한다.
 // (Jimmy 개인 RCD 프로젝트와 동일한 패턴 — worker/ 폴더의 README 참고, 배포 후 이 값을 실제 Worker URL로 교체)
-const CHECKIN_API_BASE = "https://mkqr-worker.stk-dev.workers.dev";
+const CHECKIN_API_BASE = "https://mkqr-worker.mkqr.workers.dev";
 
 const msalApp = new msal.PublicClientApplication(MSAL_CONFIG);
 let _siteId = null;
