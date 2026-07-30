@@ -1294,11 +1294,53 @@ function AdminsTab({ admins, reload, userEmail }) {
     try { await mkDeleteItem(MK_LISTS.admins, a.id); await reload(); } catch (e) { alert(e.message); }
   }
 
+  // 여러 명을 한 번에 삭제/비활성화하는 기능 — 테스트하다가 실수로 대량 등록됐을 때 한 번에 정리하기 위함.
+  const [selected, setSelected] = useState(new Set());
+  const [bulkBusy, setBulkBusy] = useState(false);
+  function toggleSelect(id) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
+  const allPageSelected = listPageRows.length > 0 && listPageRows.every((a) => selected.has(a.id));
+  function toggleSelectPage() {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (allPageSelected) listPageRows.forEach((a) => next.delete(a.id));
+      else listPageRows.forEach((a) => next.add(a.id));
+      return next;
+    });
+  }
+  async function bulkDelete() {
+    if (!selected.size) return;
+    const willRemainActive = admins.filter((a) => a.Active !== false && !selected.has(a.id)).length;
+    if (willRemainActive === 0 && !confirm(`선택한 ${selected.size}명을 삭제하면 활성 관리자가 0명이 되어 전체 계정이 다시 열립니다. 계속할까요?`)) return;
+    else if (willRemainActive > 0 && !confirm(`선택한 ${selected.size}명을 삭제할까요?`)) return;
+    setBulkBusy(true);
+    try {
+      for (const id of selected) await mkDeleteItem(MK_LISTS.admins, id);
+      setSelected(new Set());
+      await reload();
+    } catch (e) { alert(e.message); } finally { setBulkBusy(false); }
+  }
+  async function bulkDeactivate() {
+    if (!selected.size) return;
+    if (!confirm(`선택한 ${selected.size}명을 비활성화할까요? (삭제하지 않고 로그인만 막습니다)`)) return;
+    setBulkBusy(true);
+    try {
+      for (const id of selected) await mkUpdateItem(MK_LISTS.admins, id, { Active: false });
+      setSelected(new Set());
+      await reload();
+    } catch (e) { alert(e.message); } finally { setBulkBusy(false); }
+  }
+
   const activeCount = admins.filter((a) => a.Active !== false).length;
 
   return (
     <div className="max-w-3xl mx-auto">
-      {busy && <BlockingOverlay message="처리하고 있습니다..." />}
+      {(busy || bulkBusy) && <BlockingOverlay message={bulkBusy ? "일괄 처리하고 있습니다..." : "처리하고 있습니다..."} />}
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-5">
         <div className="bg-white rounded-xl border p-4 flex items-center gap-3">
@@ -1385,18 +1427,29 @@ function AdminsTab({ admins, reload, userEmail }) {
           <Search size={15} className="absolute left-2.5 top-2.5 text-slate-400" />
           <input value={listQuery} onChange={(e) => setListQuery(e.target.value)} placeholder="등록된 관리자 검색" className="pl-8 pr-3 py-2 border border-slate-300 rounded-lg text-sm w-full" />
         </div>
-        <span className="text-xs text-slate-400">총 {listFiltered.length}명</span>
+        <div className="flex items-center gap-2">
+          {selected.size > 0 && (
+            <>
+              <span className="text-xs text-amber-600">{selected.size}명 선택됨</span>
+              <button onClick={bulkDeactivate} className="text-xs px-3 py-1.5 rounded-lg border border-slate-300 hover:bg-slate-50">선택 비활성화</button>
+              <button onClick={bulkDelete} className="text-xs px-3 py-1.5 rounded-lg border border-red-200 text-red-600 hover:bg-red-50">선택 삭제</button>
+            </>
+          )}
+          <span className="text-xs text-slate-400">총 {listFiltered.length}명</span>
+        </div>
       </div>
 
       <div className="bg-white rounded-xl border overflow-hidden">
         <table className="w-full text-sm table-fixed">
           <colgroup>
+            <col style={{ width: "36px" }} />
             <col style={{ width: "auto" }} />
             <col style={{ width: "110px" }} />
             <col style={{ width: "150px" }} />
           </colgroup>
           <thead className="bg-slate-50 text-slate-500 text-xs">
             <tr>
+              <th className="px-4 py-2.5"><input type="checkbox" checked={allPageSelected} onChange={toggleSelectPage} className="w-4 h-4 cursor-pointer" /></th>
               <th className="text-left px-4 py-2.5">관리자</th>
               <th className="text-left px-4 py-2.5">상태</th>
               <th className="text-right px-4 py-2.5">관리</th>
@@ -1404,7 +1457,8 @@ function AdminsTab({ admins, reload, userEmail }) {
           </thead>
           <tbody>
             {listPageRows.map((a) => (
-              <tr key={a.id} className="border-t hover:bg-slate-50">
+              <tr key={a.id} className={`border-t hover:bg-slate-50 ${selected.has(a.id) ? "bg-amber-50/50" : ""}`}>
+                <td className="px-4 py-2.5"><input type="checkbox" checked={selected.has(a.id)} onChange={() => toggleSelect(a.id)} className="w-4 h-4 cursor-pointer" /></td>
                 <td className="px-4 py-2.5">
                   <div className="flex items-center gap-2.5">
                     <div className="w-8 h-8 rounded-full flex items-center justify-center text-white text-xs font-semibold shrink-0" style={{ background: BRAND.navy }}>
@@ -1433,14 +1487,14 @@ function AdminsTab({ admins, reload, userEmail }) {
               </tr>
             ))}
             {!admins.length && (
-              <tr><td colSpan={3} className="text-center py-14">
+              <tr><td colSpan={4} className="text-center py-14">
                 <ShieldCheck size={28} className="mx-auto text-slate-300 mb-2" />
                 <div className="text-slate-500 text-sm mb-1">등록된 관리자가 없습니다</div>
                 <div className="text-slate-400 text-xs">현재 모든 Hyosung 계정에 열려있는 상태입니다 — 위에서 검색해 추가해주세요</div>
               </td></tr>
             )}
             {admins.length > 0 && !listFiltered.length && (
-              <tr><td colSpan={3} className="text-center text-slate-400 text-sm py-10">검색 결과가 없습니다</td></tr>
+              <tr><td colSpan={4} className="text-center text-slate-400 text-sm py-10">검색 결과가 없습니다</td></tr>
             )}
           </tbody>
         </table>
