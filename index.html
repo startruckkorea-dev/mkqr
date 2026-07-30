@@ -216,7 +216,7 @@ async function getMkAttachedFilesDriveId() {
   return _mkAttachedFilesDriveId;
 }
 
-const ICON_MAX_BYTES = 500 * 1024; // 500KB
+const ICON_MAX_BYTES = 50 * 1024; // 50KB
 const ICON_ALLOWED_EXT = ["jpg", "jpeg", "png", "gif", "webp"];
 
 // 업체 아이콘을 MKQR_Media_AttachedFiles/{YYYY-MM-DD}/ 아래에 날짜별로 쌓이게 업로드.
@@ -226,7 +226,7 @@ async function uploadCenterIcon(file) {
     throw new Error(`이미지 파일만 업로드할 수 있습니다 (${ICON_ALLOWED_EXT.join("/")}).`);
   }
   if (file.size > ICON_MAX_BYTES) {
-    throw new Error(`파일 크기는 500KB 이하만 가능합니다. (현재 ${Math.round(file.size / 1024)}KB)`);
+    throw new Error(`파일 크기는 50KB 이하만 가능합니다. (현재 ${Math.round(file.size / 1024)}KB)`);
   }
   const token = await getGraphToken();
   const driveId = await getMkAttachedFilesDriveId();
@@ -742,7 +742,7 @@ function CenterEditModal({ center, onClose, onSave, onGeocode, busy }) {
       return;
     }
     if (file.size > ICON_MAX_BYTES) {
-      alert(`파일 크기는 500KB 이하만 가능합니다. (현재 ${Math.round(file.size / 1024)}KB)`);
+      alert(`파일 크기는 50KB 이하만 가능합니다. (현재 ${Math.round(file.size / 1024)}KB)`);
       e.target.value = "";
       return;
     }
@@ -764,7 +764,7 @@ function CenterEditModal({ center, onClose, onSave, onGeocode, busy }) {
             <input type="file" accept=".jpg,.jpeg,.png,.gif,.webp" className="hidden" onChange={onPickIcon} />
           </label>
         </div>
-        <p className="text-xs text-slate-400 mt-1.5">JPG/PNG/GIF/WEBP 이미지 파일만 가능하며, 용량은 500KB 이하여야 합니다.</p>
+        <p className="text-xs text-slate-400 mt-1.5">JPG/PNG/GIF/WEBP 이미지 파일만 가능하며, 용량은 50KB 이하여야 합니다.</p>
       </Field>
       <Field label="센터명 (국문, 필수)"><input className={inputCls} value={form.Title || ""} onChange={set("Title")} placeholder="예: 곤지암센터" /></Field>
       <Field label="지역"><input className={inputCls} value={form.Region || ""} onChange={set("Region")} placeholder="예: Seoul/Gyeonggi" /></Field>
