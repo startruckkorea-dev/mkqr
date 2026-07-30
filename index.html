@@ -960,7 +960,7 @@ function CheckInsTab({ checkins, centers, reload, periodDays, onPeriodChange }) 
         <AlertTriangle size={18} className="text-blue-500 shrink-0 mt-0.5" />
         <div className="text-sm text-blue-900 leading-relaxed">
           <span className="font-medium">자동 판정 기준 안내</span>
-          <ul className="mt-1 space-y-0.5 text-blue-800/90 text-[13px] list-disc list-inside">
+          <ul className="mt-1 space-y-1.5 text-blue-800/90 text-[13px] list-disc list-inside">
             <li>
               <b>검증필요</b> — 아래 셋 중 하나라도 해당하면 표시됩니다
               <ul className="mt-0.5 ml-5 space-y-0.5 list-[circle] list-inside">
@@ -968,9 +968,19 @@ function CheckInsTab({ checkins, centers, reload, periodDays, onPeriodChange }) 
                 <li>반경 안이라도 거리 300m 이상 + reCAPTCHA 0.5 이상(사람처럼 행동)인 경우, 한 번 더 확인차 표시</li>
                 <li>reCAPTCHA 점수 0.3 미만(봇처럼 행동)인 경우</li>
               </ul>
+              <div className="mt-0.5 ml-5 text-blue-700/80">→ 확인 후 문제없으면 표 오른쪽 <b>"관리"</b> 열의 <b>"승인 처리"</b> 버튼을 눌러주세요</div>
             </li>
-            <li><b>GPS거부</b> — 위치 정보 제공에 동의하지 않은 경우</li>
-            <li><b>자동 30분 차단</b> — 같은 기기가 1분 안에 5회 초과 접근하면 그 즉시 접속 자체가 막힙니다 (기록도 안 남음). 급하면 "차단해제" 버튼으로 조기 해제 가능</li>
+            <li>
+              <b>GPS거부</b>
+              <div className="mt-0.5 ml-5 text-blue-800/90">방문자의 휴대폰·PC에서 위치 정보 제공(위치 권한)을 거부한 경우입니다</div>
+            </li>
+            <li>
+              <b>자동 30분 차단</b>
+              <ul className="mt-0.5 ml-5 space-y-0.5 list-[circle] list-inside">
+                <li>같은 기기가 1분 안에 5회 초과 접근하면 그 즉시 접속 자체가 막힙니다 (이 시도는 기록도 안 남음)</li>
+                <li>급하면 표의 <b>"차단해제"</b> 버튼으로 30분 기다리지 않고 조기 해제 가능</li>
+              </ul>
+            </li>
           </ul>
         </div>
       </div>
