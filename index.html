@@ -638,6 +638,18 @@ function CheckInsTab({ checkins, centers, reload, periodDays, onPeriodChange }) 
     XLSX.writeFile(wb, `MKQR_체크인기록_${new Date().toISOString().slice(0, 10)}.xlsx`);
   }
 
+  // "차단해제" 버튼은 매 행마다 다 보여주면 "이 행이 차단됨"처럼 오해하기 쉬워서,
+  // 같은 센터+기기 조합당 가장 최근 행(=정렬상 처음 만나는 행)에만 한 번 보여준다.
+  const unblockRowIds = new Set();
+  {
+    const seenKeys = new Set();
+    for (const r of rows) {
+      if (!r.DeviceFingerprint) continue;
+      const key = `${r.CenterId}|${r.DeviceFingerprint}`;
+      if (!seenKeys.has(key)) { seenKeys.add(key); unblockRowIds.add(r.id); }
+    }
+  }
+
   return (
     <div>
       <div className="flex items-center justify-between mb-4 gap-2 flex-wrap">
@@ -713,8 +725,8 @@ function CheckInsTab({ checkins, centers, reload, periodDays, onPeriodChange }) 
                   {["검증필요", "GPS거부"].includes(r.VerifyStatus) && (
                     <button onClick={() => approve(r)} className="text-xs px-2 py-1 rounded-lg text-white mr-1.5" style={{ background: BRAND.accent }}>승인 처리</button>
                   )}
-                  {r.DeviceFingerprint && (
-                    <button onClick={() => unblockDevice(r)} className="text-xs px-2 py-1 rounded-lg border border-slate-300 text-slate-500 hover:bg-slate-50">차단해제</button>
+                  {unblockRowIds.has(r.id) && (
+                    <button onClick={() => unblockDevice(r)} title="이 기기가 1분 내 5회 초과 접근으로 30분 차단된 상태라면, 기다리지 않고 지금 바로 차단을 풀어줍니다." className="text-xs px-2 py-1 rounded-lg border border-slate-300 text-slate-500 hover:bg-slate-50">차단해제</button>
                   )}
                 </td>
               </tr>
