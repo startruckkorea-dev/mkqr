@@ -1,0 +1,664 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>MKQR · 캠페인 방문인증 QR 관리</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script type="importmap">
+{
+  "imports": {
+    "react": "https://esm.sh/react@18.3.1",
+    "react-dom": "https://esm.sh/react-dom@18.3.1",
+    "react-dom/client": "https://esm.sh/react-dom@18.3.1/client",
+    "lucide-react": "https://esm.sh/lucide-react@0.383.0?deps=react@18.3.1,react-dom@18.3.1&bundle",
+    "xlsx": "https://esm.sh/xlsx@0.18.5?bundle",
+    "qrcode": "https://esm.sh/qrcode@1.5.3?bundle"
+  }
+}
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@azure/msal-browser@3.28.0/lib/msal-browser.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone@7.24.7/babel.min.js"></script>
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; background: #F5F6F8; }
+  #root { height: 100%; }
+  #loading { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+    font-family: 'Segoe UI', sans-serif; color: #64748B; font-size: 14px; }
+  #login-screen{display:flex;align-items:center;justify-content:center;min-height:100vh;background:linear-gradient(145deg,#0f2744 0%,#101B34 100%);font-family:'Segoe UI',sans-serif}
+  .login-card{background:#fff;border-radius:16px;padding:40px 36px;width:340px;box-shadow:0 20px 60px rgba(0,0,0,.3);text-align:center}
+  .login-title{font-size:1.05rem;font-weight:700;color:#101B34;margin-bottom:4px}
+  .login-co{font-size:.8rem;color:#8A94A6;margin-bottom:6px}
+  .login-guide{font-size:.8rem;color:#8A94A6;margin-bottom:20px}
+  #loading{align-items:center;justify-content:center;min-height:100vh;background:linear-gradient(145deg,#0f2744 0%,#101B34 100%);font-family:'Segoe UI',sans-serif}
+  .loading-card{display:flex;flex-direction:column;align-items:center;gap:16px}
+  .loading-spinner{width:40px;height:40px;border-radius:50%;border:3px solid rgba(255,255,255,.12);border-top-color:#2F7B7A;animation:mk-spin .85s linear infinite}
+  .loading-text{color:rgba(255,255,255,.7);font-size:.85rem}
+  @keyframes mk-spin{to{transform:rotate(360deg)}}
+  .btn-login{background:linear-gradient(135deg,#2F7B7A,#1A2B4C);color:#fff;border:none;border-radius:10px;padding:13px 0;font-size:.92rem;font-weight:600;cursor:pointer;width:100%;font-family:inherit}
+  .btn-login:disabled{background:#cbd5e0;cursor:not-allowed}
+  #login-err{color:#C1352E;font-size:.78rem;margin-top:10px;display:none}
+  .login-page-footer{position:fixed;bottom:0;left:0;right:0;padding:10px 24px;display:flex;justify-content:space-between;align-items:center;font-size:11px;color:rgba(255,255,255,.55);background:rgba(0,0,0,.18)}
+</style>
+</head>
+<body>
+<div id="login-screen">
+  <div class="login-card">
+    <div style="font-size:2rem;margin-bottom:10px">📷</div>
+    <div class="login-title">MKQR · 방문인증 QR 관리</div>
+    <div class="login-co">Star Truck Korea · Campaign Visit Verification</div>
+    <div class="login-guide">Hyosung M365 계정으로 로그인하세요</div>
+    <button class="btn-login" id="btn-login" disabled>로딩 중...</button>
+    <div id="login-err"></div>
+  </div>
+  <div class="login-page-footer">
+    <span>© 2026 Star Truck Korea · MKQR</span>
+    <span>This system is internally developed by Star Truck Korea. Unauthorized access is strictly prohibited.</span>
+  </div>
+</div>
+<div id="loading" style="display:none">
+  <div class="loading-card">
+    <div class="loading-spinner"></div>
+    <div class="loading-text">화면을 불러오는 중입니다...</div>
+  </div>
+</div>
+<div id="root"></div>
+<script type="text/babel" data-presets="react" data-type="module">
+import React, { useState, useEffect, useRef, useMemo } from "react";
+import { createRoot } from "react-dom/client";
+import {
+  Building2, QrCode, ListChecks, LogOut, Plus, Pencil, Trash2, X,
+  Download, RefreshCw, MapPin, Search, CheckCircle2, AlertTriangle,
+  Upload, ExternalLink,
+} from "lucide-react";
+import * as XLSX from "xlsx";
+import QRCode from "qrcode";
+
+/* ------------------------------------------------------------------ */
+/* 공용 인프라 — 다른 APS/ICS 시스템과 완전히 동일한 설정 재사용            */
+/* ------------------------------------------------------------------ */
+const MSAL_CONFIG = {
+  auth: {
+    clientId: "432976c2-b43a-492e-8213-ece505fa1f51", // APS-MasterData-App 공용 App 등록
+    authority: "https://login.microsoftonline.com/19cab1f5-21f4-44df-8ac6-96d6ca595203",
+    redirectUri: window.location.origin + window.location.pathname,
+  },
+  cache: { cacheLocation: "sessionStorage" },
+};
+const MSAL_SCOPES = ["User.Read", "Sites.ReadWrite.All", "Files.ReadWrite.All"];
+const SITE_PATH = "startruckkorea.sharepoint.com:/sites/STK-DB:";
+const GRAPH = "https://graph.microsoft.com/v1.0";
+
+// 공개 체크인 페이지(checkin.html)가 데이터를 쓸 때 거치는 Worker 주소.
+// mkqr 은 로그인 없는 외부 방문자가 스캔하므로, 관리자 화면(이 파일, MSAL 로그인)과
+// 달리 체크인 기록 저장은 Cloudflare Worker가 앱 자격증명으로 대신 처리한다.
+// (Jimmy 개인 RCD 프로젝트와 동일한 패턴 — worker/ 폴더의 README 참고, 배포 후 이 값을 실제 Worker URL로 교체)
+const CHECKIN_API_BASE = "https://mkqr-worker.stk-dev.workers.dev";
+
+const msalApp = new msal.PublicClientApplication(MSAL_CONFIG);
+let _siteId = null;
+
+function showLoginErr(msg) {
+  const el = document.getElementById("login-err");
+  if (el) { el.textContent = msg; el.style.display = "block"; }
+}
+
+async function getGraphToken() {
+  const account = msalApp.getActiveAccount();
+  const tokenRes = await msalApp.acquireTokenSilent({ scopes: MSAL_SCOPES, account });
+  return tokenRes.accessToken;
+}
+
+async function apiGet(path, token) {
+  const res = await fetch(GRAPH + path, { headers: { Authorization: "Bearer " + token } });
+  if (!res.ok) throw new Error(path + " → " + res.status);
+  return res.json();
+}
+
+/* ------------------------------------------------------------------
+ * mkqr_* SharePoint 목록 — GUID 하드코딩 없이 displayName으로 조회/캐싱 (ICS와 동일 패턴)
+ * ------------------------------------------------------------------ */
+const MK_LISTS = { centers: "mkqr_Centers", staff: "mkqr_Staff", checkins: "mkqr_CheckIns" };
+const _mkListIds = {};
+
+async function getMkListId(listName) {
+  if (_mkListIds[listName]) return _mkListIds[listName];
+  const token = await getGraphToken();
+  const res = await apiGet(`/sites/${_siteId}/lists?$filter=displayName eq '${listName}'`, token);
+  if (!res.value || !res.value.length) throw new Error(`SharePoint 목록을 찾을 수 없습니다: ${listName} (관리자에게 목록 생성 요청 필요)`);
+  _mkListIds[listName] = res.value[0].id;
+  return _mkListIds[listName];
+}
+
+// apiAll() 패턴과 동일 — 5,000건 임계값 대비 nextLink를 따라 무제한 순회
+async function mkListAll(listName, extraQuery = "") {
+  const token = await getGraphToken();
+  const listId = await getMkListId(listName);
+  let items = [];
+  let url = `${GRAPH}/sites/${_siteId}/lists/${listId}/items?expand=fields&$top=200${extraQuery}`;
+  while (url) {
+    const res = await fetch(url, { headers: { Authorization: "Bearer " + token, Prefer: "HonorNonIndexedQueriesWarningMayFailRandomly" } });
+    if (!res.ok) throw new Error(`${listName} 조회 실패 (${res.status})`);
+    const data = await res.json();
+    items = items.concat(data.value || []);
+    url = data["@odata.nextLink"] || null;
+  }
+  return items;
+}
+
+async function mkCreateItem(listName, fields) {
+  const token = await getGraphToken();
+  const listId = await getMkListId(listName);
+  const res = await fetch(`${GRAPH}/sites/${_siteId}/lists/${listId}/items`, {
+    method: "POST",
+    headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
+    body: JSON.stringify({ fields }),
+  });
+  if (!res.ok) { const d = await res.text().catch(() => ""); throw new Error(`${listName} 생성 실패 (${res.status}): ${d.slice(0, 300)}`); }
+  return res.json();
+}
+
+async function mkUpdateItem(listName, itemId, fields) {
+  const token = await getGraphToken();
+  const listId = await getMkListId(listName);
+  const res = await fetch(`${GRAPH}/sites/${_siteId}/lists/${listId}/items/${itemId}/fields`, {
+    method: "PATCH",
+    headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
+    body: JSON.stringify(fields),
+  });
+  if (!res.ok) { const d = await res.text().catch(() => ""); throw new Error(`${listName} 수정 실패 (${res.status}): ${d.slice(0, 300)}`); }
+  return res.json();
+}
+
+async function mkDeleteItem(listName, itemId) {
+  const token = await getGraphToken();
+  const listId = await getMkListId(listName);
+  const res = await fetch(`${GRAPH}/sites/${_siteId}/lists/${listId}/items/${itemId}`, {
+    method: "DELETE",
+    headers: { Authorization: "Bearer " + token },
+  });
+  if (!res.ok) { const d = await res.text().catch(() => ""); throw new Error(`${listName} 삭제 실패 (${res.status}): ${d.slice(0, 300)}`); }
+}
+
+// UTC → KST(+9h) 변환, 다른 APS 시스템들과 동일한 공통 규칙
+function fmtDate(iso) {
+  if (!iso) return "-";
+  const d = new Date(iso);
+  const kst = new Date(d.getTime() + 9 * 3600 * 1000);
+  const p = (n) => String(n).padStart(2, "0");
+  return `${kst.getUTCFullYear()}-${p(kst.getUTCMonth() + 1)}-${p(kst.getUTCDate())} ${p(kst.getUTCHours())}:${p(kst.getUTCMinutes())}`;
+}
+
+function randomToken(len = 10) {
+  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  let s = "";
+  for (let i = 0; i < len; i++) s += chars[Math.floor(Math.random() * chars.length)];
+  return s;
+}
+
+// Haversine 거리(km) — 관리자 화면에서 좌표 확인용. 실제 체크인 판정은 Worker가 서버측에서 동일 공식으로 계산.
+function distanceKm(lat1, lng1, lat2, lng2) {
+  const R = 6371;
+  const toRad = (d) => (d * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLng = toRad(lng2 - lng1);
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+/* ------------------------------------------------------------------ */
+/* UI 공통 부품                                                        */
+/* ------------------------------------------------------------------ */
+const BRAND = { navy: "#101B34", accent: "#2F7B7A", accentSoft: "#E4F1F0" };
+
+function Badge({ status }) {
+  const map = {
+    "정상": "bg-emerald-100 text-emerald-700",
+    "검증필요": "bg-amber-100 text-amber-700",
+    "GPS거부": "bg-slate-200 text-slate-600",
+    "관리자승인": "bg-blue-100 text-blue-700",
+  };
+  return <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${map[status] || "bg-slate-100 text-slate-600"}`}>{status || "-"}</span>;
+}
+
+function Modal({ title, onClose, children, wide }) {
+  return (
+    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4" onClick={onClose}>
+      <div className={`bg-white rounded-xl shadow-xl ${wide ? "max-w-2xl" : "max-w-md"} w-full max-h-[90vh] overflow-y-auto`} onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between px-5 py-4 border-b">
+          <h3 className="font-semibold text-slate-800">{title}</h3>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-700"><X size={18} /></button>
+        </div>
+        <div className="p-5">{children}</div>
+      </div>
+    </div>
+  );
+}
+
+function Field({ label, children }) {
+  return (
+    <div className="mb-3">
+      <label className="block text-xs font-medium text-slate-500 mb-1">{label}</label>
+      {children}
+    </div>
+  );
+}
+const inputCls = "w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#2F7B7A]/40";
+
+/* ------------------------------------------------------------------ */
+/* 센터 관리 탭                                                         */
+/* ------------------------------------------------------------------ */
+function CentersTab({ centers, reload }) {
+  const [editing, setEditing] = useState(null); // null | {} (신규) | {...} (수정)
+  const [busy, setBusy] = useState(false);
+  const [q, setQ] = useState("");
+  const fileRef = useRef(null);
+
+  const filtered = centers.filter((c) => !q || c.Title?.includes(q) || c.Region?.includes(q) || c.AddressKr?.includes(q));
+
+  async function save(form) {
+    setBusy(true);
+    try {
+      const fields = {
+        Title: form.Title, Region: form.Region, CenterNameEn: form.CenterNameEn,
+        CorpNameKr: form.CorpNameKr, AddressKr: form.AddressKr, AddressEn: form.AddressEn,
+        Phone: form.Phone, Lat: form.Lat ? Number(form.Lat) : null, Lng: form.Lng ? Number(form.Lng) : null,
+        Active: form.Active !== false,
+      };
+      if (editing?.id) {
+        await mkUpdateItem(MK_LISTS.centers, editing.id, fields);
+      } else {
+        fields.QrToken = randomToken();
+        await mkCreateItem(MK_LISTS.centers, fields);
+      }
+      setEditing(null);
+      await reload();
+    } catch (e) { alert(e.message); } finally { setBusy(false); }
+  }
+
+  async function remove(c) {
+    if (!confirm(`"${c.Title}" 센터를 삭제할까요? (관련 QR도 더 이상 사용할 수 없게 됩니다)`)) return;
+    try { await mkDeleteItem(MK_LISTS.centers, c.id); await reload(); } catch (e) { alert(e.message); }
+  }
+
+  async function geocode(form, setForm) {
+    const addr = form.AddressKr;
+    if (!addr) { alert("주소를 먼저 입력하세요"); return; }
+    try {
+      const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=kr&q=${encodeURIComponent(addr)}`);
+      const data = await res.json();
+      if (!data.length) { alert("좌표를 찾지 못했습니다. 직접 입력해주세요."); return; }
+      setForm((f) => ({ ...f, Lat: data[0].lat, Lng: data[0].lon }));
+    } catch (e) { alert("좌표 조회 실패: " + e.message); }
+  }
+
+  // 엑셀 일괄 가져오기 — "서비스센터직원관리대장" 원본 구조("Service Network Overall Summary" 시트)를 그대로 파싱
+  async function importExcel(file) {
+    setBusy(true);
+    try {
+      const buf = await file.arrayBuffer();
+      const wb = XLSX.read(buf, { type: "array" });
+      const sheet = wb.Sheets["Service Network Overall Summary"];
+      if (!sheet) throw new Error('시트 "Service Network Overall Summary"를 찾을 수 없습니다.');
+      const rows = XLSX.utils.sheet_to_json(sheet, { header: 1 });
+      let lastRegion = "";
+      let created = 0;
+      for (let r = 3; r < rows.length; r++) {
+        const row = rows[r] || [];
+        const no = row[0];
+        if (no === undefined || no === null || no === "") continue;
+        const region = row[1] ? String(row[1]).trim() : lastRegion;
+        if (row[1]) lastRegion = region;
+        const nameKr = row[3] ? String(row[3]).trim() : String(row[2] || "").trim();
+        if (!nameKr) continue;
+        const fields = {
+          Title: nameKr,
+          Region: region,
+          CenterNameEn: row[4] ? String(row[4]).trim() : "",
+          CorpNameKr: row[5] ? String(row[5]).trim() : "",
+          AddressKr: row[7] ? String(row[7]).trim() : "",
+          AddressEn: row[8] ? String(row[8]).trim() : "",
+          Phone: row[16] ? String(row[16]).trim() : "",
+          QrToken: randomToken(),
+          Active: true,
+        };
+        if (centers.some((c) => c.Title === fields.Title)) continue; // 중복 스킵
+        await mkCreateItem(MK_LISTS.centers, fields);
+        created++;
+      }
+      alert(`${created}개 센터를 가져왔습니다. (주소만 채워졌으니 각 센터에서 "좌표 찾기"로 위경도를 채워주세요)`);
+      await reload();
+    } catch (e) { alert("가져오기 실패: " + e.message); } finally { setBusy(false); if (fileRef.current) fileRef.current.value = ""; }
+  }
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-4 gap-2 flex-wrap">
+        <div className="relative">
+          <Search size={15} className="absolute left-2.5 top-2.5 text-slate-400" />
+          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="센터명/지역/주소 검색" className="pl-8 pr-3 py-2 border border-slate-300 rounded-lg text-sm w-64" />
+        </div>
+        <div className="flex gap-2">
+          <input ref={fileRef} type="file" accept=".xlsx" className="hidden" onChange={(e) => e.target.files[0] && importExcel(e.target.files[0])} />
+          <button onClick={() => fileRef.current.click()} disabled={busy} className="flex items-center gap-1.5 px-3 py-2 border border-slate-300 rounded-lg text-sm hover:bg-slate-50">
+            <Upload size={15} /> 엑셀 일괄 가져오기
+          </button>
+          <button onClick={() => setEditing({})} className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm text-white" style={{ background: BRAND.accent }}>
+            <Plus size={15} /> 센터 추가
+          </button>
+        </div>
+      </div>
+
+      <div className="bg-white rounded-xl border overflow-hidden">
+        <table className="w-full text-sm">
+          <thead className="bg-slate-50 text-slate-500 text-xs">
+            <tr>
+              <th className="text-left px-4 py-2.5">지역</th>
+              <th className="text-left px-4 py-2.5">센터명</th>
+              <th className="text-left px-4 py-2.5">주소</th>
+              <th className="text-left px-4 py-2.5">좌표</th>
+              <th className="text-left px-4 py-2.5">상태</th>
+              <th className="text-right px-4 py-2.5">관리</th>
+            </tr>
+          </thead>
+          <tbody>
+            {filtered.map((c) => (
+              <tr key={c.id} className="border-t hover:bg-slate-50">
+                <td className="px-4 py-2.5 text-slate-500">{c.Region}</td>
+                <td className="px-4 py-2.5 font-medium text-slate-800">{c.Title}</td>
+                <td className="px-4 py-2.5 text-slate-500 max-w-xs truncate">{c.AddressKr}</td>
+                <td className="px-4 py-2.5 text-slate-500">{c.Lat && c.Lng ? `${Number(c.Lat).toFixed(4)}, ${Number(c.Lng).toFixed(4)}` : <span className="text-amber-600">미설정</span>}</td>
+                <td className="px-4 py-2.5">{c.Active === false ? <span className="text-slate-400">비활성</span> : <span className="text-emerald-600">활성</span>}</td>
+                <td className="px-4 py-2.5 text-right">
+                  <button onClick={() => setEditing(c)} className="text-slate-400 hover:text-slate-700 mr-2"><Pencil size={15} /></button>
+                  <button onClick={() => remove(c)} className="text-slate-400 hover:text-red-600"><Trash2 size={15} /></button>
+                </td>
+              </tr>
+            ))}
+            {!filtered.length && <tr><td colSpan={6} className="text-center text-slate-400 py-8">등록된 센터가 없습니다</td></tr>}
+          </tbody>
+        </table>
+      </div>
+
+      {editing !== null && <CenterEditModal center={editing} onClose={() => setEditing(null)} onSave={save} onGeocode={geocode} busy={busy} />}
+    </div>
+  );
+}
+
+function CenterEditModal({ center, onClose, onSave, onGeocode, busy }) {
+  const [form, setForm] = useState({ Active: true, ...center });
+  const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
+  return (
+    <Modal title={center.id ? "센터 수정" : "센터 추가"} onClose={onClose}>
+      <Field label="센터명 (국문, 필수)"><input className={inputCls} value={form.Title || ""} onChange={set("Title")} placeholder="예: 곤지암센터" /></Field>
+      <Field label="지역"><input className={inputCls} value={form.Region || ""} onChange={set("Region")} placeholder="예: Seoul/Gyeonggi" /></Field>
+      <Field label="센터명 (영문)"><input className={inputCls} value={form.CenterNameEn || ""} onChange={set("CenterNameEn")} /></Field>
+      <Field label="법인명"><input className={inputCls} value={form.CorpNameKr || ""} onChange={set("CorpNameKr")} /></Field>
+      <Field label="주소">
+        <div className="flex gap-2">
+          <input className={inputCls} value={form.AddressKr || ""} onChange={set("AddressKr")} placeholder="예: 경기도 광주시 곤지암읍 평촌길 100-9" />
+          <button type="button" onClick={() => onGeocode(form, setForm)} className="shrink-0 px-3 rounded-lg border border-slate-300 text-sm hover:bg-slate-50 flex items-center gap-1">
+            <MapPin size={14} /> 좌표 찾기
+          </button>
+        </div>
+      </Field>
+      <div className="grid grid-cols-2 gap-3">
+        <Field label="위도 (Lat)"><input className={inputCls} value={form.Lat || ""} onChange={set("Lat")} /></Field>
+        <Field label="경도 (Lng)"><input className={inputCls} value={form.Lng || ""} onChange={set("Lng")} /></Field>
+      </div>
+      <Field label="대표 전화번호"><input className={inputCls} value={form.Phone || ""} onChange={set("Phone")} /></Field>
+      <Field label="상태">
+        <select className={inputCls} value={form.Active === false ? "false" : "true"} onChange={(e) => setForm((f) => ({ ...f, Active: e.target.value === "true" }))}>
+          <option value="true">활성 (QR 사용 가능)</option>
+          <option value="false">비활성 (QR 비활성화)</option>
+        </select>
+      </Field>
+      <div className="flex justify-end gap-2 mt-4">
+        <button onClick={onClose} className="px-4 py-2 text-sm rounded-lg border border-slate-300">취소</button>
+        <button disabled={busy || !form.Title} onClick={() => onSave(form)} className="px-4 py-2 text-sm rounded-lg text-white disabled:opacity-50" style={{ background: BRAND.accent }}>
+          {busy ? "저장 중..." : "저장"}
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* QR 코드 탭                                                          */
+/* ------------------------------------------------------------------ */
+function QrTab({ centers }) {
+  const canvasRefs = useRef({});
+  const [checkinBaseUrl, setCheckinBaseUrl] = useState(() => {
+    // 기본값: 같은 저장소의 checkin.html (배포 후 실제 도메인으로 자동 대응)
+    return window.location.origin + window.location.pathname.replace(/index\.html$/, "").replace(/\/$/, "") + "/checkin.html";
+  });
+
+  useEffect(() => {
+    centers.forEach((c) => {
+      const el = canvasRefs.current[c.id];
+      if (!el || !c.QrToken) return;
+      const url = `${checkinBaseUrl}?t=${c.QrToken}`;
+      QRCode.toCanvas(el, url, { width: 180, margin: 1, color: { dark: BRAND.navy, light: "#ffffff" } });
+    });
+  }, [centers, checkinBaseUrl]);
+
+  function download(centerId, title) {
+    const el = canvasRefs.current[centerId];
+    if (!el) return;
+    const link = document.createElement("a");
+    link.download = `MKQR_${title}.png`;
+    link.href = el.toDataURL("image/png");
+    link.click();
+  }
+
+  return (
+    <div>
+      <Field label="체크인 페이지 기본 주소 (checkin.html 배포 URL)">
+        <input className={inputCls} value={checkinBaseUrl} onChange={(e) => setCheckinBaseUrl(e.target.value)} />
+      </Field>
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-4">
+        {centers.filter((c) => c.Active !== false).map((c) => (
+          <div key={c.id} className="bg-white border rounded-xl p-4 text-center">
+            <div className="font-medium text-sm text-slate-800 mb-2">{c.Title}</div>
+            <canvas ref={(el) => (canvasRefs.current[c.id] = el)} className="mx-auto" />
+            <div className="text-xs text-slate-400 mt-2 break-all">토큰: {c.QrToken}</div>
+            <button onClick={() => download(c.id, c.Title)} className="mt-2 w-full flex items-center justify-center gap-1 text-xs px-2 py-1.5 border border-slate-300 rounded-lg hover:bg-slate-50">
+              <Download size={13} /> PNG 다운로드
+            </button>
+            <a href={`${checkinBaseUrl}?t=${c.QrToken}`} target="_blank" className="mt-1.5 w-full flex items-center justify-center gap-1 text-xs px-2 py-1.5 text-slate-500 hover:text-slate-700">
+              <ExternalLink size={12} /> 링크 열기
+            </a>
+          </div>
+        ))}
+        {!centers.length && <div className="col-span-4 text-center text-slate-400 py-10">먼저 "센터 관리"에서 센터를 등록해주세요</div>}
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* 체크인 기록 탭                                                       */
+/* ------------------------------------------------------------------ */
+function CheckInsTab({ checkins, centers, reload }) {
+  const [filter, setFilter] = useState("전체");
+  const [q, setQ] = useState("");
+
+  const rows = checkins
+    .filter((r) => filter === "전체" || r.VerifyStatus === filter)
+    .filter((r) => !q || r.CenterName?.includes(q) || r.VisitorName?.includes(q))
+    .sort((a, b) => new Date(b.ServerTimestamp || 0) - new Date(a.ServerTimestamp || 0));
+
+  async function approve(r) {
+    try { await mkUpdateItem(MK_LISTS.checkins, r.id, { VerifyStatus: "관리자승인" }); await reload(); } catch (e) { alert(e.message); }
+  }
+
+  function exportExcel() {
+    const data = rows.map((r) => ({
+      센터: r.CenterName, 방문자: r.VisitorName, 시각: fmtDate(r.ServerTimestamp),
+      공인IP: r.PublicIP, "IP위치(도시)": r.IpCity, GPS좌표: r.GpsLat ? `${r.GpsLat}, ${r.GpsLng}` : "",
+      "거리(km)": r.DistanceKm, 판정: r.VerifyStatus, 기기: r.UserAgent,
+    }));
+    const ws = XLSX.utils.json_to_sheet(data);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "체크인기록");
+    XLSX.writeFile(wb, `MKQR_체크인기록_${new Date().toISOString().slice(0, 10)}.xlsx`);
+  }
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-4 gap-2 flex-wrap">
+        <div className="flex gap-2 items-center">
+          <select value={filter} onChange={(e) => setFilter(e.target.value)} className={inputCls + " w-40"}>
+            <option>전체</option><option>정상</option><option>검증필요</option><option>GPS거부</option><option>관리자승인</option>
+          </select>
+          <div className="relative">
+            <Search size={15} className="absolute left-2.5 top-2.5 text-slate-400" />
+            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="센터/방문자 검색" className="pl-8 pr-3 py-2 border border-slate-300 rounded-lg text-sm w-56" />
+          </div>
+        </div>
+        <div className="flex gap-2">
+          <button onClick={reload} className="flex items-center gap-1.5 px-3 py-2 border border-slate-300 rounded-lg text-sm hover:bg-slate-50"><RefreshCw size={14} /> 새로고침</button>
+          <button onClick={exportExcel} className="flex items-center gap-1.5 px-3 py-2 border border-slate-300 rounded-lg text-sm hover:bg-slate-50"><Download size={14} /> Excel 내보내기</button>
+        </div>
+      </div>
+      <div className="bg-white rounded-xl border overflow-hidden overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead className="bg-slate-50 text-slate-500 text-xs">
+            <tr>
+              <th className="text-left px-4 py-2.5">판정</th>
+              <th className="text-left px-4 py-2.5">센터</th>
+              <th className="text-left px-4 py-2.5">방문자</th>
+              <th className="text-left px-4 py-2.5">시각(KST)</th>
+              <th className="text-left px-4 py-2.5">공인 IP</th>
+              <th className="text-left px-4 py-2.5">GPS 정확도</th>
+              <th className="text-left px-4 py-2.5">거리</th>
+              <th className="text-right px-4 py-2.5">관리</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={r.id} className="border-t hover:bg-slate-50">
+                <td className="px-4 py-2.5"><Badge status={r.VerifyStatus} /></td>
+                <td className="px-4 py-2.5 font-medium text-slate-800">{r.CenterName}</td>
+                <td className="px-4 py-2.5 text-slate-600">{r.VisitorName || "-"}</td>
+                <td className="px-4 py-2.5 text-slate-500">{fmtDate(r.ServerTimestamp)}</td>
+                <td className="px-4 py-2.5 text-slate-500">{r.PublicIP}{r.IpCity ? ` (${r.IpCity})` : ""}</td>
+                <td className="px-4 py-2.5 text-slate-500">{r.GpsAccuracy ? `±${Math.round(r.GpsAccuracy)}m` : "-"}</td>
+                <td className="px-4 py-2.5 text-slate-500">{r.DistanceKm != null ? `${Number(r.DistanceKm).toFixed(1)}km (${r.DistanceSource})` : "-"}</td>
+                <td className="px-4 py-2.5 text-right">
+                  {r.VerifyStatus === "검증필요" && (
+                    <button onClick={() => approve(r)} className="text-xs px-2 py-1 rounded-lg text-white" style={{ background: BRAND.accent }}>승인 처리</button>
+                  )}
+                </td>
+              </tr>
+            ))}
+            {!rows.length && <tr><td colSpan={8} className="text-center text-slate-400 py-8">체크인 기록이 없습니다</td></tr>}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* 메인 앱                                                              */
+/* ------------------------------------------------------------------ */
+function App({ userEmail }) {
+  const [tab, setTab] = useState("centers");
+  const [centers, setCenters] = useState([]);
+  const [checkins, setCheckins] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  async function reload() {
+    setLoading(true);
+    try {
+      const [c, k] = await Promise.all([mkListAll(MK_LISTS.centers), mkListAll(MK_LISTS.checkins)]);
+      setCenters(c.map((x) => ({ id: x.id, ...x.fields })));
+      setCheckins(k.map((x) => ({ id: x.id, ...x.fields })));
+    } catch (e) { console.error(e); alert("데이터 로딩 실패: " + e.message); }
+    setLoading(false);
+  }
+  useEffect(() => { reload(); }, []);
+
+  const needsVerify = checkins.filter((r) => r.VerifyStatus === "검증필요").length;
+
+  const nav = [
+    { id: "centers", label: "센터 관리", icon: Building2 },
+    { id: "qr", label: "QR 코드", icon: QrCode },
+    { id: "checkins", label: "체크인 기록", icon: ListChecks, badge: needsVerify },
+  ];
+
+  return (
+    <div className="min-h-screen flex" style={{ background: "#F5F6F8" }}>
+      <aside className="w-56 shrink-0 text-white flex flex-col" style={{ background: BRAND.navy }}>
+        <div className="px-5 py-5 font-bold text-lg border-b border-white/10">📷 MKQR</div>
+        <nav className="flex-1 py-3">
+          {nav.map((n) => (
+            <button key={n.id} onClick={() => setTab(n.id)}
+              className={`w-full flex items-center gap-2.5 px-5 py-2.5 text-sm ${tab === n.id ? "bg-white/10 text-white" : "text-white/60 hover:text-white/90"}`}>
+              <n.icon size={16} /> {n.label}
+              {!!n.badge && <span className="ml-auto bg-amber-400 text-amber-900 text-[10px] font-bold px-1.5 py-0.5 rounded-full">{n.badge}</span>}
+            </button>
+          ))}
+        </nav>
+        <div className="px-5 py-4 border-t border-white/10 text-xs text-white/50">
+          <div className="mb-2 truncate">{userEmail}</div>
+          <button onClick={() => msalApp.logoutRedirect()} className="flex items-center gap-1.5 hover:text-white"><LogOut size={13} /> 로그아웃</button>
+        </div>
+      </aside>
+      <main className="flex-1 p-6 overflow-y-auto">
+        <h2 className="text-lg font-semibold text-slate-800 mb-4">{nav.find((n) => n.id === tab)?.label}</h2>
+        {loading ? <div className="text-slate-400 text-sm">불러오는 중...</div> : (
+          <>
+            {tab === "centers" && <CentersTab centers={centers} reload={reload} />}
+            {tab === "qr" && <QrTab centers={centers} />}
+            {tab === "checkins" && <CheckInsTab checkins={checkins} centers={centers} reload={reload} />}
+          </>
+        )}
+      </main>
+    </div>
+  );
+}
+
+async function mkBoot(account) {
+  document.getElementById("login-screen").style.display = "none";
+  document.getElementById("loading").style.display = "flex";
+  try {
+    const token = await getGraphToken();
+    const siteRes = await apiGet(`/sites/${SITE_PATH}`, token);
+    _siteId = siteRes.id;
+  } catch (e) {
+    document.getElementById("loading").style.display = "none";
+    document.getElementById("login-screen").style.display = "flex";
+    showLoginErr("SharePoint 연결 실패: " + e.message);
+    return;
+  }
+  const loadingEl = document.getElementById("loading");
+  if (loadingEl) loadingEl.remove();
+  const rootEl = document.getElementById("root");
+  createRoot(rootEl).render(<App userEmail={account.username} />);
+}
+
+(async function initMsal() {
+  const btn = document.getElementById("btn-login");
+  try {
+    await msalApp.initialize();
+    const resp = await msalApp.handleRedirectPromise();
+    if (resp && resp.account) { msalApp.setActiveAccount(resp.account); await mkBoot(resp.account); return; }
+    const accounts = msalApp.getAllAccounts();
+    if (accounts.length) { msalApp.setActiveAccount(accounts[0]); await mkBoot(accounts[0]); return; }
+    if (btn) { btn.disabled = false; btn.textContent = "Microsoft 365 계정으로 로그인"; }
+  } catch (e) {
+    if (btn) { btn.disabled = false; btn.textContent = "Microsoft 365 계정으로 로그인"; }
+    showLoginErr(e.message);
+  }
+})();
+
+document.getElementById("btn-login").onclick = async () => {
+  try {
+    if (window !== window.top) { window.open(window.location.href, "_blank"); return; }
+    await msalApp.loginRedirect({ scopes: MSAL_SCOPES });
+  } catch (e) { showLoginErr(e.message); }
+};
+</script>
+</body>
+</html>

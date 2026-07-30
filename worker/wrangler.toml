@@ -1,0 +1,17 @@
+name = "mkqr-worker"
+main = "worker.js"
+compatibility_date = "2026-07-01"
+
+# 배포 후 실제 workers.dev 주소(또는 커스텀 도메인)를
+# ../site/index.html 의 CHECKIN_API_BASE 와
+# ../site/checkin.html 의 API_BASE 에 반영하세요.
+
+# 커스텀 도메인을 쓰려면 아래처럼 routes를 추가 (가비아에서 CNAME 설정 후):
+# [[routes]]
+# pattern = "mkqr-api.startruckkorea.com/*"
+# custom_domain = true
+
+# 시크릿은 코드/이 파일에 절대 넣지 말고 CLI로 등록:
+#   wrangler secret put MK_CLIENT_ID
+#   wrangler secret put MK_CLIENT_SECRET
+#   wrangler secret put MK_TENANT_ID

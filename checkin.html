@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0" />
+<title>방문 체크인 · Star Truck Korea</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif; background: linear-gradient(145deg,#0f2744 0%,#101B34 100%); min-height: 100vh; }
+  .wrap { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 24px 16px; }
+  .card { background: #fff; border-radius: 18px; padding: 32px 24px; width: 100%; max-width: 380px; box-shadow: 0 20px 60px rgba(0,0,0,.3); }
+  .logo { font-size: 2rem; text-align: center; margin-bottom: 8px; }
+  h1 { font-size: 1.05rem; font-weight: 700; color: #101B34; text-align: center; margin: 0 0 4px; }
+  .center-name { text-align: center; color: #2F7B7A; font-weight: 600; font-size: 1.15rem; margin-bottom: 4px; }
+  .sub { text-align: center; color: #8A94A6; font-size: .82rem; margin-bottom: 22px; }
+  label { display: block; font-size: .78rem; color: #64748B; margin-bottom: 4px; margin-top: 14px; }
+  input { width: 100%; border: 1px solid #cbd5e0; border-radius: 10px; padding: 11px 12px; font-size: .95rem; font-family: inherit; }
+  input:focus { outline: none; border-color: #2F7B7A; box-shadow: 0 0 0 3px rgba(47,123,122,.15); }
+  .btn { margin-top: 22px; width: 100%; background: linear-gradient(135deg,#2F7B7A,#1A2B4C); color: #fff; border: none; border-radius: 10px; padding: 14px 0; font-size: .95rem; font-weight: 600; cursor: pointer; }
+  .btn:disabled { background: #cbd5e0; cursor: not-allowed; }
+  .status { text-align: center; padding: 10px; border-radius: 10px; font-size: .82rem; margin-top: 14px; display: none; }
+  .status.show { display: block; }
+  .status.ok { background: #ECFDF5; color: #047857; }
+  .status.warn { background: #FFFBEB; color: #B45309; }
+  .status.err { background: #FEF2F2; color: #B91C1C; }
+  .result-icon { font-size: 2.4rem; text-align: center; margin-bottom: 8px; }
+  .result-title { text-align: center; font-weight: 700; font-size: 1.05rem; margin-bottom: 4px; }
+  .result-desc { text-align: center; color: #64748B; font-size: .85rem; line-height: 1.5; }
+  .foot { text-align: center; color: rgba(255,255,255,.5); font-size: 11px; margin-top: 16px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="card" id="card">
+    <div class="logo">📍</div>
+    <h1>방문 체크인</h1>
+    <div class="center-name" id="center-name">불러오는 중...</div>
+    <div class="sub">Star Truck Korea · Campaign Visit Verification</div>
+
+    <form id="form" style="display:none">
+      <label>이름 *</label>
+      <input id="f-name" required placeholder="이름을 입력하세요" />
+      <label>연락처 (선택)</label>
+      <input id="f-phone" placeholder="010-0000-0000" />
+      <button type="submit" class="btn" id="btn-submit">체크인 하기</button>
+      <div class="status" id="status"></div>
+    </form>
+
+    <div id="result" style="display:none"></div>
+  </div>
+</div>
+<div class="foot">© 2026 Star Truck Korea</div>
+
+<script>
+// ⚠️ 배포 시 실제 Cloudflare Worker 주소로 교체 (worker/ 폴더 README 참고)
+const API_BASE = "https://mkqr-worker.stk-dev.workers.dev";
+
+const params = new URLSearchParams(location.search);
+const token = params.get("t");
+const centerNameEl = document.getElementById("center-name");
+const form = document.getElementById("form");
+const statusEl = document.getElementById("status");
+const btn = document.getElementById("btn-submit");
+const resultEl = document.getElementById("result");
+const card = document.getElementById("card");
+
+function showStatus(msg, kind) {
+  statusEl.textContent = msg;
+  statusEl.className = "status show " + kind;
+}
+
+function getDeviceId() {
+  let id = localStorage.getItem("mkqr_device_id");
+  if (!id) {
+    id = "dev_" + Math.random().toString(36).slice(2) + Date.now().toString(36);
+    localStorage.setItem("mkqr_device_id", id);
+  }
+  return id;
+}
+
+async function init() {
+  if (!token) {
+    centerNameEl.textContent = "잘못된 접근입니다";
+    showStatus("QR 코드를 다시 스캔해주세요.", "err");
+    statusEl.classList.add("show");
+    return;
+  }
+  try {
+    const res = await fetch(`${API_BASE}/api/center?t=${encodeURIComponent(token)}`);
+    const data = await res.json();
+    if (!res.ok || !data.name) throw new Error(data.error || "센터 정보를 찾을 수 없습니다");
+    centerNameEl.textContent = data.name;
+    form.style.display = "block";
+  } catch (e) {
+    centerNameEl.textContent = "센터 정보를 불러올 수 없습니다";
+    showStatus(e.message, "err");
+  }
+}
+
+function getGps() {
+  return new Promise((resolve) => {
+    if (!navigator.geolocation) { resolve(null); return; }
+    navigator.geolocation.getCurrentPosition(
+      (pos) => resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude, accuracy: pos.coords.accuracy }),
+      () => resolve(null),
+      { enableHighAccuracy: true, timeout: 8000, maximumAge: 0 }
+    );
+  });
+}
+
+form.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  btn.disabled = true;
+  btn.textContent = "위치 확인 중...";
+  showStatus("위치 정보를 확인하고 있습니다...", "warn");
+
+  const gps = await getGps();
+  btn.textContent = "체크인 처리 중...";
+
+  const payload = {
+    token,
+    name: document.getElementById("f-name").value.trim(),
+    phone: document.getElementById("f-phone").value.trim(),
+    gps,
+    clientTimestamp: new Date().toISOString(),
+    deviceId: getDeviceId(),
+    userAgent: navigator.userAgent,
+  };
+
+  try {
+    const res = await fetch(`${API_BASE}/api/checkin`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "체크인에 실패했습니다");
+    renderResult(data);
+  } catch (e) {
+    showStatus(e.message, "err");
+    btn.disabled = false;
+    btn.textContent = "체크인 하기";
+  }
+});
+
+function renderResult(data) {
+  form.style.display = "none";
+  resultEl.style.display = "block";
+  const ok = data.verifyStatus === "정상";
+  resultEl.innerHTML = `
+    <div class="result-icon">${ok ? "✅" : "⚠️"}</div>
+    <div class="result-title">${ok ? "체크인 완료" : "체크인 접수 (확인 필요)"}</div>
+    <div class="result-desc">${ok
+      ? "방문 위치가 정상적으로 확인되었습니다.<br>감사합니다."
+      : (data.gpsUsed
+          ? "현재 위치가 센터 반경(10km)을 벗어나 있어<br>담당자 확인 후 처리됩니다."
+          : "위치 정보 확인이 어려워<br>담당자 확인 후 처리됩니다.")
+    }</div>
+  `;
+}
+
+init();
+</script>
+</body>
+</html>
