@@ -53,7 +53,7 @@
   </div>
   <div class="login-page-footer">
     <span>© 2026 Star Truck Korea · MKQR</span>
-    <span>This system is internally developed by Star Truck Korea. Unauthorized access is strictly prohibited.</span>
+    <span>This system is internally developed by Star Truck Korea IT Dept. Unauthorized access is strictly prohibited.</span>
   </div>
 </div>
 <div id="loading" style="display:none">
@@ -1514,7 +1514,7 @@ function App({ userEmail }) {
             </>
           )}
         </nav>
-        <div className="px-5 py-3 border-t border-white/10 text-[10px] text-white/30">© 2026 Star Truck Korea</div>
+        <div className="px-5 py-3 border-t border-white/10 text-[10px] text-white/30">MKQR</div>
       </aside>
       <main className="flex-1 p-6 overflow-y-auto">
         <div className="flex items-center justify-between mb-4">
@@ -1546,6 +1546,10 @@ function App({ userEmail }) {
             {tab === "categoryAccess" && <CategoryAccessTab admins={admins} categoryAccess={categoryAccess} reload={reload} />}
           </>
         )}
+        <div className="text-center mt-10 pt-5 border-t border-slate-200 text-[11px] text-slate-400 leading-relaxed">
+          <div>© 2026 Star Truck Korea · MKQR</div>
+          <div>This system is internally developed by Star Truck Korea IT Dept. Unauthorized access is strictly prohibited.</div>
+        </div>
       </main>
     </div>
   );
