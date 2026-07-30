@@ -1020,7 +1020,7 @@ function CheckInsTab({ checkins, centers, reload, periodDays, onPeriodChange }) 
             <col style={{ width: "110px" }} />
             <col style={{ width: "150px" }} />
             <col style={{ width: "100px" }} />
-            <col style={{ width: "110px" }} />
+            <col style={{ width: "130px" }} />
             <col style={{ width: "190px" }} />
           </colgroup>
           <thead className="bg-slate-50 text-slate-500 text-xs whitespace-nowrap">
@@ -1048,7 +1048,7 @@ function CheckInsTab({ checkins, centers, reload, periodDays, onPeriodChange }) 
                 <td className="px-4 py-2.5 text-slate-500 truncate">{r.DistanceKm != null ? `${Number(r.DistanceKm).toFixed(1)}km (${r.DistanceSource})` : "-"}</td>
                 <td className="px-4 py-2.5 text-slate-500 truncate" title={r.UserAgent || ""}>{parseDeviceLabel(r.UserAgent)}</td>
                 <td className="px-4 py-2.5 text-slate-400 font-mono text-xs truncate" title={r.DeviceFingerprint || ""}>{r.DeviceFingerprint ? r.DeviceFingerprint.slice(0, 8).toUpperCase() : "-"}</td>
-                <td className="px-4 py-2.5">
+                <td className="px-4 py-2.5 whitespace-nowrap">
                   {r.RecaptchaScore == null
                     ? <span className="text-xs text-slate-400">미확인</span>
                     : r.RecaptchaScore >= 0.5
