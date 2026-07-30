@@ -70,7 +70,7 @@ import {
   Building2, QrCode, ListChecks, LogOut, Plus, Pencil, Trash2, X,
   Download, RefreshCw, MapPin, Search, CheckCircle2, AlertTriangle,
   Upload, ExternalLink, Phone, Navigation, LayoutDashboard, ShieldCheck,
-  ArrowUpRight, ImagePlus, KeyRound, Mail, XCircle, Settings,
+  ArrowUpRight, ImagePlus, KeyRound, Mail, XCircle, Settings, ChevronDown, ChevronUp,
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import QRCode from "qrcode";
@@ -948,6 +948,7 @@ function CheckInsTab({ checkins, centers, reload, periodDays, onPeriodChange }) 
   const [q, setQ] = useState("");
   const [page, setPage] = useState(1);
   const [detail, setDetail] = useState(null); // 상세보기 모달에 띄울 행
+  const [showInfo, setShowInfo] = useState(false); // 자동 판정 기준 안내 배너 펼침 여부
   const PAGE_SIZE = 20;
 
   const rows = checkins
@@ -1012,11 +1013,15 @@ function CheckInsTab({ checkins, centers, reload, periodDays, onPeriodChange }) 
 
   return (
     <div className="mx-auto w-fit max-w-full">
-      <div className="bg-blue-50 border border-blue-100 rounded-xl px-4 py-3 mb-4 flex gap-2.5 max-w-3xl">
-        <AlertTriangle size={15} className="text-blue-500 shrink-0 mt-0.5" />
-        <div className="text-xs text-blue-900 leading-normal">
-          <span className="font-medium">자동 판정 기준 안내</span>
-          <ul className="mt-1 space-y-1 text-blue-800/90 text-[11.5px] list-disc list-inside">
+      <div className="bg-blue-50 border border-blue-100 rounded-xl px-4 py-3 mb-4 max-w-3xl">
+        <button onClick={() => setShowInfo((v) => !v)} className="w-full flex items-center gap-2.5 text-left">
+          <AlertTriangle size={15} className="text-blue-500 shrink-0" />
+          <span className="text-xs font-medium text-blue-900 flex-1">자동 판정 기준 안내</span>
+          {showInfo ? <ChevronUp size={15} className="text-blue-500" /> : <ChevronDown size={15} className="text-blue-500" />}
+        </button>
+        {showInfo && (
+        <div className="text-xs text-blue-900 leading-normal mt-2 pl-[26px]">
+          <ul className="space-y-1 text-blue-800/90 text-[11.5px] list-disc list-inside">
             <li>
               <b>검증필요</b> — 아래 셋 중 하나라도 해당하면 표시됩니다
               <ul className="mt-0.5 ml-4 space-y-0.5 list-[circle] list-inside">
@@ -1039,6 +1044,7 @@ function CheckInsTab({ checkins, centers, reload, periodDays, onPeriodChange }) 
             </li>
           </ul>
         </div>
+        )}
       </div>
 
       <div className="flex items-center gap-2 mb-4 flex-wrap">
@@ -1290,6 +1296,7 @@ function OverviewTab({ centers, checkins, admins, setTab }) {
 /* ------------------------------------------------------------------ */
 function CategoryAccessTab({ admins, categoryAccess, reload }) {
   const [q, setQ] = useState("");
+  const [showInfo, setShowInfo] = useState(false); // 안내 배너 펼침 여부
   const [directory, setDirectory] = useState([]);
   const [dirLoading, setDirLoading] = useState(true); // 직원 명부 로딩 끝나기 전엔 표를 그리지 않음(잘못된 중간 상태 깜빡임 방지)
   const [dirError, setDirError] = useState(false);
@@ -1428,18 +1435,21 @@ function CategoryAccessTab({ admins, categoryAccess, reload }) {
 
   return (
     <div className="max-w-5xl mx-auto">
-      <div className="bg-blue-50 border border-blue-100 rounded-xl p-4 mb-5 flex gap-3">
-        <KeyRound size={18} className="text-blue-500 shrink-0 mt-0.5" />
-        <div className="text-sm text-blue-900">
-          <div className="font-medium mb-1.5">화면 접근 권한 부여 방법</div>
-          <ul className="space-y-1 text-blue-800/90 text-[13px] list-disc list-inside">
+      <div className="bg-blue-50 border border-blue-100 rounded-xl p-4 mb-5">
+        <button onClick={() => setShowInfo((v) => !v)} className="w-full flex items-center gap-3 text-left">
+          <KeyRound size={18} className="text-blue-500 shrink-0" />
+          <span className="text-sm font-medium text-blue-900 flex-1">화면 접근 권한 부여 방법</span>
+          {showInfo ? <ChevronUp size={16} className="text-blue-500" /> : <ChevronDown size={16} className="text-blue-500" />}
+        </button>
+        {showInfo && (
+          <ul className="mt-2 pl-[30px] space-y-1 text-blue-800/90 text-[13px] list-disc list-inside">
             <li>체크박스는 화면에서만 바뀌고, <b>"반영" 버튼을 눌러야 실제로 저장</b>됩니다</li>
             <li>체크된 채로 반영하면 아직 로그인이 안 되던 사람도 자동으로 로그인이 가능해집니다</li>
             <li>반대로 <b>어떤 화면도 체크 안 된 채로 반영하면 그 사람의 로그인 자체가 막힙니다</b></li>
             <li><b>"카테고리 접근 권한"</b>을 체크하면 나머지 4개 화면도 전부 같이 켜집니다 (=전체 관리자)</li>
             <li>각 열 맨 위 체크박스로 전체 선택/해제도 가능합니다</li>
           </ul>
-        </div>
+        )}
       </div>
 
       <div className="bg-white rounded-xl border p-4 mb-5">
