@@ -597,11 +597,20 @@ function QrTab({ centers, highlightId }) {
 function CheckInsTab({ checkins, centers, reload, periodDays, onPeriodChange }) {
   const [filter, setFilter] = useState("전체");
   const [q, setQ] = useState("");
+  const [page, setPage] = useState(1);
+  const [detail, setDetail] = useState(null); // 상세보기 모달에 띄울 행
+  const PAGE_SIZE = 20;
 
   const rows = checkins
     .filter((r) => filter === "전체" ? r.VerifyStatus !== "차단해제" : r.VerifyStatus === filter)
     .filter((r) => !q || r.CenterName?.includes(q))
     .sort((a, b) => new Date(b.ServerTimestamp || 0) - new Date(a.ServerTimestamp || 0));
+
+  const totalPages = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
+  const pageSafe = Math.min(page, totalPages);
+  const pageRows = rows.slice((pageSafe - 1) * PAGE_SIZE, pageSafe * PAGE_SIZE);
+
+  useEffect(() => { setPage(1); }, [filter, q, periodDays]);
 
   async function approve(r) {
     try { await mkUpdateItem(MK_LISTS.checkins, r.id, { VerifyStatus: "관리자승인" }); await reload(); } catch (e) { alert(e.message); }
@@ -702,8 +711,8 @@ function CheckInsTab({ checkins, centers, reload, periodDays, onPeriodChange }) 
             </tr>
           </thead>
           <tbody>
-            {rows.map((r) => (
-              <tr key={r.id} className="border-t hover:bg-slate-50">
+            {pageRows.map((r) => (
+              <tr key={r.id} onClick={() => setDetail(r)} className="border-t hover:bg-slate-50 cursor-pointer">
                 <td className="px-4 py-2.5"><Badge status={r.VerifyStatus} /></td>
                 <td className="px-4 py-2.5 font-medium text-slate-800 truncate">{r.CenterName}</td>
                 <td className="px-4 py-2.5 text-slate-500 truncate">{fmtDate(r.ServerTimestamp)}</td>
@@ -721,7 +730,7 @@ function CheckInsTab({ checkins, centers, reload, periodDays, onPeriodChange }) 
                         ? <span className="text-xs px-2 py-0.5 rounded-full bg-amber-100 text-amber-700">보통 ({r.RecaptchaScore.toFixed(1)})</span>
                         : <span className="text-xs px-2 py-0.5 rounded-full bg-red-100 text-red-700">의심 ({r.RecaptchaScore.toFixed(1)})</span>}
                 </td>
-                <td className="px-4 py-2.5 text-right whitespace-nowrap">
+                <td className="px-4 py-2.5 text-right whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
                   {["검증필요", "GPS거부"].includes(r.VerifyStatus) && (
                     <button onClick={() => approve(r)} className="text-xs px-2 py-1 rounded-lg text-white mr-1.5" style={{ background: BRAND.accent }}>승인 처리</button>
                   )}
@@ -735,7 +744,57 @@ function CheckInsTab({ checkins, centers, reload, periodDays, onPeriodChange }) 
           </tbody>
         </table>
       </div>
+
+      {rows.length > 0 && (
+        <div className="flex items-center justify-between mt-3 text-sm">
+          <div className="text-slate-400 text-xs">
+            총 {rows.length}건 중 {(pageSafe - 1) * PAGE_SIZE + 1}–{Math.min(pageSafe * PAGE_SIZE, rows.length)}건 표시
+          </div>
+          <div className="flex items-center gap-1">
+            <button onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={pageSafe <= 1}
+              className="px-2.5 py-1.5 rounded-lg border border-slate-300 text-xs disabled:opacity-40 disabled:cursor-not-allowed hover:bg-slate-50">이전</button>
+            <span className="px-2 text-slate-500 text-xs">{pageSafe} / {totalPages}</span>
+            <button onClick={() => setPage((p) => Math.min(totalPages, p + 1))} disabled={pageSafe >= totalPages}
+              className="px-2.5 py-1.5 rounded-lg border border-slate-300 text-xs disabled:opacity-40 disabled:cursor-not-allowed hover:bg-slate-50">다음</button>
+          </div>
+        </div>
+      )}
+
+      {detail && <CheckInDetailModal row={detail} onClose={() => setDetail(null)} />}
     </div>
+  );
+}
+
+function DetailRow({ label, value }) {
+  return (
+    <div className="flex py-2 border-b border-slate-100 last:border-0">
+      <div className="w-32 shrink-0 text-xs text-slate-400">{label}</div>
+      <div className="text-sm text-slate-700 break-all">{value ?? "-"}</div>
+    </div>
+  );
+}
+
+function CheckInDetailModal({ row, onClose }) {
+  return (
+    <Modal title="체크인 상세 정보" onClose={onClose} wide>
+      <div className="flex items-center gap-2 mb-3">
+        <Badge status={row.VerifyStatus} />
+        <span className="font-medium text-slate-800">{row.CenterName}</span>
+      </div>
+      <DetailRow label="시각 (KST)" value={fmtDate(row.ServerTimestamp)} />
+      <DetailRow label="기기 클라이언트 시각" value={row.ClientTimestamp} />
+      <DetailRow label="공인 IP" value={row.PublicIP} />
+      <DetailRow label="IP 위치(도시)" value={row.IpCity} />
+      <DetailRow label="IP 좌표" value={row.IpLat != null ? `${row.IpLat}, ${row.IpLng}` : "-"} />
+      <DetailRow label="GPS 좌표" value={row.GpsLat != null ? `${row.GpsLat}, ${row.GpsLng}` : "동의 안 함"} />
+      <DetailRow label="GPS 정확도" value={row.GpsAccuracy ? `±${Math.round(row.GpsAccuracy)}m` : "-"} />
+      <DetailRow label="거리 / 기준" value={row.DistanceKm != null ? `${Number(row.DistanceKm).toFixed(2)}km (${row.DistanceSource})` : "-"} />
+      <DetailRow label="기기" value={parseDeviceLabel(row.UserAgent)} />
+      <DetailRow label="User-Agent 전체" value={row.UserAgent} />
+      <DetailRow label="인증코드 (전체)" value={row.DeviceFingerprint} />
+      <DetailRow label="기기 로컬 ID" value={row.DeviceId} />
+      <DetailRow label="reCAPTCHA 점수" value={row.RecaptchaScore != null ? row.RecaptchaScore : "미확인"} />
+    </Modal>
   );
 }
 
