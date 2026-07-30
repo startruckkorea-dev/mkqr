@@ -1237,6 +1237,15 @@ function AdminsTab({ admins, reload, userEmail }) {
   }, []);
 
   const registeredEmails = new Set(admins.map((a) => (a.Email || "").toLowerCase()));
+  const [listQuery, setListQuery] = useState(""); // 아래 "등록된 관리자" 목록 검색
+  const [listPage, setListPage] = useState(1);
+  const LIST_PAGE_SIZE = 10;
+  const listFiltered = admins.filter((a) => !listQuery || (a.Title || "").toLowerCase().includes(listQuery.toLowerCase()) || (a.Email || "").toLowerCase().includes(listQuery.toLowerCase()));
+  useEffect(() => { setListPage(1); }, [listQuery]);
+  const listTotalPages = Math.max(1, Math.ceil(listFiltered.length / LIST_PAGE_SIZE));
+  const listPageSafe = Math.min(listPage, listTotalPages);
+  const listPageRows = listFiltered.slice((listPageSafe - 1) * LIST_PAGE_SIZE, listPageSafe * LIST_PAGE_SIZE);
+
   const q = query.trim().toLowerCase();
   const matches = q.length < 1 ? [] : directory
     .filter((p) => (p.name.toLowerCase().includes(q) || p.email.toLowerCase().includes(q) || (p.dept || "").toLowerCase().includes(q)) && !registeredEmails.has(p.email))
@@ -1368,6 +1377,14 @@ function AdminsTab({ admins, reload, userEmail }) {
           : <p className="text-xs text-slate-400 mt-2">STK HR 시스템과 연동된 정보를 읽어와서 이름/이메일/부서로 검색해서 바로 추가할 수 있습니다.</p>}
       </div>
 
+      <div className="flex items-center justify-between mb-3 gap-2 flex-wrap">
+        <div className="relative max-w-xs flex-1 min-w-[200px]">
+          <Search size={15} className="absolute left-2.5 top-2.5 text-slate-400" />
+          <input value={listQuery} onChange={(e) => setListQuery(e.target.value)} placeholder="등록된 관리자 검색" className="pl-8 pr-3 py-2 border border-slate-300 rounded-lg text-sm w-full" />
+        </div>
+        <span className="text-xs text-slate-400">총 {listFiltered.length}명</span>
+      </div>
+
       <div className="bg-white rounded-xl border overflow-hidden">
         <table className="w-full text-sm">
           <thead className="bg-slate-50 text-slate-500 text-xs">
@@ -1378,7 +1395,7 @@ function AdminsTab({ admins, reload, userEmail }) {
             </tr>
           </thead>
           <tbody>
-            {admins.map((a) => (
+            {listPageRows.map((a) => (
               <tr key={a.id} className="border-t hover:bg-slate-50">
                 <td className="px-4 py-2.5">
                   <div className="flex items-center gap-2.5">
@@ -1414,9 +1431,27 @@ function AdminsTab({ admins, reload, userEmail }) {
                 <div className="text-slate-400 text-xs">현재 모든 Hyosung 계정에 열려있는 상태입니다 — 위에서 검색해 추가해주세요</div>
               </td></tr>
             )}
+            {admins.length > 0 && !listFiltered.length && (
+              <tr><td colSpan={3} className="text-center text-slate-400 text-sm py-10">검색 결과가 없습니다</td></tr>
+            )}
           </tbody>
         </table>
       </div>
+
+      {listFiltered.length > 0 && (
+        <div className="flex items-center justify-between mt-3 text-sm">
+          <div className="text-slate-400 text-xs">
+            총 {listFiltered.length}명 중 {(listPageSafe - 1) * LIST_PAGE_SIZE + 1}–{Math.min(listPageSafe * LIST_PAGE_SIZE, listFiltered.length)}명 표시
+          </div>
+          <div className="flex items-center gap-1">
+            <button onClick={() => setListPage((p) => Math.max(1, p - 1))} disabled={listPageSafe <= 1}
+              className="px-2.5 py-1.5 rounded-lg border border-slate-300 text-xs disabled:opacity-40 disabled:cursor-not-allowed hover:bg-slate-50">이전</button>
+            <span className="px-2 text-slate-500 text-xs">{listPageSafe} / {listTotalPages}</span>
+            <button onClick={() => setListPage((p) => Math.min(listTotalPages, p + 1))} disabled={listPageSafe >= listTotalPages}
+              className="px-2.5 py-1.5 rounded-lg border border-slate-300 text-xs disabled:opacity-40 disabled:cursor-not-allowed hover:bg-slate-50">다음</button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1459,6 +1494,13 @@ function CategoryAccessTab({ admins, categoryAccess, reload }) {
   const filtered = qq
     ? merged.filter((p) => p.name.toLowerCase().includes(qq) || p.email.includes(qq) || (p.dept || "").toLowerCase().includes(qq))
     : merged;
+
+  const [page, setPage] = useState(1);
+  const PAGE_SIZE = 10;
+  useEffect(() => { setPage(1); }, [q]);
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const pageSafe = Math.min(page, totalPages);
+  const pageRows = filtered.slice((pageSafe - 1) * PAGE_SIZE, pageSafe * PAGE_SIZE);
 
   function rowFor(email) {
     return categoryAccess.find((r) => (r.Email || "").toLowerCase() === email);
@@ -1568,9 +1610,12 @@ function CategoryAccessTab({ admins, categoryAccess, reload }) {
       </div>
 
       <div className="flex items-center justify-between mb-4 gap-2 flex-wrap">
-        <div className="relative max-w-xs flex-1 min-w-[220px]">
-          <Search size={15} className="absolute left-2.5 top-2.5 text-slate-400" />
-          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="이름/이메일/부서 검색" className="pl-8 pr-3 py-2 border border-slate-300 rounded-lg text-sm w-full" />
+        <div className="flex items-center gap-2">
+          <div className="relative max-w-xs flex-1 min-w-[220px]">
+            <Search size={15} className="absolute left-2.5 top-2.5 text-slate-400" />
+            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="이름/이메일/부서 검색" className="pl-8 pr-3 py-2 border border-slate-300 rounded-lg text-sm w-full" />
+          </div>
+          <span className="text-xs text-slate-400 whitespace-nowrap">총 {filtered.length}명</span>
         </div>
         <div className="flex items-center gap-2">
           {dirtyCount > 0 && <span className="text-xs text-amber-600">변경사항 {dirtyCount}건</span>}
@@ -1586,14 +1631,13 @@ function CategoryAccessTab({ admins, categoryAccess, reload }) {
       {dirError && <p className="text-xs text-amber-600 mb-3">전 직원 명부를 불러오지 못해, 이미 등록된 관리자만 표시됩니다.</p>}
 
       <div className="bg-white rounded-xl border overflow-hidden">
-        <div className="overflow-auto max-h-[560px]">
-          <table className="w-full text-sm">
-            <thead className="bg-slate-50 text-slate-500 text-xs sticky top-0 z-10">
+        <table className="w-full text-sm">
+            <thead className="bg-slate-50 text-slate-500 text-xs">
               <tr>
-                <th className="text-left px-4 py-2.5 bg-slate-50">사용자</th>
+                <th className="text-left px-4 py-3">사용자</th>
                 {MK_CATEGORIES.map((c) => (
-                  <th key={c.key} className="text-center px-3 py-2.5 whitespace-nowrap bg-slate-50">
-                    <div className="flex flex-col items-center gap-1">
+                  <th key={c.key} className="text-center px-3 py-3 whitespace-nowrap">
+                    <div className="flex flex-col items-center gap-1.5">
                       <input type="checkbox" checked={allCheckedForCat(c)}
                         onChange={() => toggleAllForCatLocal(c)} className="w-4 h-4 cursor-pointer" title="전체 선택/해제" />
                       <span>{c.label}</span>
@@ -1603,27 +1647,27 @@ function CategoryAccessTab({ admins, categoryAccess, reload }) {
               </tr>
             </thead>
             <tbody>
-              {filtered.map((p) => {
+              {pageRows.map((p) => {
                 const isAdminAlready = adminEmailSet.has(p.email);
                 const rowDirty = !!overrides[p.email];
                 return (
                   <tr key={p.email} className={`border-t hover:bg-slate-50 ${rowDirty ? "bg-amber-50/50" : ""}`}>
-                    <td className="px-4 py-2.5">
+                    <td className="px-4 py-3">
                       <div className="flex items-center gap-2.5">
-                        <div className="w-7 h-7 rounded-full flex items-center justify-center text-white text-[11px] font-semibold shrink-0" style={{ background: isAdminAlready ? BRAND.navy : "#CBD5E1" }}>
+                        <div className="w-8 h-8 rounded-full flex items-center justify-center text-white text-xs font-semibold shrink-0" style={{ background: isAdminAlready ? BRAND.navy : "#CBD5E1" }}>
                           {p.name.charAt(0).toUpperCase()}
                         </div>
                         <div className="min-w-0">
-                          <div className="font-medium text-slate-800 truncate text-xs flex items-center gap-1.5">
+                          <div className="font-medium text-slate-800 truncate text-sm flex items-center gap-1.5">
                             {p.name}
-                            {isAdminAlready && <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-700 font-normal">관리자</span>}
+                            {isAdminAlready && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-700 font-normal">관리자</span>}
                           </div>
-                          <div className="text-[11px] text-slate-400 truncate">{p.email}{p.dept ? ` · ${p.dept}` : ""}</div>
+                          <div className="text-xs text-slate-400 truncate">{p.email}{p.dept ? ` · ${p.dept}` : ""}</div>
                         </div>
                       </div>
                     </td>
                     {MK_CATEGORIES.map((c) => (
-                      <td key={c.key} className="text-center px-3 py-2.5">
+                      <td key={c.key} className="text-center px-3 py-3">
                         <input type="checkbox" checked={effectiveChecked(p, c)}
                           onChange={() => toggleLocal(p, c)} className="w-4 h-4 cursor-pointer" />
                       </td>
@@ -1635,9 +1679,23 @@ function CategoryAccessTab({ admins, categoryAccess, reload }) {
                 <tr><td colSpan={MK_CATEGORIES.length + 1} className="text-center text-slate-400 py-10">검색 결과가 없습니다</td></tr>
               )}
             </tbody>
-          </table>
-        </div>
+        </table>
       </div>
+
+      {filtered.length > 0 && (
+        <div className="flex items-center justify-between mt-3 text-sm">
+          <div className="text-slate-400 text-xs">
+            총 {filtered.length}명 중 {(pageSafe - 1) * PAGE_SIZE + 1}–{Math.min(pageSafe * PAGE_SIZE, filtered.length)}명 표시
+          </div>
+          <div className="flex items-center gap-1">
+            <button onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={pageSafe <= 1}
+              className="px-2.5 py-1.5 rounded-lg border border-slate-300 text-xs disabled:opacity-40 disabled:cursor-not-allowed hover:bg-slate-50">이전</button>
+            <span className="px-2 text-slate-500 text-xs">{pageSafe} / {totalPages}</span>
+            <button onClick={() => setPage((p) => Math.min(totalPages, p + 1))} disabled={pageSafe >= totalPages}
+              className="px-2.5 py-1.5 rounded-lg border border-slate-300 text-xs disabled:opacity-40 disabled:cursor-not-allowed hover:bg-slate-50">다음</button>
+          </div>
+        </div>
+      )}
 
       {saving && <BlockingOverlay message="변경사항을 반영하고 있습니다..." />}
 
