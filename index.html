@@ -662,7 +662,19 @@ function CheckInsTab({ checkins, centers, reload, periodDays, onPeriodChange }) 
         </div>
       </div>
       <div className="bg-white rounded-xl border overflow-hidden overflow-x-auto">
-        <table className="w-full text-sm">
+        <table className="w-full text-sm table-fixed">
+          <colgroup>
+            <col style={{ width: "90px" }} />
+            <col style={{ width: "110px" }} />
+            <col style={{ width: "130px" }} />
+            <col style={{ width: "170px" }} />
+            <col style={{ width: "90px" }} />
+            <col style={{ width: "110px" }} />
+            <col style={{ width: "150px" }} />
+            <col style={{ width: "100px" }} />
+            <col style={{ width: "110px" }} />
+            <col style={{ width: "170px" }} />
+          </colgroup>
           <thead className="bg-slate-50 text-slate-500 text-xs">
             <tr>
               <th className="text-left px-4 py-2.5">판정</th>
@@ -681,13 +693,13 @@ function CheckInsTab({ checkins, centers, reload, periodDays, onPeriodChange }) 
             {rows.map((r) => (
               <tr key={r.id} className="border-t hover:bg-slate-50">
                 <td className="px-4 py-2.5"><Badge status={r.VerifyStatus} /></td>
-                <td className="px-4 py-2.5 font-medium text-slate-800">{r.CenterName}</td>
-                <td className="px-4 py-2.5 text-slate-500">{fmtDate(r.ServerTimestamp)}</td>
-                <td className="px-4 py-2.5 text-slate-500">{r.PublicIP}{r.IpCity ? ` (${r.IpCity})` : ""}</td>
-                <td className="px-4 py-2.5 text-slate-500">{r.GpsAccuracy ? `±${Math.round(r.GpsAccuracy)}m` : "-"}</td>
-                <td className="px-4 py-2.5 text-slate-500">{r.DistanceKm != null ? `${Number(r.DistanceKm).toFixed(1)}km (${r.DistanceSource})` : "-"}</td>
-                <td className="px-4 py-2.5 text-slate-500 whitespace-nowrap" title={r.UserAgent || ""}>{parseDeviceLabel(r.UserAgent)}</td>
-                <td className="px-4 py-2.5 text-slate-400 font-mono text-xs" title={r.DeviceFingerprint || ""}>{r.DeviceFingerprint ? r.DeviceFingerprint.slice(0, 8).toUpperCase() : "-"}</td>
+                <td className="px-4 py-2.5 font-medium text-slate-800 truncate">{r.CenterName}</td>
+                <td className="px-4 py-2.5 text-slate-500 truncate">{fmtDate(r.ServerTimestamp)}</td>
+                <td className="px-4 py-2.5 text-slate-500 truncate" title={`${r.PublicIP}${r.IpCity ? ` (${r.IpCity})` : ""}`}>{r.PublicIP}{r.IpCity ? ` (${r.IpCity})` : ""}</td>
+                <td className="px-4 py-2.5 text-slate-500 truncate">{r.GpsAccuracy ? `±${Math.round(r.GpsAccuracy)}m` : "-"}</td>
+                <td className="px-4 py-2.5 text-slate-500 truncate">{r.DistanceKm != null ? `${Number(r.DistanceKm).toFixed(1)}km (${r.DistanceSource})` : "-"}</td>
+                <td className="px-4 py-2.5 text-slate-500 truncate" title={r.UserAgent || ""}>{parseDeviceLabel(r.UserAgent)}</td>
+                <td className="px-4 py-2.5 text-slate-400 font-mono text-xs truncate" title={r.DeviceFingerprint || ""}>{r.DeviceFingerprint ? r.DeviceFingerprint.slice(0, 8).toUpperCase() : "-"}</td>
                 <td className="px-4 py-2.5">
                   {r.RecaptchaScore == null
                     ? <span className="text-xs text-slate-400">미확인</span>
