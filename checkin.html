@@ -78,6 +78,31 @@ function getDeviceId() {
   return id;
 }
 
+// 기기 핑거프린트 — localStorage(mkqr_device_id)는 브라우저 데이터를 지우면 바로 초기화되지만,
+// 화면/캔버스/시간대 등 하드웨어·환경 신호를 조합한 이 값은 지워지지 않아 같은 기기의 반복 체크인을
+// 어느 정도 더 잡아낼 수 있다 (완벽하게 우회를 막지는 못함 — 어뷰징 난이도를 높이는 용도).
+async function getDeviceFingerprint() {
+  const parts = [
+    navigator.userAgent,
+    navigator.language,
+    screen.width + "x" + screen.height + "x" + screen.colorDepth,
+    Intl.DateTimeFormat().resolvedOptions().timeZone,
+    navigator.hardwareConcurrency || "",
+    navigator.deviceMemory || "",
+  ];
+  try {
+    const canvas = document.createElement("canvas");
+    const ctx = canvas.getContext("2d");
+    ctx.textBaseline = "top";
+    ctx.font = "14px Arial";
+    ctx.fillText("mkqr-fp-🔒", 2, 2);
+    parts.push(canvas.toDataURL());
+  } catch (e) { /* 캔버스 차단 브라우저는 무시 */ }
+  const raw = parts.join("||");
+  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(raw));
+  return Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
 async function init() {
   if (!token) {
     centerNameEl.textContent = "잘못된 접근입니다";
@@ -115,6 +140,7 @@ form.addEventListener("submit", async (e) => {
   showStatus("위치 정보를 확인하고 있습니다...", "warn");
 
   const gps = await getGps();
+  const fingerprint = await getDeviceFingerprint().catch(() => "");
   btn.textContent = "체크인 처리 중...";
 
   const payload = {
@@ -124,6 +150,7 @@ form.addEventListener("submit", async (e) => {
     gps,
     clientTimestamp: new Date().toISOString(),
     deviceId: getDeviceId(),
+    deviceFingerprint: fingerprint,
     userAgent: navigator.userAgent,
   };
 
@@ -135,7 +162,7 @@ form.addEventListener("submit", async (e) => {
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || "체크인에 실패했습니다");
-    renderResult(data);
+    renderResult(data, fingerprint);
   } catch (e) {
     showStatus(e.message, "err");
     btn.disabled = false;
@@ -143,19 +170,23 @@ form.addEventListener("submit", async (e) => {
   }
 });
 
-function renderResult(data) {
+function renderResult(data, fingerprint) {
   form.style.display = "none";
   resultEl.style.display = "block";
   const ok = data.verifyStatus === "정상";
+  const isDup = data.verifyStatus === "중복의심";
+  let desc;
+  if (isDup) desc = "동일 기기로 최근 체크인 이력이 확인되어<br>담당자 확인 후 처리됩니다.";
+  else if (ok) desc = "방문 위치가 정상적으로 확인되었습니다.<br>감사합니다.";
+  else if (data.gpsUsed) desc = "현재 위치가 센터 반경(10km)을 벗어나 있어<br>담당자 확인 후 처리됩니다.";
+  else desc = "위치 정보 확인이 어려워<br>담당자 확인 후 처리됩니다.";
+
+  const authCode = fingerprint ? fingerprint.slice(0, 8).toUpperCase() : "";
   resultEl.innerHTML = `
     <div class="result-icon">${ok ? "✅" : "⚠️"}</div>
     <div class="result-title">${ok ? "체크인 완료" : "체크인 접수 (확인 필요)"}</div>
-    <div class="result-desc">${ok
-      ? "방문 위치가 정상적으로 확인되었습니다.<br>감사합니다."
-      : (data.gpsUsed
-          ? "현재 위치가 센터 반경(10km)을 벗어나 있어<br>담당자 확인 후 처리됩니다."
-          : "위치 정보 확인이 어려워<br>담당자 확인 후 처리됩니다.")
-    }</div>
+    <div class="result-desc">${desc}</div>
+    ${authCode ? `<div style="text-align:center;margin-top:14px;font-size:.72rem;color:#94a3b8">인증코드 ${authCode}</div>` : ""}
   `;
 }
 

@@ -215,6 +215,7 @@ function Badge({ status }) {
     "정상": "bg-emerald-100 text-emerald-700",
     "검증필요": "bg-amber-100 text-amber-700",
     "GPS거부": "bg-slate-200 text-slate-600",
+    "중복의심": "bg-red-100 text-red-700",
     "관리자승인": "bg-blue-100 text-blue-700",
   };
   return <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${map[status] || "bg-slate-100 text-slate-600"}`}>{status || "-"}</span>;
@@ -495,7 +496,7 @@ function CheckInsTab({ checkins, centers, reload }) {
     const data = rows.map((r) => ({
       센터: r.CenterName, 방문자: r.VisitorName, 시각: fmtDate(r.ServerTimestamp),
       공인IP: r.PublicIP, "IP위치(도시)": r.IpCity, GPS좌표: r.GpsLat ? `${r.GpsLat}, ${r.GpsLng}` : "",
-      "거리(km)": r.DistanceKm, 판정: r.VerifyStatus, 기기: r.UserAgent,
+      "거리(km)": r.DistanceKm, 판정: r.VerifyStatus, 인증코드: (r.DeviceFingerprint || "").slice(0, 8).toUpperCase(), 기기: r.UserAgent,
     }));
     const ws = XLSX.utils.json_to_sheet(data);
     const wb = XLSX.utils.book_new();
@@ -508,7 +509,7 @@ function CheckInsTab({ checkins, centers, reload }) {
       <div className="flex items-center justify-between mb-4 gap-2 flex-wrap">
         <div className="flex gap-2 items-center">
           <select value={filter} onChange={(e) => setFilter(e.target.value)} className={inputCls + " w-40"}>
-            <option>전체</option><option>정상</option><option>검증필요</option><option>GPS거부</option><option>관리자승인</option>
+            <option>전체</option><option>정상</option><option>검증필요</option><option>GPS거부</option><option>중복의심</option><option>관리자승인</option>
           </select>
           <div className="relative">
             <Search size={15} className="absolute left-2.5 top-2.5 text-slate-400" />
@@ -545,7 +546,7 @@ function CheckInsTab({ checkins, centers, reload }) {
                 <td className="px-4 py-2.5 text-slate-500">{r.GpsAccuracy ? `±${Math.round(r.GpsAccuracy)}m` : "-"}</td>
                 <td className="px-4 py-2.5 text-slate-500">{r.DistanceKm != null ? `${Number(r.DistanceKm).toFixed(1)}km (${r.DistanceSource})` : "-"}</td>
                 <td className="px-4 py-2.5 text-right">
-                  {r.VerifyStatus === "검증필요" && (
+                  {["검증필요", "GPS거부", "중복의심"].includes(r.VerifyStatus) && (
                     <button onClick={() => approve(r)} className="text-xs px-2 py-1 rounded-lg text-white" style={{ background: BRAND.accent }}>승인 처리</button>
                   )}
                 </td>

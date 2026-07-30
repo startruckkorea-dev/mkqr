@@ -27,6 +27,7 @@
 const GRAPH = "https://graph.microsoft.com/v1.0";
 const SITE_PATH = "startruckkorea.sharepoint.com:/sites/STK-DB:";
 const VERIFY_RADIUS_KM = 10;
+const DUPLICATE_WINDOW_HOURS = 24; // 같은 기기 핑거프린트가 같은 센터에 이 시간 안에 다시 찍으면 "중복의심"
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*", // 필요시 checkin.html이 배포된 정확한 origin으로 좁히세요
@@ -142,6 +143,22 @@ async function findCenterByToken(env, token) {
   return items.find((it) => it.fields.QrToken === token);
 }
 
+// 최근 체크인 기록을 훑어서 같은 센터에 같은 기기 핑거프린트가 이미 다녀갔는지 확인.
+// SharePoint List API로 날짜/텍스트 복합 필터를 걸기 번거로워, 전체를 가져온 뒤 JS에서 걸러낸다
+// (체크인 건수가 아주 많아지면 $filter=CenterId eq '...' 정도로 서버측 필터를 추가하는 게 좋음).
+async function isDuplicateDevice(env, centerId, fingerprint) {
+  if (!fingerprint) return false;
+  const items = await listItems(env, "mkqr_CheckIns");
+  const cutoff = Date.now() - DUPLICATE_WINDOW_HOURS * 3600 * 1000;
+  return items.some((it) => {
+    const f = it.fields;
+    if (f.CenterId !== String(centerId)) return false;
+    if (f.DeviceFingerprint !== fingerprint) return false;
+    const t = f.ServerTimestamp ? new Date(f.ServerTimestamp).getTime() : 0;
+    return t >= cutoff;
+  });
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -158,7 +175,7 @@ export default {
 
       if (url.pathname === "/api/checkin" && request.method === "POST") {
         const body = await request.json();
-        const { token, name, phone, gps, clientTimestamp, deviceId, userAgent } = body;
+        const { token, name, phone, gps, clientTimestamp, deviceId, deviceFingerprint, userAgent } = body;
         if (!token || !name) return json({ error: "이름을 입력해주세요" }, 400);
 
         const center = await findCenterByToken(env, token);
@@ -189,6 +206,10 @@ export default {
           verifyStatus = "GPS거부";
         }
 
+        // 위치 판정과는 별개로, 같은 기기가 최근에 같은 센터를 이미 찍었으면 최우선으로 "중복의심" 처리
+        const dup = await isDuplicateDevice(env, center.id, deviceFingerprint);
+        if (dup) verifyStatus = "중복의심";
+
         const now = new Date().toISOString();
         const fields = {
           Title: `${c.Title} ${now.slice(0, 16).replace("T", " ")}`,
@@ -210,6 +231,7 @@ export default {
           VerifyStatus: verifyStatus,
           UserAgent: userAgent || "",
           DeviceId: deviceId || "",
+          DeviceFingerprint: deviceFingerprint || "",
         };
         await createItem(env, "mkqr_CheckIns", fields);
 
