@@ -1604,6 +1604,12 @@ function App({ userEmail }) {
     if (!loading && accessibleNav.length && !accessibleNav.some((n) => n.id === tab)) setTab(accessibleNav[0].id);
   }, [loading, myAccessRow]);
 
+  // 로그인은 되지만(=mkqr_Admins엔 있음) 카테고리 접근 권한이 하나도 없는 사람은, 이도저도 아닌 텅 빈 화면을
+  // 보여주는 대신 로그인 자체가 안 되는 사람과 똑같이 "접근 권한 없음" 전체 화면으로 통일해서 보여준다.
+  if (hasLoadedOnce && accessibleNav.length === 0) {
+    return <AccessDenied userEmail={userEmail} adminEmails={admins.filter((a) => a.Active !== false).map((a) => a.Email)} />;
+  }
+
   return (
     <div className="h-screen flex overflow-hidden" style={{ background: "#F5F6F8" }}>
       <aside className="w-56 shrink-0 text-white flex flex-col" style={{ background: BRAND.navy }}>
