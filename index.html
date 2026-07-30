@@ -70,7 +70,7 @@ import {
   Building2, QrCode, ListChecks, LogOut, Plus, Pencil, Trash2, X,
   Download, RefreshCw, MapPin, Search, CheckCircle2, AlertTriangle,
   Upload, ExternalLink, Phone, Navigation, LayoutDashboard, ShieldCheck,
-  ArrowUpRight, ImagePlus, KeyRound,
+  ArrowUpRight, ImagePlus, KeyRound, Mail,
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import QRCode from "qrcode";
@@ -1582,13 +1582,19 @@ function AccessDenied({ userEmail, adminEmails }) {
         <AlertTriangle size={32} className="mx-auto text-amber-500 mb-3" />
         <h2 className="text-lg font-semibold text-slate-800 mb-1">접근 권한 없음</h2>
         <p className="text-sm text-slate-500 mb-4">MKQR 관리자 전용 화면입니다. 현재 계정({userEmail})은 등록된 관리자가 아닙니다.</p>
-        <div className="bg-slate-50 rounded-lg p-4 text-left text-sm text-slate-600 mb-4">
-          <div className="font-medium mb-1.5">접근 권한 신청 방법</div>
-          <div>이미 등록된 관리자에게 요청해서 "관리자 설정" 탭에서 본인 이메일을 추가해달라고 해주세요.</div>
-          {adminEmails.length > 0 && (
-            <div className="mt-2 text-xs text-slate-400">현재 관리자: {adminEmails.join(", ")}</div>
-          )}
-        </div>
+        {adminEmails.length > 0 && (
+          <div className="bg-slate-50 rounded-lg p-4 text-left mb-4">
+            <div className="text-xs font-medium text-slate-500 mb-2">아래 등록된 관리자에게 접근 권한을 요청해주세요</div>
+            <div className="space-y-1">
+              {adminEmails.map((email) => (
+                <a key={email} href={`mailto:${email}?subject=${encodeURIComponent("MKQR 접근 권한 요청")}&body=${encodeURIComponent(`MKQR 관리자 화면 접근 권한을 요청드립니다.\n계정: ${userEmail}`)}`}
+                  className="flex items-center gap-1.5 text-sm text-slate-700 hover:underline">
+                  <Mail size={13} className="text-slate-400 shrink-0" /> {email}
+                </a>
+              ))}
+            </div>
+          </div>
+        )}
         <button onClick={() => msalApp.logoutRedirect()} className="text-sm text-slate-400 hover:text-slate-700 underline">로그아웃</button>
       </div>
     </div>
