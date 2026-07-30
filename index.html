@@ -943,12 +943,14 @@ function QrTab({ centers, highlightId }) {
 /* ------------------------------------------------------------------ */
 /* 체크인 기록 탭                                                       */
 /* ------------------------------------------------------------------ */
-function CheckInsTab({ checkins, centers, reload, periodDays, onPeriodChange }) {
+function CheckInsTab({ checkins, centers, reload, checkinRange, onRangeChange }) {
   const [filter, setFilter] = useState("전체");
   const [q, setQ] = useState("");
   const [page, setPage] = useState(1);
   const [detail, setDetail] = useState(null); // 상세보기 모달에 띄울 행
   const [showInfo, setShowInfo] = useState(false); // 자동 판정 기준 안내 배너 펼침 여부
+  const [customFrom, setCustomFrom] = useState(checkinRange.from || "");
+  const [customTo, setCustomTo] = useState(checkinRange.to || "");
   const PAGE_SIZE = 20;
 
   const rows = checkins
@@ -960,7 +962,19 @@ function CheckInsTab({ checkins, centers, reload, periodDays, onPeriodChange }) 
   const pageSafe = Math.min(page, totalPages);
   const pageRows = rows.slice((pageSafe - 1) * PAGE_SIZE, pageSafe * PAGE_SIZE);
 
-  useEffect(() => { setPage(1); }, [filter, q, periodDays]);
+  useEffect(() => { setPage(1); }, [filter, q, checkinRange]);
+
+  const MAX_RANGE_DAYS = 90;
+  function applyCustomRange() {
+    if (!customFrom || !customTo) { alert("시작일과 종료일을 모두 선택해주세요."); return; }
+    if (customFrom > customTo) { alert("시작일이 종료일보다 늦을 수 없습니다."); return; }
+    const days = (new Date(customTo) - new Date(customFrom)) / (24 * 3600 * 1000);
+    if (days > MAX_RANGE_DAYS) {
+      alert(`조회 기간은 최대 ${MAX_RANGE_DAYS}일까지만 가능합니다. 종료일을 시작일로부터 ${MAX_RANGE_DAYS}일 이내로 좁혀주세요.`);
+      return;
+    }
+    onRangeChange({ mode: "custom", from: customFrom, to: customTo });
+  }
 
   async function approve(r) {
     try { await mkUpdateItem(MK_LISTS.checkins, r.id, { VerifyStatus: "관리자승인" }); await reload(); } catch (e) { alert(e.message); }
@@ -1047,23 +1061,43 @@ function CheckInsTab({ checkins, centers, reload, periodDays, onPeriodChange }) 
         )}
       </div>
 
-      <div className="flex items-center gap-2 mb-4 flex-wrap">
-        <div className="flex gap-2 items-center">
-          <select value={periodDays} onChange={(e) => onPeriodChange(Number(e.target.value))} className={inputCls + " w-36"} title="조회 기간 (목록이 커질수록 넓은 기간 조회는 느려질 수 있음)">
+      <div className="flex flex-col gap-2 mb-4">
+        <div className="flex items-center gap-2 flex-wrap">
+          <select
+            value={checkinRange.mode === "custom" ? "custom" : checkinRange.days}
+            onChange={(e) => {
+              const v = e.target.value;
+              if (v === "custom") onRangeChange({ mode: "custom", from: customFrom || customTo || "", to: customTo || customFrom || "" });
+              else onRangeChange({ mode: "preset", days: Number(v) });
+            }}
+            className={inputCls + " w-36"} title="조회 기간 (최대 90일)">
             <option value={7}>최근 7일</option>
             <option value={30}>최근 30일</option>
             <option value={90}>최근 90일</option>
+            <option value="custom">기간 직접 선택</option>
           </select>
-          <select value={filter} onChange={(e) => setFilter(e.target.value)} className={inputCls + " w-40"}>
-            <option>전체</option><option>정상</option><option>검증필요</option><option>GPS거부</option><option>관리자승인</option><option>차단해제</option>
-          </select>
+          <div className="flex items-center gap-1.5">
+            <span className="text-xs text-slate-400 whitespace-nowrap">판정:</span>
+            <select value={filter} onChange={(e) => setFilter(e.target.value)} className={inputCls + " w-40"} title="판정 상태로 화면에서 걸러보기 (이미 불러온 데이터 안에서만 걸러짐)">
+              <option value="전체">전체 판정</option><option>정상</option><option>검증필요</option><option>GPS거부</option><option>관리자승인</option><option>차단해제</option>
+            </select>
+          </div>
           <div className="relative">
             <Search size={15} className="absolute left-2.5 top-2.5 text-slate-400" />
             <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="센터 검색" className="pl-8 pr-3 py-2 border border-slate-300 rounded-lg text-sm w-56" />
           </div>
+          <button onClick={reload} className="flex items-center gap-1.5 px-3 py-2 border border-slate-300 rounded-lg text-sm hover:bg-slate-50"><RefreshCw size={14} /> 새로고침</button>
+          <button onClick={exportExcel} className="flex items-center gap-1.5 px-3 py-2 border border-slate-300 rounded-lg text-sm hover:bg-slate-50"><Download size={14} /> Excel 내보내기</button>
         </div>
-        <button onClick={reload} className="flex items-center gap-1.5 px-3 py-2 border border-slate-300 rounded-lg text-sm hover:bg-slate-50"><RefreshCw size={14} /> 새로고침</button>
-        <button onClick={exportExcel} className="flex items-center gap-1.5 px-3 py-2 border border-slate-300 rounded-lg text-sm hover:bg-slate-50"><Download size={14} /> Excel 내보내기</button>
+        {checkinRange.mode === "custom" && (
+          <div className="flex items-center gap-2 flex-wrap bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 w-fit">
+            <span className="text-xs text-slate-500">조회 기간 (최대 {90}일)</span>
+            <input type="date" value={customFrom} onChange={(e) => setCustomFrom(e.target.value)} className="border border-slate-300 rounded-lg px-2 py-1.5 text-sm" />
+            <span className="text-slate-400 text-xs">~</span>
+            <input type="date" value={customTo} onChange={(e) => setCustomTo(e.target.value)} className="border border-slate-300 rounded-lg px-2 py-1.5 text-sm" />
+            <button onClick={applyCustomRange} className="text-xs px-3 py-1.5 rounded-lg text-white" style={{ background: BRAND.accent }}>조회</button>
+          </div>
+        )}
       </div>
       {rows.length > 0 && (
         <div className="text-slate-400 text-xs mb-2">
@@ -1596,20 +1630,25 @@ function App({ userEmail }) {
   // "관리자"는 더 이상 별도 목록(mkqr_Admins)이 아니라, 카테고리 접근 권한에서 "카테고리 접근 권한(Access_admins)"이
   // 체크된 사람을 그때그때 계산한 값 — 진짜 전체 화면 접근 가능한 사람만 여기 들어간다.
   const admins = categoryAccess.filter((r) => r.Access_admins === true).map((r) => ({ id: r.id, Title: r.Title, Email: r.Email, Active: true }));
-  const [checkinPeriodDays, setCheckinPeriodDays] = useState(7); // 체크인 기록은 목록이 커질 수 있어 기본 최근 7일만 조회 (최대 90일, "전체"는 없음)
+  // 체크인 기록 조회 기간 — preset(7/30/90일) 또는 custom(직접 날짜 선택, 최대 90일)
+  const [checkinRange, setCheckinRange] = useState({ mode: "preset", days: 7, from: "", to: "" });
   const [loading, setLoading] = useState(true);
   const [hasLoadedOnce, setHasLoadedOnce] = useState(false); // 최초 로딩에만 전체화면 로딩 표시 — 그 이후 새로고침은 화면을 안 갈아엎음
   const [highlightId, setHighlightId] = useState(null);
   const [permDeniedPopup, setPermDeniedPopup] = useState(false); // 권한 없는 카테고리 클릭 시 안내 팝업
 
-  async function reload(periodDays = checkinPeriodDays) {
+  async function reload(range = checkinRange) {
     setLoading(true);
     try {
       // 체크인 기록은 커질수록 무거워지므로 ServerTimestamp 기준 최근 기간만 서버에서 걸러서 가져온다.
-      // "전체"(periodDays=0)를 고르면 필터 없이 전부 가져온다 — 데이터가 많으면 느릴 수 있음.
+      // preset이면 "최근 N일", custom이면 직접 고른 시작~종료일(최대 90일)로 조회한다. 무제한 조회는 없음.
       let checkinQuery = "";
-      if (periodDays > 0) {
-        const since = new Date(Date.now() - periodDays * 24 * 3600 * 1000).toISOString();
+      if (range.mode === "custom" && range.from && range.to) {
+        const fromIso = new Date(range.from + "T00:00:00").toISOString();
+        const toIso = new Date(range.to + "T23:59:59").toISOString();
+        checkinQuery = `&$filter=fields/ServerTimestamp ge '${fromIso}' and fields/ServerTimestamp le '${toIso}'`;
+      } else {
+        const since = new Date(Date.now() - (range.days || 7) * 24 * 3600 * 1000).toISOString();
         checkinQuery = `&$filter=fields/ServerTimestamp ge '${since}'`;
       }
       const [c, k, ca] = await Promise.all([
@@ -1626,9 +1665,9 @@ function App({ userEmail }) {
   }
   useEffect(() => { reload(); }, []);
 
-  function changeCheckinPeriod(days) {
-    setCheckinPeriodDays(days);
-    reload(days);
+  function changeCheckinRange(newRange) {
+    setCheckinRange(newRange);
+    reload(newRange);
   }
 
   const needsVerify = checkins.filter((r) => r.VerifyStatus === "검증필요").length;
@@ -1738,7 +1777,7 @@ function App({ userEmail }) {
             {tab === "overview" && <OverviewTab centers={centers} checkins={checkins} admins={admins} setTab={setTab} />}
             {tab === "centers" && <CentersTab centers={centers} reload={reload} onCreated={handleCenterCreated} />}
             {tab === "qr" && <QrTab centers={centers} highlightId={highlightId} />}
-            {tab === "checkins" && <CheckInsTab checkins={checkins} centers={centers} reload={reload} periodDays={checkinPeriodDays} onPeriodChange={changeCheckinPeriod} />}
+            {tab === "checkins" && <CheckInsTab checkins={checkins} centers={centers} reload={reload} checkinRange={checkinRange} onRangeChange={changeCheckinRange} />}
             {tab === "categoryAccess" && <CategoryAccessTab admins={admins} categoryAccess={categoryAccess} reload={reload} />}
           </>
         )}
