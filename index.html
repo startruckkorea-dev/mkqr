@@ -1294,7 +1294,7 @@ function AdminsTab({ admins, reload, userEmail }) {
   const activeCount = admins.filter((a) => a.Active !== false).length;
 
   return (
-    <div className="max-w-3xl">
+    <div className="max-w-3xl mx-auto">
       {busy && <BlockingOverlay message="처리하고 있습니다..." />}
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-5">
@@ -1605,12 +1605,16 @@ function CategoryAccessTab({ admins, categoryAccess, reload }) {
 
   return (
     <div>
-      <div className="bg-blue-50 border border-blue-100 rounded-xl p-4 mb-5 text-sm text-blue-900 flex gap-3">
+      <div className="bg-blue-50 border border-blue-100 rounded-xl p-4 mb-5 flex gap-3">
         <KeyRound size={18} className="text-blue-500 shrink-0 mt-0.5" />
-        <div>
-          전 직원을 대상으로 화면 단위 접근 권한을 체크박스로 부여·변경합니다. <b>체크박스는 화면에서만 바뀌고, 아래 "반영" 버튼을 눌러야 실제로 저장됩니다.</b>
-          {" "}체크된 채로 반영하면 그 사람이 아직 관리자가 아니어도 자동으로 관리자 목록에 등록되어 로그인도 함께 가능해집니다.
-          {" "}<b>"관리자 전용"을 체크하면 나머지 4개 화면도 전부 같이 켜집니다.</b> 각 열 맨 위 체크박스로 전체 선택도 가능합니다.
+        <div className="text-sm text-blue-900">
+          <div className="font-medium mb-1.5">화면 접근 권한 부여 방법</div>
+          <ul className="space-y-1 text-blue-800/90 text-[13px] list-disc list-inside">
+            <li>체크박스는 화면에서만 바뀌고, <b>"반영" 버튼을 눌러야 실제로 저장</b>됩니다</li>
+            <li>체크된 채로 반영하면 관리자가 아니었던 사람도 자동으로 관리자 목록에 등록되어 로그인이 함께 가능해집니다</li>
+            <li><b>"관리자 전용"</b>을 체크하면 나머지 4개 화면도 전부 같이 켜집니다</li>
+            <li>각 열 맨 위 체크박스로 전체 선택/해제도 가능합니다</li>
+          </ul>
         </div>
       </div>
 
