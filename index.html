@@ -462,6 +462,13 @@ function CentersTab({ centers, reload, onCreated }) {
 
   const filtered = centers.filter((c) => !q || c.Title?.includes(q) || c.Region?.includes(q) || c.AddressKr?.includes(q));
 
+  const [page, setPage] = useState(1);
+  const PAGE_SIZE = 12;
+  useEffect(() => { setPage(1); }, [q]);
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const pageSafe = Math.min(page, totalPages);
+  const pageCenters = filtered.slice((pageSafe - 1) * PAGE_SIZE, pageSafe * PAGE_SIZE);
+
   useEffect(() => {
     const withIcon = centers.filter((c) => c.IconDriveItemId && !iconUrls[c.id]);
     if (!withIcon.length) return;
@@ -684,7 +691,7 @@ function CentersTab({ centers, reload, onCreated }) {
 
       {filtered.length > 0 && (
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-          {filtered.map((c) => {
+          {pageCenters.map((c) => {
             const initial = (c.Title || "?").trim().charAt(0);
             const regionColor = regionBadgeColor(c.Region);
             return (
@@ -739,6 +746,21 @@ function CentersTab({ centers, reload, onCreated }) {
               </div>
             );
           })}
+        </div>
+      )}
+      {filtered.length > 0 && totalPages > 1 && (
+        <div className="flex items-center justify-center gap-1 mt-5">
+          <button onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={pageSafe <= 1}
+            className="px-2.5 py-1.5 rounded-lg border border-slate-300 text-xs disabled:opacity-40 disabled:cursor-not-allowed hover:bg-slate-50">이전</button>
+          {Array.from({ length: totalPages }, (_, i) => i + 1).map((n) => (
+            <button key={n} onClick={() => setPage(n)}
+              className={`w-7 h-7 rounded-lg text-xs ${n === pageSafe ? "text-white" : "border border-slate-300 text-slate-600 hover:bg-slate-50"}`}
+              style={n === pageSafe ? { background: BRAND.accent } : {}}>
+              {n}
+            </button>
+          ))}
+          <button onClick={() => setPage((p) => Math.min(totalPages, p + 1))} disabled={pageSafe >= totalPages}
+            className="px-2.5 py-1.5 rounded-lg border border-slate-300 text-xs disabled:opacity-40 disabled:cursor-not-allowed hover:bg-slate-50">다음</button>
         </div>
       )}
       {!filtered.length && (
