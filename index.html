@@ -742,6 +742,12 @@ function CentersTab({ centers, reload, onCreated }) {
                       ? <span>{Number(c.Lat).toFixed(4)}, {Number(c.Lng).toFixed(4)} · 허용반경 {((c.VerifyRadiusM ?? 10000) / 1000).toFixed(1)}km</span>
                       : <span className="text-amber-600">좌표 미설정</span>}
                   </div>
+                  <div className="flex items-center gap-1.5">
+                    <ExternalLink size={13} className="shrink-0 text-slate-300" />
+                    {c.RedirectUrl
+                      ? <span className="truncate" title={c.RedirectUrl}>{c.RedirectUrl}</span>
+                      : <span className="text-amber-600">Redirect 경로 미설정</span>}
+                  </div>
                 </div>
               </div>
             );
