@@ -515,13 +515,14 @@ function CentersTab({ centers, reload, onCreated }) {
 
   async function geocode(form, setForm) {
     const addr = form.AddressKr;
-    if (!addr) { alert("주소를 먼저 입력하세요"); return; }
+    if (!addr) return { ok: false, reason: "no-address" };
     try {
       const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=kr&q=${encodeURIComponent(addr)}`);
       const data = await res.json();
-      if (!data.length) { alert("좌표를 찾지 못했습니다. 직접 입력해주세요."); return; }
+      if (!data.length) return { ok: false, reason: "not-found" };
       setForm((f) => ({ ...f, Lat: data[0].lat, Lng: data[0].lon }));
-    } catch (e) { alert("좌표 조회 실패: " + e.message); }
+      return { ok: true };
+    } catch (e) { return { ok: false, reason: "error", message: e.message }; }
   }
 
   // mkqr 전용 가져오기 양식 다운로드 — "템플릿 다운로드" 버튼에서 사용
@@ -759,6 +760,7 @@ function CenterEditModal({ center, onClose, onSave, onGeocode, busy }) {
   const [form, setForm] = useState({ Active: true, ...center });
   const [iconPreview, setIconPreview] = useState(null);
   const [existingIconUrl, setExistingIconUrl] = useState(null);
+  const [geoStatus, setGeoStatus] = useState(null); // null | "not-found" | "no-address" | "error" | "loading"
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
 
   useEffect(() => {
@@ -787,6 +789,12 @@ function CenterEditModal({ center, onClose, onSave, onGeocode, busy }) {
     setIconPreview(URL.createObjectURL(file));
   }
 
+  async function handleGeocode() {
+    setGeoStatus("loading");
+    const result = await onGeocode(form, setForm);
+    setGeoStatus(result.ok ? null : result.reason);
+  }
+
   const displayIcon = iconPreview || existingIconUrl;
 
   return (
@@ -810,10 +818,16 @@ function CenterEditModal({ center, onClose, onSave, onGeocode, busy }) {
       <Field label="주소">
         <div className="flex gap-2">
           <input className={inputCls} value={form.AddressKr || ""} onChange={set("AddressKr")} placeholder="예: 경기도 광주시 곤지암읍 평촌길 100-9" />
-          <button type="button" onClick={() => onGeocode(form, setForm)} className="shrink-0 px-3 rounded-lg border border-slate-300 text-sm hover:bg-slate-50 flex items-center gap-1">
-            <MapPin size={14} /> 좌표 찾기
+          <button type="button" onClick={handleGeocode} disabled={geoStatus === "loading"} className="shrink-0 px-3 rounded-lg border border-slate-300 text-sm hover:bg-slate-50 flex items-center gap-1 disabled:opacity-50">
+            <MapPin size={14} /> {geoStatus === "loading" ? "찾는 중..." : "좌표 찾기"}
           </button>
         </div>
+        {geoStatus === "no-address" && <p className="text-xs text-amber-600 mt-1.5">주소를 먼저 입력해주세요.</p>}
+        {(geoStatus === "not-found" || geoStatus === "error") && (
+          <p className="text-xs text-amber-600 mt-1.5">
+            좌표를 찾지 못했습니다. <a href="https://www.findlatlng.org/" target="_blank" rel="noreferrer" className="underline text-blue-600">findlatlng.org</a>에서 직접 확인 후 아래 위도/경도를 입력해주세요.
+          </p>
+        )}
       </Field>
       <div className="grid grid-cols-2 gap-3">
         <Field label="위도 (Lat)"><input className={inputCls} value={form.Lat || ""} onChange={set("Lat")} /></Field>
