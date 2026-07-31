@@ -14,7 +14,8 @@
     "react-dom/client": "https://esm.sh/react-dom@18.3.1/client",
     "lucide-react": "https://esm.sh/lucide-react@0.383.0?deps=react@18.3.1,react-dom@18.3.1&bundle",
     "xlsx": "https://esm.sh/xlsx@0.18.5?bundle",
-    "qrcode": "https://esm.sh/qrcode@1.5.3?bundle"
+    "qrcode": "https://esm.sh/qrcode@1.5.3?bundle",
+    "jszip": "https://esm.sh/jszip@3.10.1?bundle"
   }
 }
 </script>
@@ -74,6 +75,7 @@ import {
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import QRCode from "qrcode";
+import JSZip from "jszip";
 
 /* ------------------------------------------------------------------ */
 /* 공용 인프라 — 다른 APS/ICS 시스템과 완전히 동일한 설정 재사용            */
@@ -500,6 +502,8 @@ function CentersTab({ centers, reload, onCreated }) {
       if (form._iconFile) {
         const uploaded = await uploadCenterIcon(form._iconFile);
         fields.IconDriveItemId = uploaded.id;
+      } else if (form._removeIcon) {
+        fields.IconDriveItemId = "";
       }
       if (editing?.id) {
         await mkUpdateItem(MK_LISTS.centers, editing.id, fields);
@@ -530,6 +534,20 @@ function CentersTab({ centers, reload, onCreated }) {
       setForm((f) => ({ ...f, Lat: data[0].lat, Lng: data[0].lon }));
       return { ok: true };
     } catch (e) { return { ok: false, reason: "error", message: e.message }; }
+  }
+
+  // 현재(검색 필터 적용된) 센터 목록을 엑셀로 일괄 추출 — 백업/보고용
+  function exportCenters() {
+    const data = filtered.map((c) => ({
+      지역: c.Region, 센터명: c.Title, "센터명(영문)": c.CenterNameEn, 법인명: c.CorpNameKr,
+      주소: c.AddressKr, "주소(영문)": c.AddressEn, 전화번호: c.Phone,
+      위도: c.Lat, 경도: c.Lng, "GPS허용반경(m)": c.VerifyRadiusM ?? 10000,
+      상태: c.Active === false ? "비활성" : "활성", QR토큰: c.QrToken, RedirectUrl: c.RedirectUrl,
+    }));
+    const ws = XLSX.utils.json_to_sheet(data);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "센터목록");
+    XLSX.writeFile(wb, `MKQR_센터목록_${new Date().toISOString().slice(0, 10)}.xlsx`);
   }
 
   // mkqr 전용 가져오기 양식 다운로드 — "템플릿 다운로드" 버튼에서 사용
@@ -678,6 +696,9 @@ function CentersTab({ centers, reload, onCreated }) {
           <button onClick={() => fileRef.current.click()} disabled={busy} className="flex items-center gap-1.5 px-3 py-2 border border-slate-300 rounded-lg text-sm hover:bg-slate-50">
             <Upload size={15} /> 엑셀 일괄 등록하기
           </button>
+          <button onClick={exportCenters} disabled={!filtered.length} className="flex items-center gap-1.5 px-3 py-2 border border-slate-300 rounded-lg text-sm hover:bg-slate-50 disabled:opacity-50">
+            <Download size={15} /> 엑셀 내보내기
+          </button>
           <button
             onClick={() => centers.length >= MAX_CENTERS
               ? alert(`QR 코드(=센터)는 최대 ${MAX_CENTERS}개까지만 만들 수 있습니다.\n현재 ${centers.length}개가 등록되어 있어 더 이상 추가할 수 없습니다.`)
@@ -813,8 +834,14 @@ function CenterEditModal({ center, onClose, onSave, onGeocode, busy }) {
       e.target.value = "";
       return;
     }
-    setForm((f) => ({ ...f, _iconFile: file }));
+    setForm((f) => ({ ...f, _iconFile: file, _removeIcon: false }));
     setIconPreview(URL.createObjectURL(file));
+  }
+
+  function removeIcon() {
+    setForm((f) => ({ ...f, _iconFile: null, _removeIcon: true }));
+    setIconPreview(null);
+    setExistingIconUrl(null);
   }
 
   async function handleGeocode() {
@@ -836,6 +863,11 @@ function CenterEditModal({ center, onClose, onSave, onGeocode, busy }) {
             <Upload size={14} /> 이미지 선택
             <input type="file" accept=".jpg,.jpeg,.png,.gif,.webp" className="hidden" onChange={onPickIcon} />
           </label>
+          {displayIcon && (
+            <button type="button" onClick={removeIcon} className="flex items-center gap-1.5 px-3 py-2 border border-slate-300 rounded-lg text-sm text-red-600 hover:bg-red-50">
+              <Trash2 size={14} /> 제거
+            </button>
+          )}
         </div>
         <p className="text-xs text-slate-400 mt-1.5">JPG/PNG/GIF/WEBP 이미지 파일만 가능하며, 용량은 50KB 이하여야 합니다.</p>
       </Field>
@@ -857,6 +889,7 @@ function CenterEditModal({ center, onClose, onSave, onGeocode, busy }) {
           </p>
         )}
       </Field>
+      <Field label="주소 (영문, 선택)"><input className={inputCls} value={form.AddressEn || ""} onChange={set("AddressEn")} placeholder="예: 100-9 Pyeongchon-gil, Gonjiam-eup" /></Field>
       <div className="grid grid-cols-2 gap-3">
         <Field label="위도 (Lat)"><input className={inputCls} value={form.Lat || ""} onChange={set("Lat")} /></Field>
         <Field label="경도 (Lng)"><input className={inputCls} value={form.Lng || ""} onChange={set("Lng")} /></Field>
@@ -916,14 +949,21 @@ function QrTab({ centers, highlightId }) {
   const activeCenters = centers.filter((c) => c.Active !== false);
   const filtered = activeCenters.filter((c) => !q || c.Title?.includes(q) || c.Region?.includes(q) || c.AddressKr?.includes(q));
 
+  const [page, setPage] = useState(1);
+  const PAGE_SIZE = 12;
+  useEffect(() => { setPage(1); }, [q]);
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const pageSafe = Math.min(page, totalPages);
+  const pageCenters = filtered.slice((pageSafe - 1) * PAGE_SIZE, pageSafe * PAGE_SIZE);
+
   useEffect(() => {
-    filtered.forEach((c) => {
+    pageCenters.forEach((c) => {
       const el = canvasRefs.current[c.id];
       if (!el || !c.QrToken) return;
       const url = `${checkinBaseUrl}?t=${c.QrToken}`;
       QRCode.toCanvas(el, url, { width: 180, margin: 1, color: { dark: BRAND.navy, light: "#ffffff" } });
     });
-  }, [centers, checkinBaseUrl, q]);
+  }, [centers, checkinBaseUrl, pageCenters]);
 
   useEffect(() => {
     if (highlightId && cardRefs.current[highlightId]) {
@@ -940,16 +980,45 @@ function QrTab({ centers, highlightId }) {
     link.click();
   }
 
+  // 화면에 안 보이는(다른 페이지) 센터도 포함해서 검색 결과 전체를 zip으로 묶어 한 번에 다운로드.
+  // 캔버스 DOM 없이도 QRCode.toDataURL로 바로 이미지를 만들 수 있어서 페이지 이동 없이 전체 처리 가능.
+  const [downloadingAll, setDownloadingAll] = useState(false);
+  async function downloadAll() {
+    if (!filtered.length) return;
+    setDownloadingAll(true);
+    try {
+      const zip = new JSZip();
+      for (const c of filtered) {
+        if (!c.QrToken) continue;
+        const url = `${checkinBaseUrl}?t=${c.QrToken}`;
+        const dataUrl = await QRCode.toDataURL(url, { width: 400, margin: 1, color: { dark: BRAND.navy, light: "#ffffff" } });
+        zip.file(`MKQR_${c.Title}.png`, dataUrl.split(",")[1], { base64: true });
+      }
+      const blob = await zip.generateAsync({ type: "blob" });
+      const link = document.createElement("a");
+      link.href = URL.createObjectURL(blob);
+      link.download = `MKQR_QR코드_전체_${new Date().toISOString().slice(0, 10)}.zip`;
+      link.click();
+    } catch (e) { alert("전체 다운로드 실패: " + e.message); } finally { setDownloadingAll(false); }
+  }
+
   return (
     <div className="max-w-5xl mx-auto">
+      {downloadingAll && <BlockingOverlay message="QR 코드를 압축 파일로 만들고 있습니다..." />}
       <div className="mb-4 flex items-center justify-between flex-wrap gap-2">
         <div className="relative">
           <Search size={15} className="absolute left-2.5 top-2.5 text-slate-400" />
           <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="센터명/지역/주소로 QR 검색" className="pl-8 pr-3 py-2 border border-slate-300 rounded-lg text-sm w-64" />
         </div>
-        <button onClick={() => setShowUrlSetting((v) => !v)} className="text-xs text-slate-400 hover:text-slate-600 flex items-center gap-1">
-          <Settings size={13} /> 체크인 주소 설정 {showUrlSetting ? "숨기기" : "펼치기"}
-        </button>
+        <div className="flex items-center gap-3">
+          <button onClick={downloadAll} disabled={downloadingAll || !filtered.length}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm text-white disabled:opacity-50" style={{ background: BRAND.accent }}>
+            <Download size={14} /> 전체 다운로드 (ZIP, {filtered.length}개)
+          </button>
+          <button onClick={() => setShowUrlSetting((v) => !v)} className="text-xs text-slate-400 hover:text-slate-600 flex items-center gap-1">
+            <Settings size={13} /> 체크인 주소 설정 {showUrlSetting ? "숨기기" : "펼치기"}
+          </button>
+        </div>
       </div>
       {showUrlSetting && (
         <div className="mb-4 max-w-xl">
@@ -960,7 +1029,7 @@ function QrTab({ centers, highlightId }) {
         </div>
       )}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-4">
-        {filtered.map((c) => (
+        {pageCenters.map((c) => (
           <div key={c.id} ref={(el) => (cardRefs.current[c.id] = el)}
             className={`bg-white border rounded-xl p-4 text-center ${c.id === highlightId ? "ring-2 ring-offset-2" : ""}`}
             style={c.id === highlightId ? { borderColor: BRAND.accent, boxShadow: `0 0 0 2px ${BRAND.accent}` } : {}}>
@@ -979,6 +1048,21 @@ function QrTab({ centers, highlightId }) {
         {!activeCenters.length && <div className="col-span-4 text-center text-slate-400 py-10">먼저 "센터 관리"에서 센터를 등록해주세요</div>}
         {activeCenters.length > 0 && !filtered.length && <div className="col-span-4 text-center text-slate-400 py-10">검색 결과가 없습니다</div>}
       </div>
+      {filtered.length > 0 && totalPages > 1 && (
+        <div className="flex items-center justify-center gap-1 mt-5">
+          <button onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={pageSafe <= 1}
+            className="px-2.5 py-1.5 rounded-lg border border-slate-300 text-xs disabled:opacity-40 disabled:cursor-not-allowed hover:bg-slate-50">이전</button>
+          {Array.from({ length: totalPages }, (_, i) => i + 1).map((n) => (
+            <button key={n} onClick={() => setPage(n)}
+              className={`w-7 h-7 rounded-lg text-xs ${n === pageSafe ? "text-white" : "border border-slate-300 text-slate-600 hover:bg-slate-50"}`}
+              style={n === pageSafe ? { background: BRAND.accent } : {}}>
+              {n}
+            </button>
+          ))}
+          <button onClick={() => setPage((p) => Math.min(totalPages, p + 1))} disabled={pageSafe >= totalPages}
+            className="px-2.5 py-1.5 rounded-lg border border-slate-300 text-xs disabled:opacity-40 disabled:cursor-not-allowed hover:bg-slate-50">다음</button>
+        </div>
+      )}
     </div>
   );
 }
@@ -1435,11 +1519,17 @@ function CategoryAccessTab({ admins, categoryAccess, reload }) {
       const next = { ...prev };
       const catOverrides = { ...(next[person.email] || {}) };
       if (cat.key === "admins" && newVal === true) {
-        MK_CATEGORIES.forEach((c) => { catOverrides[c.key] = true; });
+        MK_CATEGORIES.forEach((c) => {
+          if (savedChecked(person, c) === true) delete catOverrides[c.key]; // 원래도 켜져있던 건 "변경사항"이 아니므로 기록 안 함
+          else catOverrides[c.key] = true;
+        });
+      } else if (newVal === savedChecked(person, cat)) {
+        delete catOverrides[cat.key]; // 원래 저장된 값으로 다시 되돌아왔으면 변경사항에서 빼준다
       } else {
         catOverrides[cat.key] = newVal;
       }
-      next[person.email] = catOverrides;
+      if (Object.keys(catOverrides).length === 0) delete next[person.email];
+      else next[person.email] = catOverrides;
       return next;
     });
   }
@@ -1452,11 +1542,17 @@ function CategoryAccessTab({ admins, categoryAccess, reload }) {
       filtered.forEach((p) => {
         const catOverrides = { ...(next[p.email] || {}) };
         if (cat.key === "admins" && target === true) {
-          MK_CATEGORIES.forEach((c) => { catOverrides[c.key] = true; });
+          MK_CATEGORIES.forEach((c) => {
+            if (savedChecked(p, c) === true) delete catOverrides[c.key];
+            else catOverrides[c.key] = true;
+          });
+        } else if (target === savedChecked(p, cat)) {
+          delete catOverrides[cat.key];
         } else {
           catOverrides[cat.key] = target;
         }
-        next[p.email] = catOverrides;
+        if (Object.keys(catOverrides).length === 0) delete next[p.email];
+        else next[p.email] = catOverrides;
       });
       return next;
     });
@@ -1522,7 +1618,7 @@ function CategoryAccessTab({ admins, categoryAccess, reload }) {
             <li>체크박스는 화면에서만 바뀌고, <b>"반영" 버튼을 눌러야 실제로 저장</b>됩니다</li>
             <li>체크된 채로 반영하면 아직 로그인이 안 되던 사람도 자동으로 로그인이 가능해집니다</li>
             <li>반대로 <b>어떤 화면도 체크 안 된 채로 반영하면 그 사람의 로그인 자체가 막힙니다</b></li>
-            <li><b>"카테고리 접근 권한"</b>을 체크하면 나머지 4개 화면도 전부 같이 켜집니다 (=전체 관리자)</li>
+            <li><b>"관리자 영역"</b>을 체크하면 개요·운영자 영역 모든 권한이 함께 부여됩니다</li>
             <li>각 열 맨 위 체크박스로 전체 선택/해제도 가능합니다</li>
           </ul>
         )}
@@ -1583,6 +1679,12 @@ function CategoryAccessTab({ admins, categoryAccess, reload }) {
                   {MK_CATEGORIES.map((c) => <col key={c.key} style={{ width: "14%" }} />)}
                 </colgroup>
                 <thead className="bg-slate-50 text-slate-500 text-xs">
+                  <tr>
+                    <th className="px-4 py-1.5 border-b border-slate-200"></th>
+                    <th className="px-3 py-1.5 text-center border-b border-slate-200 text-[10px] font-semibold text-slate-400 tracking-wide">개요</th>
+                    <th colSpan={3} className="px-3 py-1.5 text-center border-b border-slate-200 text-[10px] font-semibold text-slate-400 tracking-wide">운영자 영역</th>
+                    <th className="px-3 py-1.5 text-center border-b border-slate-200 text-[10px] font-semibold text-slate-400 tracking-wide">관리자 영역</th>
+                  </tr>
                   <tr>
                     <th className="text-left px-4 py-3">사용자</th>
                     {MK_CATEGORIES.map((c) => (
@@ -1733,13 +1835,15 @@ function App({ userEmail }) {
   const allNav = [
     { id: "overview", label: "Overview", icon: LayoutDashboard, cat: "overview" },
   ];
-  const adminNav = [
+  const operatorNav = [
     { id: "centers", label: "센터 관리", icon: Building2, cat: "centers" },
     { id: "qr", label: "QR 코드", icon: QrCode, cat: "qr" },
     { id: "checkins", label: "체크인 기록", icon: ListChecks, badge: needsVerify, cat: "checkins" },
+  ];
+  const adminNav = [
     { id: "categoryAccess", label: "카테고리 접근 권한", icon: KeyRound, cat: "admins" },
   ];
-  const nav = [...allNav, ...adminNav]; // 항상 전체 표시 — 권한 없는 항목은 숨기지 않고 흐릿하게 비활성화만 함
+  const nav = [...allNav, ...operatorNav, ...adminNav]; // 항상 전체 표시 — 권한 없는 항목은 숨기지 않고 흐릿하게 비활성화만 함
   const accessibleNav = nav.filter((n) => canAccess(n.cat));
 
   useEffect(() => {
@@ -1762,7 +1866,21 @@ function App({ userEmail }) {
           <p className="text-slate-400 text-[10px] text-center mt-1.5">MKQR · 방문인증 QR</p>
         </div>
         <nav className="flex-1 py-3 overflow-y-auto">
+          <div className="px-5 pt-1 pb-1.5 text-[10px] font-semibold text-white/30 tracking-wide">개요</div>
           {allNav.map((n) => {
+            const allowed = canAccess(n.cat);
+            return (
+              <button key={n.id} onClick={() => allowed ? setTab(n.id) : setPermDeniedPopup(true)}
+                className={`w-full flex items-center gap-2.5 px-5 py-2.5 text-sm ${
+                  !allowed ? "text-white/20 hover:text-white/40" : tab === n.id ? "bg-white/10 text-white" : "text-white/60 hover:text-white/90"
+                }`}>
+                <n.icon size={16} /> {n.label}
+                {!!n.badge && allowed && <span className="ml-auto bg-amber-400 text-amber-900 text-[10px] font-bold px-1.5 py-0.5 rounded-full">{n.badge}</span>}
+              </button>
+            );
+          })}
+          <div className="px-5 pt-4 pb-1.5 text-[10px] font-semibold text-white/30 tracking-wide">운영자 전용</div>
+          {operatorNav.map((n) => {
             const allowed = canAccess(n.cat);
             return (
               <button key={n.id} onClick={() => allowed ? setTab(n.id) : setPermDeniedPopup(true)}
