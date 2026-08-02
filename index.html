@@ -1265,7 +1265,9 @@ function CheckInsTab({ checkins, centers, reload, checkinRange, onRangeChange })
                 <td className="px-4 py-2.5"><Badge status={r.VerifyStatus} /></td>
                 <td className="px-4 py-2.5 font-medium text-slate-800 truncate">{r.CenterName}</td>
                 <td className="px-4 py-2.5 text-slate-500 truncate">{fmtDate(r.ServerTimestamp)}</td>
-                <td className="px-4 py-2.5 text-slate-500 truncate" title={`${r.PublicIP}${r.IpCity ? ` (${r.IpCity})` : ""}`}>{r.PublicIP}{r.IpCity ? ` (${r.IpCity})` : ""}</td>
+                <td className="px-4 py-2.5 text-slate-500" title={`${r.PublicIP}${r.IpCity ? ` (${r.IpCity})` : ""}`}>
+                  <span className="block truncate" style={{ maxWidth: "160px" }}>{r.PublicIP}{r.IpCity ? ` (${r.IpCity})` : ""}</span>
+                </td>
                 <td className="px-4 py-2.5 text-slate-500 truncate">{r.GpsAccuracy ? `±${Math.round(r.GpsAccuracy)}m` : "-"}</td>
                 <td className="px-4 py-2.5 text-slate-500 truncate">{r.DistanceKm != null ? `${Number(r.DistanceKm).toFixed(1)}km (${r.DistanceSource})` : "-"}</td>
                 <td className="px-4 py-2.5 text-slate-500 truncate" title={r.UserAgent || ""}>{parseDeviceLabel(r.UserAgent)}</td>
