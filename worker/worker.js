@@ -149,7 +149,10 @@ async function ipGeolocate(ip) {
     if (!res.ok) return null;
     const d = await res.json();
     if (d.error || d.latitude == null) return null;
-    return { lat: d.latitude, lng: d.longitude, city: [d.city, d.region].filter(Boolean).join(" ") };
+    // 서울/인천/부산/대구 등 광역시는 도시명=지역명이 같아서 그냥 합치면 "Seoul Seoul"처럼 중복 표시됨 - 같으면 한 번만.
+    const cityRegionParts = [d.city, d.region].filter(Boolean);
+    const uniqueParts = cityRegionParts.filter((v, i) => cityRegionParts.indexOf(v) === i);
+    return { lat: d.latitude, lng: d.longitude, city: uniqueParts.join(" ") };
   } catch (e) {
     return null;
   }
@@ -250,7 +253,8 @@ export default {
 
         // Cloudflare가 넘겨주는 실제 접속 IP — 클라이언트가 조작할 수 없는 신뢰 가능한 공인 IP
         const publicIp = request.headers.get("cf-connecting-ip") || "unknown";
-        const cfCity = request.cf ? [request.cf.city, request.cf.region].filter(Boolean).join(" ") : "";
+        const cfCityRegionParts = request.cf ? [request.cf.city, request.cf.region].filter(Boolean) : [];
+        const cfCity = [...new Set(cfCityRegionParts)].join(" ");
 
         // 서로 관련 없는 외부 호출(IP 위치조회, reCAPTCHA 검증)은 순서대로 기다리지 않고 동시에 실행해서 지연을 줄인다.
         const [ipLoc, recaptchaScore] = await Promise.all([
