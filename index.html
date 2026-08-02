@@ -1165,19 +1165,19 @@ function CheckInsTab({ checkins, centers, reload, checkinRange, onRangeChange })
           <table className="w-full text-[11.5px] border-collapse">
             <thead>
               <tr className="text-blue-900">
-                <th className="text-left font-semibold px-2.5 py-1.5 border border-blue-200 bg-blue-100 w-24">판정</th>
+                <th className="text-left font-semibold px-2.5 py-1.5 border border-blue-200 bg-blue-100 w-28">판정</th>
                 <th className="text-left font-semibold px-2.5 py-1.5 border border-blue-200 bg-blue-100">발생 조건</th>
                 <th className="text-left font-semibold px-2.5 py-1.5 border border-blue-200 bg-blue-100 w-44">운영자가 할 일</th>
               </tr>
             </thead>
             <tbody className="text-blue-800/90">
               <tr>
-                <td className="align-top px-2.5 py-1.5 border border-blue-200"><span className="inline-block px-2 py-0.5 rounded-full text-[10px] font-medium bg-emerald-100 text-emerald-700">정상</span></td>
+                <td className="align-top px-2.5 py-1.5 border border-blue-200"><span className="inline-block px-2 py-0.5 rounded-full text-[10px] font-medium bg-emerald-100 text-emerald-700 whitespace-nowrap">정상</span></td>
                 <td className="align-top px-2.5 py-1.5 border border-blue-200">반경 이내 + reCAPTCHA 0.3 이상 + 같은 기기의 같은 센터 누적 방문 5회 미만 — 아래 검증필요 조건에 하나도 안 걸리면 자동으로 이 상태가 됩니다</td>
                 <td className="align-top px-2.5 py-1.5 border border-blue-200 text-emerald-700 font-medium">조치 불필요 (자동 승인됨)</td>
               </tr>
               <tr>
-                <td className="align-top px-2.5 py-1.5 border border-blue-200"><span className="inline-block px-2 py-0.5 rounded-full text-[10px] font-medium bg-amber-100 text-amber-700">검증필요</span></td>
+                <td className="align-top px-2.5 py-1.5 border border-blue-200"><span className="inline-block px-2 py-0.5 rounded-full text-[10px] font-medium bg-amber-100 text-amber-700 whitespace-nowrap">검증필요</span></td>
                 <td className="align-top px-2.5 py-1.5 border border-blue-200">
                   <ul className="space-y-0.5 list-disc list-inside">
                     <li>센터별 허용 반경(기본 10km)을 벗어난 경우</li>
@@ -1189,12 +1189,12 @@ function CheckInsTab({ checkins, centers, reload, checkinRange, onRangeChange })
                 <td className="align-top px-2.5 py-1.5 border border-blue-200 text-amber-700 font-medium">확인 후 문제없으면 "관리" 열의 "승인 처리" 클릭</td>
               </tr>
               <tr>
-                <td className="align-top px-2.5 py-1.5 border border-blue-200"><span className="inline-block px-2 py-0.5 rounded-full text-[10px] font-medium bg-slate-200 text-slate-600">GPS거부</span></td>
+                <td className="align-top px-2.5 py-1.5 border border-blue-200"><span className="inline-block px-2 py-0.5 rounded-full text-[10px] font-medium bg-slate-200 text-slate-600 whitespace-nowrap">GPS거부</span></td>
                 <td className="align-top px-2.5 py-1.5 border border-blue-200">방문자의 휴대폰·PC에서 위치 정보 제공(위치 권한)을 거부한 경우</td>
                 <td className="align-top px-2.5 py-1.5 border border-blue-200 text-amber-700 font-medium">확인 후 문제없으면 "관리" 열의 "승인 처리" 클릭</td>
               </tr>
               <tr>
-                <td className="align-top px-2.5 py-1.5 border border-blue-200"><span className="inline-block px-2 py-0.5 rounded-full text-[10px] font-medium bg-red-100 text-red-700">자동 30분 차단</span></td>
+                <td className="align-top px-2.5 py-1.5 border border-blue-200"><span className="inline-block px-2 py-0.5 rounded-full text-[10px] font-medium bg-red-100 text-red-700 whitespace-nowrap">자동 30분 차단</span></td>
                 <td className="align-top px-2.5 py-1.5 border border-blue-200">같은 기기가 1분 안에 5회 초과 접근 — 그 즉시 접속 자체가 막히며 이 시도는 기록도 안 남음</td>
                 <td className="align-top px-2.5 py-1.5 border border-blue-200 text-red-700 font-medium">급하면 "차단됨(N분)·해제" 클릭 (30분 기다리지 않고 조기 해제)</td>
               </tr>
