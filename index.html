@@ -1180,8 +1180,7 @@ function CheckInsTab({ checkins, centers, reload, checkinRange, onRangeChange })
                 <td className="align-top px-2.5 py-1.5 border border-blue-200"><span className="inline-block px-2 py-0.5 rounded-full text-[10px] font-medium bg-amber-100 text-amber-700 whitespace-nowrap">검증필요</span></td>
                 <td className="align-top px-2.5 py-1.5 border border-blue-200">
                   <ul className="space-y-0.5 list-disc list-inside">
-                    <li>센터별 허용 반경(기본 10km)을 벗어난 경우</li>
-                    <li>반경 이내라도 거리 300m 이상 + reCAPTCHA 0.5 이상(사람처럼 행동) — 한 번 더 확인차 표시</li>
+                    <li>해당 센터에 설정된 허용 반경(센터 관리에서 센터마다 다르게 설정 가능, 기본값 10km)을 벗어난 경우</li>
                     <li>reCAPTCHA 점수 0.3 미만(봇처럼 행동)</li>
                     <li>같은 기기가 같은 센터를 통틀어 5회 이상 방문(기간 제한 없음) — 실적 부풀리기 방지</li>
                   </ul>
