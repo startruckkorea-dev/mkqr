@@ -157,7 +157,7 @@ function renderSuccess(data, fingerprint) {
   else if (data.gpsUsed) desc = "현재 위치가 센터의 허용 범위를 벗어나 있어<br>담당자 확인 후 처리됩니다.";
   else desc = "위치 정보 확인이 어려워<br>담당자 확인 후 처리됩니다.";
 
-  const authCode = fingerprint ? fingerprint.slice(0, 8).toUpperCase() : "";
+  const authCode = fingerprint ? fingerprint.slice(0, 16).toUpperCase() : "";
   showFinal(`
     <div class="result-icon ${ok ? "ok" : "warn"}">${ok ? "✓" : "!"}</div>
     <div class="result-title">${ok ? "체크인 완료" : "체크인 접수 (확인 필요)"}</div>

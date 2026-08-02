@@ -1112,7 +1112,7 @@ function CheckInsTab({ checkins, centers, reload, checkinRange, onRangeChange })
   // 이 마커 하나만 남겨도 즉시 해당 기기의 접근이 재개된다.
   async function unblockDevice(r) {
     if (!r.DeviceFingerprint) { alert("이 기록엔 기기 식별코드가 없습니다."); return; }
-    if (!confirm(`"${r.CenterName}" 센터에서 인증코드 ${r.DeviceFingerprint.slice(0, 8).toUpperCase()} 기기의 차단을 즉시 해제할까요?`)) return;
+    if (!confirm(`"${r.CenterName}" 센터에서 인증코드 ${r.DeviceFingerprint.slice(0, 16).toUpperCase()} 기기의 차단을 즉시 해제할까요?`)) return;
     try {
       await mkCreateItem(MK_LISTS.checkins, {
         Title: `차단해제 ${r.CenterName} ${new Date().toISOString().slice(0, 16).replace("T", " ")}`,
@@ -1130,7 +1130,7 @@ function CheckInsTab({ checkins, centers, reload, checkinRange, onRangeChange })
     const data = rows.map((r) => ({
       센터: r.CenterName, 시각: fmtDate(r.ServerTimestamp),
       공인IP: r.PublicIP, "IP위치(도시)": r.IpCity, GPS좌표: r.GpsLat ? `${r.GpsLat}, ${r.GpsLng}` : "",
-      "거리(km)": r.DistanceKm, 판정: r.VerifyStatus, reCAPTCHA점수: r.RecaptchaScore, 기기요약: parseDeviceLabel(r.UserAgent), 인증코드: (r.DeviceFingerprint || "").slice(0, 8).toUpperCase(), 기기ID: r.DeviceId, UserAgent원본: r.UserAgent,
+      "거리(km)": r.DistanceKm, 판정: r.VerifyStatus, reCAPTCHA점수: r.RecaptchaScore, 기기요약: parseDeviceLabel(r.UserAgent), 인증코드: (r.DeviceFingerprint || "").slice(0, 16).toUpperCase(), 기기ID: r.DeviceId, UserAgent원본: r.UserAgent,
     }));
     const ws = XLSX.utils.json_to_sheet(data);
     const wb = XLSX.utils.book_new();
@@ -1169,6 +1169,7 @@ function CheckInsTab({ checkins, centers, reload, checkinRange, onRangeChange })
                 <li>센터별 허용 반경(기본 10km)을 벗어난 경우</li>
                 <li>반경 안이라도 거리 300m 이상 + reCAPTCHA 0.5 이상(사람처럼 행동)인 경우, 한 번 더 확인차 표시</li>
                 <li>reCAPTCHA 점수 0.3 미만(봇처럼 행동)인 경우</li>
+                <li>같은 기기가 같은 센터를 통틀어 5회 이상 방문한 경우(기간 제한 없음) — 실적 부풀리기 방지</li>
               </ul>
               <div className="mt-0.5 ml-4 text-blue-700/80">→ 확인 후 문제없으면 표 오른쪽 <b>"관리"</b> 열의 <b>"승인 처리"</b> 버튼을 눌러주세요</div>
             </li>
@@ -1241,7 +1242,7 @@ function CheckInsTab({ checkins, centers, reload, checkinRange, onRangeChange })
             <col style={{ width: "100px" }} />
             <col style={{ width: "110px" }} />
             <col style={{ width: "150px" }} />
-            <col style={{ width: "100px" }} />
+            <col style={{ width: "150px" }} />
             <col style={{ width: "130px" }} />
             <col style={{ width: "190px" }} />
           </colgroup>
@@ -1271,7 +1272,7 @@ function CheckInsTab({ checkins, centers, reload, checkinRange, onRangeChange })
                 <td className="px-4 py-2.5 text-slate-500 truncate">{r.GpsAccuracy ? `±${Math.round(r.GpsAccuracy)}m` : "-"}</td>
                 <td className="px-4 py-2.5 text-slate-500 truncate">{r.DistanceKm != null ? `${Number(r.DistanceKm).toFixed(1)}km (${r.DistanceSource})` : "-"}</td>
                 <td className="px-4 py-2.5 text-slate-500 truncate" title={r.UserAgent || ""}>{parseDeviceLabel(r.UserAgent)}</td>
-                <td className="px-4 py-2.5 text-slate-400 font-mono text-xs truncate" title={r.DeviceFingerprint || ""}>{r.DeviceFingerprint ? r.DeviceFingerprint.slice(0, 8).toUpperCase() : "-"}</td>
+                <td className="px-4 py-2.5 text-slate-400 font-mono text-xs truncate" title={r.DeviceFingerprint || ""}>{r.DeviceFingerprint ? r.DeviceFingerprint.slice(0, 16).toUpperCase() : "-"}</td>
                 <td className="px-4 py-2.5 whitespace-nowrap">
                   {r.RecaptchaScore == null
                     ? <span className="text-xs text-slate-400">미확인</span>

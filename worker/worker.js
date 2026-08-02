@@ -30,6 +30,8 @@ const SITE_PATH = "startruckkorea.sharepoint.com:/sites/STK-DB:";
 const VERIFY_RADIUS_M_DEFAULT = 10000; // 센터에 별도 설정이 없을 때 쓰는 기본 허용 반경(m)
 const EXTRA_REVIEW_DISTANCE_M = 300;    // 센터 반경 설정과 별개로 항상 적용되는 촘촘한 기준
 const EXTRA_REVIEW_RECAPTCHA_MIN = 0.5; // 이 값 이상(=사람처럼 행동)인데도 300m 넘게 떨어졌으면 관리자 확인 필요
+const REPEAT_VISIT_REVIEW_COUNT = 5;    // 같은 센터를 같은 기기가 이 횟수 이상(누적, 기간제한 없음) 찍으면 무조건 관리자 확인 필요
+                                         // - 리워드(방문 실적 포상) 대상 센터를 특정 직원이 반복 태깅해서 부풀리는 것을 막기 위한 규칙
 const RATE_LIMIT_WINDOW_MS = 60 * 1000;        // 1분
 const RATE_LIMIT_COUNT = 5;                     // 이 시간 안에 이 횟수 초과 접근하면 차단
 const RATE_LIMIT_BLOCK_MS = 30 * 60 * 1000;     // 30분 차단
@@ -115,6 +117,20 @@ async function listItems(env, listName, filterQuery = "") {
 async function listRecentCheckins(env, sinceMs) {
   const sinceIso = new Date(sinceMs).toISOString();
   return listItems(env, "mkqr_CheckIns", `&$filter=fields/ServerTimestamp ge '${sinceIso}'`);
+}
+
+// 같은 센터를 같은 기기가 지금까지(기간 제한 없이) 몇 번 찍었는지 조회 - 리워드 부정사용 방지용.
+// CenterId/DeviceFingerprint는 인덱스가 없는 컬럼이라 HonorNonIndexedQueriesWarningMayFailRandomly로 조회하며,
+// 조회 자체가 실패해도(네트워크 오류 등) 체크인 자체를 막지 않기 위해 0으로 처리한다(fail-open).
+async function countDeviceCenterVisits(env, centerId, fingerprint) {
+  if (!fingerprint || !centerId) return 0;
+  try {
+    const items = await listItems(env, "mkqr_CheckIns",
+      `&$filter=fields/CenterId eq '${centerId}' and fields/DeviceFingerprint eq '${fingerprint}'`);
+    return items.filter((it) => it.fields.VerifyStatus !== "차단해제").length;
+  } catch (e) {
+    return 0;
+  }
 }
 
 async function createItem(env, listName, fields) {
@@ -291,6 +307,16 @@ export default {
         if (verifyStatus === "정상" && distKm != null && distKm * 1000 >= EXTRA_REVIEW_DISTANCE_M
             && recaptchaScore != null && recaptchaScore >= EXTRA_REVIEW_RECAPTCHA_MIN) {
           verifyStatus = "검증필요";
+        }
+
+        // 리워드 부정사용 방지: 이번 건까지 포함해 같은 센터+기기 누적 방문이 REPEAT_VISIT_REVIEW_COUNT회
+        // 이상이면 위치·reCAPTCHA가 전부 정상이어도 무조건 관리자 확인이 필요하도록 내린다.
+        // (1분 5회 초과 즉시차단 규칙과는 별개 - 그건 짧은 시간 내 반복 접근을, 이건 기간 제한 없는 누적 반복 방문을 잡는다)
+        if (verifyStatus === "정상") {
+          const priorVisits = await countDeviceCenterVisits(env, String(center.id), deviceFingerprint);
+          if (priorVisits + 1 >= REPEAT_VISIT_REVIEW_COUNT) {
+            verifyStatus = "검증필요";
+          }
         }
 
         const now = new Date().toISOString();
