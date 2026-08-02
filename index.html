@@ -1154,37 +1154,52 @@ function CheckInsTab({ checkins, centers, reload, checkinRange, onRangeChange })
 
   return (
     <div className="mx-auto w-fit max-w-full">
-      <div className="bg-blue-50 border border-blue-100 rounded-xl px-4 py-3 mb-4 max-w-3xl">
+      <div className="bg-blue-50 border border-blue-100 rounded-xl px-4 py-3 mb-4 max-w-4xl">
         <button onClick={() => setShowInfo((v) => !v)} className="w-full flex items-center gap-2.5 text-left">
           <AlertTriangle size={15} className="text-blue-500 shrink-0" />
-          <span className="text-xs font-medium text-blue-900 flex-1">자동 판정 기준 안내</span>
+          <span className="text-xs font-medium text-blue-900 flex-1">운영자 처리 판정 기준 안내</span>
           {showInfo ? <ChevronUp size={15} className="text-blue-500" /> : <ChevronDown size={15} className="text-blue-500" />}
         </button>
         {showInfo && (
-        <div className="text-xs text-blue-900 leading-normal mt-2 pl-[26px]">
-          <ul className="space-y-1 text-blue-800/90 text-[11.5px] list-disc list-inside">
-            <li>
-              <b>검증필요</b> — 아래 셋 중 하나라도 해당하면 표시됩니다
-              <ul className="mt-0.5 ml-4 space-y-0.5 list-[circle] list-inside">
-                <li>센터별 허용 반경(기본 10km)을 벗어난 경우</li>
-                <li>반경 안이라도 거리 300m 이상 + reCAPTCHA 0.5 이상(사람처럼 행동)인 경우, 한 번 더 확인차 표시</li>
-                <li>reCAPTCHA 점수 0.3 미만(봇처럼 행동)인 경우</li>
-                <li>같은 기기가 같은 센터를 통틀어 5회 이상 방문한 경우(기간 제한 없음) — 실적 부풀리기 방지</li>
-              </ul>
-              <div className="mt-0.5 ml-4 text-blue-700/80">→ 확인 후 문제없으면 표 오른쪽 <b>"관리"</b> 열의 <b>"승인 처리"</b> 버튼을 눌러주세요</div>
-            </li>
-            <li>
-              <b>GPS거부</b>
-              <div className="mt-0.5 ml-4 text-blue-800/90">방문자의 휴대폰·PC에서 위치 정보 제공(위치 권한)을 거부한 경우입니다</div>
-            </li>
-            <li>
-              <b>자동 30분 차단</b>
-              <ul className="mt-0.5 ml-4 space-y-0.5 list-[circle] list-inside">
-                <li>같은 기기가 1분 안에 5회 초과 접근하면 그 즉시 접속 자체가 막힙니다 (이 시도는 기록도 안 남음)</li>
-                <li>급하면 표의 <b>"차단해제"</b> 버튼으로 30분 기다리지 않고 조기 해제 가능</li>
-              </ul>
-            </li>
-          </ul>
+        <div className="mt-2.5 overflow-x-auto">
+          <table className="w-full text-[11.5px] border-collapse">
+            <thead>
+              <tr className="text-blue-900">
+                <th className="text-left font-semibold px-2.5 py-1.5 border border-blue-200 bg-blue-100 w-24">판정</th>
+                <th className="text-left font-semibold px-2.5 py-1.5 border border-blue-200 bg-blue-100">발생 조건</th>
+                <th className="text-left font-semibold px-2.5 py-1.5 border border-blue-200 bg-blue-100 w-44">운영자가 할 일</th>
+              </tr>
+            </thead>
+            <tbody className="text-blue-800/90">
+              <tr>
+                <td className="align-top px-2.5 py-1.5 border border-blue-200"><span className="inline-block px-2 py-0.5 rounded-full text-[10px] font-medium bg-emerald-100 text-emerald-700">정상</span></td>
+                <td className="align-top px-2.5 py-1.5 border border-blue-200">반경 이내 + reCAPTCHA 0.3 이상 + 같은 기기의 같은 센터 누적 방문 5회 미만 — 아래 검증필요 조건에 하나도 안 걸리면 자동으로 이 상태가 됩니다</td>
+                <td className="align-top px-2.5 py-1.5 border border-blue-200 text-emerald-700 font-medium">조치 불필요 (자동 승인됨)</td>
+              </tr>
+              <tr>
+                <td className="align-top px-2.5 py-1.5 border border-blue-200"><span className="inline-block px-2 py-0.5 rounded-full text-[10px] font-medium bg-amber-100 text-amber-700">검증필요</span></td>
+                <td className="align-top px-2.5 py-1.5 border border-blue-200">
+                  <ul className="space-y-0.5 list-disc list-inside">
+                    <li>센터별 허용 반경(기본 10km)을 벗어난 경우</li>
+                    <li>반경 이내라도 거리 300m 이상 + reCAPTCHA 0.5 이상(사람처럼 행동) — 한 번 더 확인차 표시</li>
+                    <li>reCAPTCHA 점수 0.3 미만(봇처럼 행동)</li>
+                    <li>같은 기기가 같은 센터를 통틀어 5회 이상 방문(기간 제한 없음) — 실적 부풀리기 방지</li>
+                  </ul>
+                </td>
+                <td className="align-top px-2.5 py-1.5 border border-blue-200 text-amber-700 font-medium">확인 후 문제없으면 "관리" 열의 "승인 처리" 클릭</td>
+              </tr>
+              <tr>
+                <td className="align-top px-2.5 py-1.5 border border-blue-200"><span className="inline-block px-2 py-0.5 rounded-full text-[10px] font-medium bg-slate-200 text-slate-600">GPS거부</span></td>
+                <td className="align-top px-2.5 py-1.5 border border-blue-200">방문자의 휴대폰·PC에서 위치 정보 제공(위치 권한)을 거부한 경우</td>
+                <td className="align-top px-2.5 py-1.5 border border-blue-200 text-amber-700 font-medium">확인 후 문제없으면 "관리" 열의 "승인 처리" 클릭</td>
+              </tr>
+              <tr>
+                <td className="align-top px-2.5 py-1.5 border border-blue-200"><span className="inline-block px-2 py-0.5 rounded-full text-[10px] font-medium bg-red-100 text-red-700">자동 30분 차단</span></td>
+                <td className="align-top px-2.5 py-1.5 border border-blue-200">같은 기기가 1분 안에 5회 초과 접근 — 그 즉시 접속 자체가 막히며 이 시도는 기록도 안 남음</td>
+                <td className="align-top px-2.5 py-1.5 border border-blue-200 text-red-700 font-medium">급하면 "차단됨(N분)·해제" 클릭 (30분 기다리지 않고 조기 해제)</td>
+              </tr>
+            </tbody>
+          </table>
         </div>
         )}
       </div>
