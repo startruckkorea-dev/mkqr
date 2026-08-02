@@ -306,6 +306,68 @@ async function loadEmployeeDirectory() {
   return _mkEmployeeDirectory;
 }
 
+// ICS의 ics_ui_strings.xlsx와 같은 방식 — mkqr_ui_content.xlsx(Documents 라이브러리, employee_search.xlsx 옆)에서
+// 화면 문구(Overview 소개글, 판정 기준 표)를 읽어와 코드 재배포 없이 문구만 수정할 수 있게 한다.
+// 파일이 없거나 조회 실패하면 기본 문구(DEFAULT_UI_CONTENT)로 fail-open.
+const DEFAULT_UI_CONTENT = {
+  overviewIntro: "센터/업체별 QR 코드를 발급해서, 방문자가 로그인 없이 QR만 스캔하면 자동으로 시각·위치(GPS/IP)·기기 정보를 기록하고 센터 반경 안인지 자동 검증하는 캠페인 방문 인증 시스템입니다. 어뷰징 방지를 위한 기기 핑거프린트, reCAPTCHA, 짧은 시간 반복 접근 자동 차단 기능이 포함되어 있습니다.",
+  verifyRules: [
+    { status: "정상", recorded: true, condition: "반경 이내 + reCAPTCHA 0.3 이상 + 같은 기기의 같은 센터 누적 방문 5회 미만 — 아래 검증필요 조건에 하나도 안 걸리면 자동으로 이 상태가 됩니다", action: "조치 불필요 (자동 승인됨)" },
+    { status: "검증필요", recorded: true, condition: "해당 센터에 설정된 허용 반경(센터 관리에서 센터마다 다르게 설정 가능, 기본값 10km)을 벗어난 경우\nreCAPTCHA 점수 0.3 미만(봇처럼 행동)\n같은 기기가 같은 센터를 통틀어 5회 이상 방문(기간 제한 없음) — 실적 부풀리기 방지", action: "확인 후 문제없으면 \"관리\" 열의 \"승인 처리\" 클릭" },
+    { status: "GPS거부", recorded: true, condition: "방문자의 휴대폰·PC에서 위치 정보 제공(위치 권한)을 거부한 경우", action: "확인 후 문제없으면 \"관리\" 열의 \"승인 처리\" 클릭" },
+    { status: "자동 30분 차단", recorded: false, condition: "같은 기기가 1분 안에 5회 초과 접근 — 그 즉시 접속 자체가 막히며 이 시도는 기록도 안 남음", action: "급하면 \"차단됨(N분)·해제\" 클릭 (30분 기다리지 않고 조기 해제)" },
+  ],
+};
+async function loadUiContent() {
+  try {
+    const token = await getGraphToken();
+    const docDriveId = await getMkDocDriveId(token);
+    const res = await fetch(`${GRAPH}/drives/${docDriveId}/root:/mkqr_ui_content.xlsx:/content`, {
+      headers: { Authorization: "Bearer " + token }, cache: "no-cache",
+    });
+    if (!res.ok) throw new Error(`mkqr_ui_content.xlsx 조회 실패 (${res.status})`);
+    const buf = await res.arrayBuffer();
+    const wb = XLSX.read(buf, { type: "array" });
+
+    const result = { overviewIntro: DEFAULT_UI_CONTENT.overviewIntro, verifyRules: DEFAULT_UI_CONTENT.verifyRules };
+
+    if (wb.Sheets["Texts"]) {
+      const rows = XLSX.utils.sheet_to_json(wb.Sheets["Texts"]);
+      const introRow = rows.find((r) => String(r.Key || "").trim() === "overview_intro");
+      if (introRow && introRow["내용"]) result.overviewIntro = String(introRow["내용"]).trim();
+    }
+    if (wb.Sheets["VerifyRules"]) {
+      const rows = XLSX.utils.sheet_to_json(wb.Sheets["VerifyRules"]);
+      const rules = rows
+        .filter((r) => r["판정"])
+        .sort((a, b) => (a["순서"] || 0) - (b["순서"] || 0))
+        .map((r) => ({
+          status: String(r["판정"] || "").trim(),
+          recorded: String(r["기록"] || "").trim().toUpperCase() !== "X",
+          condition: String(r["발생조건"] || "").trim(),
+          action: String(r["운영자가 할 일"] || "").trim(),
+        }));
+      if (rules.length) result.verifyRules = rules;
+    }
+    return result;
+  } catch (e) {
+    console.warn("[MKQR] mkqr_ui_content.xlsx 로딩 실패, 기본 문구 사용:", e.message);
+    return DEFAULT_UI_CONTENT;
+  }
+}
+
+// 판정 이름별 배지/텍스트 색상 매핑 - mkqr_ui_content.xlsx에서 새로운 판정명을 추가해도 정의 안 된 이름은
+// 무난한 회색으로 자동 대체되어 화면이 깨지지 않는다.
+function verifyRuleStyle(status) {
+  const map = {
+    "정상": { badge: "bg-emerald-100 text-emerald-700", text: "text-emerald-700" },
+    "검증필요": { badge: "bg-amber-100 text-amber-700", text: "text-amber-700" },
+    "GPS거부": { badge: "bg-slate-200 text-slate-600", text: "text-amber-700" },
+    "자동 30분 차단": { badge: "bg-red-100 text-red-700", text: "text-red-700" },
+  };
+  return map[status] || { badge: "bg-slate-100 text-slate-600", text: "text-slate-700" };
+}
+
 function randomToken(len = 10) {
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
   let s = "";
@@ -1070,7 +1132,7 @@ function QrTab({ centers, highlightId }) {
 /* ------------------------------------------------------------------ */
 /* 체크인 기록 탭                                                       */
 /* ------------------------------------------------------------------ */
-function CheckInsTab({ checkins, centers, reload, checkinRange, onRangeChange }) {
+function CheckInsTab({ checkins, centers, reload, checkinRange, onRangeChange, verifyRules }) {
   const [filter, setFilter] = useState("전체");
   const [q, setQ] = useState("");
   const [page, setPage] = useState(1);
@@ -1172,36 +1234,22 @@ function CheckInsTab({ checkins, centers, reload, checkinRange, onRangeChange })
               </tr>
             </thead>
             <tbody className="text-blue-800/90">
-              <tr>
-                <td className="align-top px-2.5 py-1.5 border border-blue-200"><span className="inline-block px-2 py-0.5 rounded-full text-[10px] font-medium bg-emerald-100 text-emerald-700 whitespace-nowrap">정상</span></td>
-                <td className="align-top text-center px-2.5 py-1.5 border border-blue-200 text-emerald-600 font-semibold">O</td>
-                <td className="align-top px-2.5 py-1.5 border border-blue-200">반경 이내 + reCAPTCHA 0.3 이상 + 같은 기기의 같은 센터 누적 방문 5회 미만 — 아래 검증필요 조건에 하나도 안 걸리면 자동으로 이 상태가 됩니다</td>
-                <td className="align-top px-2.5 py-1.5 border border-blue-200 text-emerald-700 font-medium">조치 불필요 (자동 승인됨)</td>
-              </tr>
-              <tr>
-                <td className="align-top px-2.5 py-1.5 border border-blue-200"><span className="inline-block px-2 py-0.5 rounded-full text-[10px] font-medium bg-amber-100 text-amber-700 whitespace-nowrap">검증필요</span></td>
-                <td className="align-top text-center px-2.5 py-1.5 border border-blue-200 text-emerald-600 font-semibold">O</td>
-                <td className="align-top px-2.5 py-1.5 border border-blue-200">
-                  <ul className="space-y-0.5 list-disc list-inside">
-                    <li>해당 센터에 설정된 허용 반경(센터 관리에서 센터마다 다르게 설정 가능, 기본값 10km)을 벗어난 경우</li>
-                    <li>reCAPTCHA 점수 0.3 미만(봇처럼 행동)</li>
-                    <li>같은 기기가 같은 센터를 통틀어 5회 이상 방문(기간 제한 없음) — 실적 부풀리기 방지</li>
-                  </ul>
-                </td>
-                <td className="align-top px-2.5 py-1.5 border border-blue-200 text-amber-700 font-medium">확인 후 문제없으면 "관리" 열의 "승인 처리" 클릭</td>
-              </tr>
-              <tr>
-                <td className="align-top px-2.5 py-1.5 border border-blue-200"><span className="inline-block px-2 py-0.5 rounded-full text-[10px] font-medium bg-slate-200 text-slate-600 whitespace-nowrap">GPS거부</span></td>
-                <td className="align-top text-center px-2.5 py-1.5 border border-blue-200 text-emerald-600 font-semibold">O</td>
-                <td className="align-top px-2.5 py-1.5 border border-blue-200">방문자의 휴대폰·PC에서 위치 정보 제공(위치 권한)을 거부한 경우</td>
-                <td className="align-top px-2.5 py-1.5 border border-blue-200 text-amber-700 font-medium">확인 후 문제없으면 "관리" 열의 "승인 처리" 클릭</td>
-              </tr>
-              <tr>
-                <td className="align-top px-2.5 py-1.5 border border-blue-200"><span className="inline-block px-2 py-0.5 rounded-full text-[10px] font-medium bg-red-100 text-red-700 whitespace-nowrap">자동 30분 차단</span></td>
-                <td className="align-top text-center px-2.5 py-1.5 border border-blue-200 text-red-600 font-semibold">X</td>
-                <td className="align-top px-2.5 py-1.5 border border-blue-200">같은 기기가 1분 안에 5회 초과 접근 — 그 즉시 접속 자체가 막히며 이 시도는 기록도 안 남음</td>
-                <td className="align-top px-2.5 py-1.5 border border-blue-200 text-red-700 font-medium">급하면 "차단됨(N분)·해제" 클릭 (30분 기다리지 않고 조기 해제)</td>
-              </tr>
+              {(verifyRules || []).map((rule, i) => {
+                const style = verifyRuleStyle(rule.status);
+                const lines = (rule.condition || "").split("\n").map((s) => s.trim()).filter(Boolean);
+                return (
+                  <tr key={i}>
+                    <td className="align-top px-2.5 py-1.5 border border-blue-200"><span className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-medium whitespace-nowrap ${style.badge}`}>{rule.status}</span></td>
+                    <td className={`align-top text-center px-2.5 py-1.5 border border-blue-200 font-semibold ${rule.recorded ? "text-emerald-600" : "text-red-600"}`}>{rule.recorded ? "O" : "X"}</td>
+                    <td className="align-top px-2.5 py-1.5 border border-blue-200">
+                      {lines.length > 1
+                        ? <ul className="space-y-0.5 list-disc list-inside">{lines.map((l, li) => <li key={li}>{l}</li>)}</ul>
+                        : (lines[0] || "")}
+                    </td>
+                    <td className={`align-top px-2.5 py-1.5 border border-blue-200 font-medium ${style.text}`}>{rule.action}</td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -1373,7 +1421,7 @@ function CheckInDetailModal({ row, onClose }) {
 /* ------------------------------------------------------------------ */
 /* Overview 탭                                                         */
 /* ------------------------------------------------------------------ */
-function OverviewTab({ centers, checkins, admins, setTab }) {
+function OverviewTab({ centers, checkins, admins, setTab, introText }) {
   const activeCenters = centers.filter((c) => c.Active !== false).length;
   const needsVerify = checkins.filter((r) => r.VerifyStatus === "검증필요").length;
   const last30 = checkins.filter((r) => {
@@ -1398,9 +1446,7 @@ function OverviewTab({ centers, checkins, admins, setTab }) {
             <h3 className="font-semibold">MKQR이란?</h3>
           </div>
           <p className="text-sm text-white/70 leading-relaxed max-w-3xl">
-            센터/업체별 QR 코드를 발급해서, 방문자가 로그인 없이 QR만 스캔하면 자동으로 시각·위치(GPS/IP)·기기 정보를 기록하고
-            센터 반경 안인지 자동 검증하는 캠페인 방문 인증 시스템입니다. 어뷰징 방지를 위한 기기 핑거프린트, reCAPTCHA,
-            짧은 시간 반복 접근 자동 차단 기능이 포함되어 있습니다.
+            {introText}
           </p>
         </div>
         <div className="absolute -right-6 -bottom-10 w-40 h-40 rounded-full bg-white/5" />
@@ -1803,6 +1849,8 @@ function App({ userEmail }) {
   const [hasLoadedOnce, setHasLoadedOnce] = useState(false); // 최초 로딩에만 전체화면 로딩 표시 — 그 이후 새로고침은 화면을 안 갈아엎음
   const [highlightId, setHighlightId] = useState(null);
   const [permDeniedPopup, setPermDeniedPopup] = useState(false); // 권한 없는 카테고리 클릭 시 안내 팝업
+  const [uiContent, setUiContent] = useState(DEFAULT_UI_CONTENT); // mkqr_ui_content.xlsx에서 불러온 화면 문구 (Overview 소개글, 판정 기준 표)
+  useEffect(() => { loadUiContent().then(setUiContent); }, []);
 
   async function reload(range = checkinRange) {
     setLoading(true);
@@ -1957,10 +2005,10 @@ function App({ userEmail }) {
           </div>
         ) : (
           <>
-            {tab === "overview" && <OverviewTab centers={centers} checkins={checkins} admins={admins} setTab={setTab} />}
+            {tab === "overview" && <OverviewTab centers={centers} checkins={checkins} admins={admins} setTab={setTab} introText={uiContent.overviewIntro} />}
             {tab === "centers" && <CentersTab centers={centers} reload={reload} onCreated={handleCenterCreated} />}
             {tab === "qr" && <QrTab centers={centers} highlightId={highlightId} />}
-            {tab === "checkins" && <CheckInsTab checkins={checkins} centers={centers} reload={reload} checkinRange={checkinRange} onRangeChange={changeCheckinRange} />}
+            {tab === "checkins" && <CheckInsTab checkins={checkins} centers={centers} reload={reload} checkinRange={checkinRange} onRangeChange={changeCheckinRange} verifyRules={uiContent.verifyRules} />}
             {tab === "categoryAccess" && <CategoryAccessTab admins={admins} categoryAccess={categoryAccess} reload={reload} />}
           </>
         )}
