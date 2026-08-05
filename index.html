@@ -234,7 +234,7 @@ async function uploadCenterIcon(file) {
   }
   const token = await getGraphToken();
   const driveId = await getMkAttachedFilesDriveId();
-  const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+  const today = new Date(new Date().getTime()+9*3600*1000).toISOString().slice(0, 10); // YYYY-MM-DD
   const safeName = `${Date.now()}_${file.name.replace(/[^\w.\-가-힣]/g, "_")}`;
   const path = `MKQR_Media_AttachedFiles/${today}/${encodeURIComponent(safeName)}`;
   const buf = await file.arrayBuffer();
@@ -609,7 +609,7 @@ function CentersTab({ centers, reload, onCreated }) {
     const ws = XLSX.utils.json_to_sheet(data);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "센터목록");
-    XLSX.writeFile(wb, `MKQR_센터목록_${new Date().toISOString().slice(0, 10)}.xlsx`);
+    XLSX.writeFile(wb, `MKQR_센터목록_${new Date(new Date().getTime()+9*3600*1000).toISOString().slice(0, 10)}.xlsx`);
   }
 
   // mkqr 전용 가져오기 양식 다운로드 — "템플릿 다운로드" 버튼에서 사용
@@ -1059,7 +1059,7 @@ function QrTab({ centers, highlightId }) {
       const blob = await zip.generateAsync({ type: "blob" });
       const link = document.createElement("a");
       link.href = URL.createObjectURL(blob);
-      link.download = `MKQR_QR코드_전체_${new Date().toISOString().slice(0, 10)}.zip`;
+      link.download = `MKQR_QR코드_전체_${new Date(new Date().getTime()+9*3600*1000).toISOString().slice(0, 10)}.zip`;
       link.click();
     } catch (e) { alert("전체 다운로드 실패: " + e.message); } finally { setDownloadingAll(false); }
   }
@@ -1177,7 +1177,7 @@ function CheckInsTab({ checkins, centers, reload, checkinRange, onRangeChange, v
     if (!confirm(`"${r.CenterName}" 센터에서 인증코드 ${r.DeviceFingerprint.slice(0, 16).toUpperCase()} 기기의 차단을 즉시 해제할까요?`)) return;
     try {
       await mkCreateItem(MK_LISTS.checkins, {
-        Title: `차단해제 ${r.CenterName} ${new Date().toISOString().slice(0, 16).replace("T", " ")}`,
+        Title: `차단해제 ${r.CenterName} ${new Date(new Date().getTime()+9*3600*1000).toISOString().slice(0, 16).replace("T", " ")}`,
         CenterId: r.CenterId, CenterName: r.CenterName,
         DeviceFingerprint: r.DeviceFingerprint,
         VerifyStatus: "차단해제",
@@ -1197,7 +1197,7 @@ function CheckInsTab({ checkins, centers, reload, checkinRange, onRangeChange, v
     const ws = XLSX.utils.json_to_sheet(data);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "체크인기록");
-    XLSX.writeFile(wb, `MKQR_체크인기록_${new Date().toISOString().slice(0, 10)}.xlsx`);
+    XLSX.writeFile(wb, `MKQR_체크인기록_${new Date(new Date().getTime()+9*3600*1000).toISOString().slice(0, 10)}.xlsx`);
   }
 
   // "차단해제" 버튼은 이제 실제로 지금 차단 중인 기기에만 보여준다 (예전엔 최근 행마다 항상 떠서 오해가 있었음).
