@@ -1548,12 +1548,24 @@ function CategoryAccessTab({ admins, categoryAccess, reload }) {
     ? merged.filter((p) => p.name.toLowerCase().includes(qq) || p.email.includes(qq) || (p.dept || "").toLowerCase().includes(qq))
     : merged;
 
+  // 권한이 저장된 사람을 맨 위로 — 관리자(카테고리 접근 권한까지) → 그 밖에 한 칸이라도 체크된 사람 → 나머지(이름순 그대로).
+  // 순서는 "저장된 값" 기준이라, 체크박스를 눌러도 반영 전까지는 행이 움직이지 않는다(10-02).
+  const accessRank = (p) => {
+    const row = categoryAccess.find((r) => (r.Email || "").toLowerCase() === p.email);
+    if (!row) return 2;
+    if (row.Access_admins === true) return 0;
+    return MK_CATEGORIES.some((c) => row[c.field] === true) ? 1 : 2;
+  };
+  const sorted = filtered.map((p, i) => [p, i, accessRank(p)]).sort((a, b) => a[2] - b[2] || a[1] - b[1]);
+  const grantedCount = sorted.filter((x) => x[2] < 2).length;
+  const ordered = sorted.map((x) => x[0]);
+
   const [page, setPage] = useState(1);
-  const PAGE_SIZE = 10;
+  const PAGE_SIZE = 20;
   useEffect(() => { setPage(1); }, [q]);
-  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const totalPages = Math.max(1, Math.ceil(ordered.length / PAGE_SIZE));
   const pageSafe = Math.min(page, totalPages);
-  const pageRows = filtered.slice((pageSafe - 1) * PAGE_SIZE, pageSafe * PAGE_SIZE);
+  const pageRows = ordered.slice((pageSafe - 1) * PAGE_SIZE, pageSafe * PAGE_SIZE);
 
   function rowFor(email) {
     return categoryAccess.find((r) => (r.Email || "").toLowerCase() === email);
@@ -1730,13 +1742,14 @@ function CategoryAccessTab({ admins, categoryAccess, reload }) {
           {filtered.length > 0 && (
             <div className="text-slate-400 text-xs mb-2">
               총 {filtered.length}명 중 {(pageSafe - 1) * PAGE_SIZE + 1}–{Math.min(pageSafe * PAGE_SIZE, filtered.length)}명 표시
+              {grantedCount > 0 && <span> · 권한이 있는 {grantedCount}명을 맨 위에 표시</span>}
             </div>
           )}
           <div className="bg-white rounded-xl border overflow-hidden">
             <table className="w-full text-sm table-fixed">
                 <colgroup>
-                  <col style={{ width: "30%" }} />
-                  {MK_CATEGORIES.map((c) => <col key={c.key} style={{ width: "14%" }} />)}
+                  <col style={{ width: "42%" }} />
+                  {MK_CATEGORIES.map((c) => <col key={c.key} style={{ width: "11.6%" }} />)}
                 </colgroup>
                 <thead className="bg-slate-50 text-slate-500 text-xs">
                   <tr>
@@ -1746,9 +1759,9 @@ function CategoryAccessTab({ admins, categoryAccess, reload }) {
                     <th className="px-3 py-1.5 text-center border-b border-slate-200 text-[10px] font-semibold text-slate-400 tracking-wide">관리자 영역</th>
                   </tr>
                   <tr>
-                    <th className="text-left px-4 py-3">사용자</th>
+                    <th className="text-left px-4 py-2">사용자</th>
                     {MK_CATEGORIES.map((c) => (
-                      <th key={c.key} className="text-center px-3 py-3 whitespace-nowrap">
+                      <th key={c.key} className="text-center px-1 py-2 whitespace-nowrap">
                         <div className="flex flex-col items-center gap-1.5">
                           <input type="checkbox" checked={allCheckedForCat(c)}
                             onChange={() => toggleAllForCatLocal(c)} className="w-4 h-4 cursor-pointer" title="전체 선택/해제" />
@@ -1766,24 +1779,23 @@ function CategoryAccessTab({ admins, categoryAccess, reload }) {
                     const rowDirty = !!overrides[p.email];
                     return (
                       <tr key={p.email} className={`border-t hover:bg-slate-50 ${rowDirty ? "bg-amber-50/50" : ""}`}>
-                        <td className="px-4 py-3">
-                          <div className="flex items-center gap-2.5">
-                            <div className="w-8 h-8 rounded-full flex items-center justify-center text-white text-xs font-semibold shrink-0" style={{ background: hasAnyAccess ? BRAND.navy : "#CBD5E1" }}>
+                        <td className="px-4 py-1">
+                          {/* 한 줄: 이름 (메일 · 부서) — 길면 말줄임, 마우스를 올리면 전체(10-02) */}
+                          <div className="flex items-center gap-2 min-w-0">
+                            <div className="w-6 h-6 rounded-full flex items-center justify-center text-white text-[10px] font-semibold shrink-0" style={{ background: hasAnyAccess ? BRAND.navy : "#CBD5E1" }}>
                               {p.name.charAt(0).toUpperCase()}
                             </div>
-                            <div className="min-w-0">
-                              <div className="font-medium text-slate-800 truncate text-sm flex items-center gap-1.5">
-                                {p.name}
-                                {hasFullAdminAccess
-                                  ? <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-700 font-normal">관리자</span>
-                                  : hasAnyAccess && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-500 font-normal">로그인 가능</span>}
-                              </div>
-                              <div className="text-xs text-slate-400 truncate">{p.email}{p.dept ? ` · ${p.dept}` : ""}</div>
+                            <div className="min-w-0 truncate text-[13px] leading-6" title={`${p.name} (${p.email}${p.dept ? ` · ${p.dept}` : ""})`}>
+                              <span className="font-medium text-slate-800">{p.name}</span>{" "}
+                              <span className="text-xs text-slate-400">({p.email}{p.dept ? ` · ${p.dept}` : ""})</span>
                             </div>
+                            {hasFullAdminAccess
+                              ? <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-700 leading-none">관리자</span>
+                              : hasAnyAccess && <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-500 leading-none">로그인 가능</span>}
                           </div>
                         </td>
                         {MK_CATEGORIES.map((c) => (
-                          <td key={c.key} className="text-center px-3 py-3">
+                          <td key={c.key} className="text-center px-3 py-1">
                             <input type="checkbox" checked={effectiveChecked(p, c)}
                               onChange={() => toggleLocal(p, c)} className="w-4 h-4 cursor-pointer" />
                           </td>
