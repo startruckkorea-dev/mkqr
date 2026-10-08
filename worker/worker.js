@@ -193,6 +193,18 @@ async function verifyRecaptcha(env, token, remoteIp) {
   }
 }
 
+// 이동 링크는 http(s) 만 돌려준다 — SharePoint 목록을 직접 고쳐 javascript: 등이 들어가도 체크인 페이지가 따라가지 않게(10-08)
+function safeRedirect(u) {
+  const s = String(u || "").trim();
+  return /^https?:\/\//i.test(s) ? s : "";
+}
+
+// Agent(딜러사) 명함 QR — mkqr_Agents 목록(10-08 · mkqr-agent). 센터와 같은 방식(QrToken 비교)
+async function findAgentByToken(env, token) {
+  const items = await listItems(env, "mkqr_Agents");
+  return items.find((it) => it.fields.QrToken === token);
+}
+
 async function findCenterByToken(env, token) {
   // SharePoint 서식 필드는 대소문자/공백에 예민할 수 있어 전체 조회 후 JS로 비교 (센터 수가 적어 부담 없음)
   const items = await listItems(env, "mkqr_Centers");
@@ -240,16 +252,64 @@ export default {
 
     try {
       if (url.pathname === "/api/center" && request.method === "GET") {
+        const agentToken = url.searchParams.get("a");
+        if (agentToken) {
+          const agent = await findAgentByToken(env, agentToken);
+          if (!agent || agent.fields.Active === false) return json({ error: "유효하지 않은 QR 코드입니다" }, 404);
+          return json({ name: agent.fields.Title, type: "agent", redirectUrl: safeRedirect(agent.fields.RedirectUrl) });
+        }
         const token = url.searchParams.get("t");
         if (!token) return json({ error: "잘못된 요청입니다" }, 400);
         const center = await findCenterByToken(env, token);
         if (!center || center.fields.Active === false) return json({ error: "유효하지 않은 QR 코드입니다" }, 404);
-        return json({ name: center.fields.Title, redirectUrl: center.fields.RedirectUrl || "" });
+        return json({ name: center.fields.Title, redirectUrl: safeRedirect(center.fields.RedirectUrl) });
       }
 
       if (url.pathname === "/api/checkin" && request.method === "POST") {
         const body = await request.json();
         const { token, gps, clientTimestamp, deviceId, deviceFingerprint, userAgent, recaptchaToken } = body;
+
+        // Agent 명함 QR — 위치 검증 없이 접속 기록만 남기고 링크를 돌려준다(10-08 · mkqr-agent).
+        //  · CenterId 는 「A{목록 id}」 — 센터 id 와 겹치지 않게(차단 판정 · 관리자 화면 구분에 쓰임)
+        //  · 1분 5회 초과 → 30분 차단 규칙은 센터와 같게. 누적 5회 방문 → 검증필요(리워드 규칙)는 적용하지 않는다
+        //  · IP 위치는 외부 조회(ipapi) 대신 Cloudflare 가 주는 값만 써서 이동을 늦추지 않는다
+        if (!token && body.agentToken) {
+          const agent = await findAgentByToken(env, body.agentToken);
+          if (!agent || agent.fields.Active === false) return json({ error: "유효하지 않은 QR 코드입니다" }, 404);
+          const a = agent.fields;
+          const agentKey = "A" + agent.id;
+          const aLink = safeRedirect(a.RedirectUrl);
+          // 차단 판정 · 기록이 Graph 오류로 실패해도 명함을 찍은 고객은 링크로 보낸다(위치 검증이 없는 흐름이라 fail-open)
+          const ablock = await computeBlockStatus(env, agentKey, deviceFingerprint).catch(() => ({ blocked: false }));
+          if (ablock.blocked) {
+            return json({
+              blocked: true,
+              error: `동일 기기에서 다수 접근이 확인되었습니다. ${ablock.remainingMinutes}분 뒤 다시 QR을 통한 링크 접속이 가능합니다.`,
+            }, 429);
+          }
+          const aIp = request.headers.get("cf-connecting-ip") || "unknown";
+          const aCf = request.cf || {};
+          const aCity = [...new Set([aCf.city, aCf.region].filter(Boolean))].join(" ");
+          const aNow = new Date().toISOString();
+          await createItem(env, "mkqr_CheckIns", {
+            Title: `${a.Title} ${aNow.slice(0, 16).replace("T", " ")}`,
+            CenterId: agentKey,
+            CenterName: a.Title,
+            ServerTimestamp: aNow,
+            ClientTimestamp: clientTimestamp || "",
+            PublicIP: aIp,
+            IpLat: aCf.latitude != null ? Number(aCf.latitude) : null,
+            IpLng: aCf.longitude != null ? Number(aCf.longitude) : null,
+            IpCity: aCity,
+            DistanceSource: "Agent",
+            VerifyStatus: "정상",
+            UserAgent: userAgent || "",
+            DeviceId: deviceId || "",
+            DeviceFingerprint: deviceFingerprint || "",
+          }).catch((e) => console.log("[agent] 기록 실패: " + e.message));
+          return json({ type: "agent", name: a.Title, verifyStatus: "정상", redirectUrl: aLink });
+        }
+
         if (!token) return json({ error: "잘못된 요청입니다" }, 400);
 
         const center = await findCenterByToken(env, token);
@@ -333,7 +393,7 @@ export default {
         };
         await createItem(env, "mkqr_CheckIns", fields);
 
-        return json({ verifyStatus, distanceKm: fields.DistanceKm, gpsUsed, redirectUrl: c.RedirectUrl || "" });
+        return json({ verifyStatus, distanceKm: fields.DistanceKm, gpsUsed, redirectUrl: safeRedirect(c.RedirectUrl) });
       }
 
       return json({ error: "not found" }, 404);

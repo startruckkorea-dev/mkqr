@@ -71,7 +71,7 @@ import {
   Building2, QrCode, ListChecks, LogOut, Plus, Pencil, Trash2, X,
   Download, RefreshCw, MapPin, Search, CheckCircle2, AlertTriangle,
   Upload, ExternalLink, Phone, Navigation, LayoutDashboard, ShieldCheck,
-  ArrowUpRight, ImagePlus, KeyRound, Mail, XCircle, Settings, ChevronDown, ChevronUp,
+  ArrowUpRight, ImagePlus, KeyRound, Mail, XCircle, Settings, ChevronDown, ChevronUp, Store, Contact,
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import QRCode from "qrcode";
@@ -122,21 +122,32 @@ async function apiGet(path, token) {
 /* ------------------------------------------------------------------
  * mkqr_* SharePoint 목록 — GUID 하드코딩 없이 displayName으로 조회/캐싱 (ICS와 동일 패턴)
  * ------------------------------------------------------------------ */
-const MK_LISTS = { centers: "mkqr_Centers", staff: "mkqr_Staff", checkins: "mkqr_CheckIns", categoryAccess: "mkqr_CategoryAccess" };
+const MK_LISTS = { centers: "mkqr_Centers", agents: "mkqr_Agents", staff: "mkqr_Staff", checkins: "mkqr_CheckIns", categoryAccess: "mkqr_CategoryAccess" };   // mkqr_Agents: Agent(딜러사) 명함 QR(10-08 · mkqr-agent)
 // mkqr_Admins 목록은 더 이상 안 씁니다 — 로그인 허용 여부는 mkqr_CategoryAccess 하나로 통제합니다 (카테고리가 하나라도
 // true면 로그인 가능). Jimmy님이 SharePoint에서 mkqr_Admins 목록 자체는 이제 지우셔도 됩니다.
 
 // 화면 탭(=ICS의 "카테고리")과 그 접근 권한을 저장할 때 쓰는 SharePoint 컬럼명 매핑.
-// mkqr_CategoryAccess 목록: Email(한 줄 텍스트) + Access_* 5개(예/아니요). 특정 사용자의 행 자체가 없거나
+// mkqr_CategoryAccess 목록: Email(한 줄 텍스트) + Access_* 7개(예/아니요 — Agent 2칸은 10-08 추가). 특정 사용자의 행 자체가 없거나
 // 특정 컬럼이 비어있으면 "허용"으로 간주 (기본값이 거부가 아니라 허용이어야, 나중에 카테고리를 추가해도
 // 기존 관리자가 갑자기 접근을 잃는 사고가 안 남).
+// group: 권한 표의 묶음 머리글(개요 · 운영자 영역 · 관리자 영역). inherit: 그 열이 아직 비어 있으면(=열을 새로 만든 직후의 기존 행)
+// 따라갈 기존 열 — Agent 두 칸은 센터 관리 · 센터 QR 코드 권한을 그대로 이어받아, 열을 추가해도 기존 운영자 권한이 갑자기 바뀌지 않는다(10-08).
 const MK_CATEGORIES = [
-  { key: "overview", label: "Overview", field: "Access_overview" },
-  { key: "centers", label: "센터 관리", field: "Access_centers" },
-  { key: "qr", label: "QR 코드", field: "Access_qr" },
-  { key: "checkins", label: "체크인 기록", field: "Access_checkins" },
-  { key: "admins", label: "카테고리 접근 권한", field: "Access_admins" },
+  { key: "overview", label: "Overview", field: "Access_overview", group: "overview" },
+  { key: "centers", label: "센터 관리", field: "Access_centers", group: "operator" },
+  { key: "qr", label: "센터 QR 코드", field: "Access_qr", group: "operator" },
+  { key: "agents", label: "Agent 관리", field: "Access_agents", group: "operator", inherit: "Access_centers" },
+  { key: "agentQr", label: "Agent QR 코드", field: "Access_agentQr", group: "operator", inherit: "Access_qr" },
+  { key: "checkins", label: "체크인 기록", field: "Access_checkins", group: "operator" },
+  { key: "admins", label: "카테고리 접근 권한", field: "Access_admins", group: "admin" },
 ];
+// 저장된 권한 값 — true/false, 열이 비어 있으면 inherit 열 값, 그것도 없으면 undefined(=허용으로 보는 기존 규칙 유지)
+function mkCatValue(row, cat) {
+  const v = row ? row[cat.field] : undefined;
+  if (typeof v === "boolean") return v;
+  if (cat.inherit && row && typeof row[cat.inherit] === "boolean") return row[cat.inherit];
+  return undefined;
+}
 const _mkListIds = {};
 
 async function getMkListId(listName) {
@@ -146,6 +157,17 @@ async function getMkListId(listName) {
   if (!res.value || !res.value.length) throw new Error(`SharePoint 목록을 찾을 수 없습니다: ${listName} (관리자에게 목록 생성 요청 필요)`);
   _mkListIds[listName] = res.value[0].id;
   return _mkListIds[listName];
+}
+
+// 목록의 열(내부 이름) — 아직 만들지 않은 열에 값을 쓰면 Graph 가 400 을 돌려 저장 전체가 실패하므로 먼저 확인한다(10-08)
+const _mkListColumns = {};
+async function getMkListColumnNames(listName) {
+  if (_mkListColumns[listName]) return _mkListColumns[listName];
+  const token = await getGraphToken();
+  const listId = await getMkListId(listName);
+  const res = await apiGet(`/sites/${_siteId}/lists/${listId}/columns?$select=name`, token);
+  _mkListColumns[listName] = new Set((res.value || []).map((c) => c.name));
+  return _mkListColumns[listName];
 }
 
 // apiAll() 패턴과 동일 — 5,000건 임계값 대비 nextLink를 따라 무제한 순회
@@ -494,10 +516,10 @@ function Modal({ title, onClose, children, wide }) {
   );
 }
 
-function Field({ label, children }) {
+function Field({ label, children, required }) {
   return (
     <div className="mb-3">
-      <label className="block text-xs font-medium text-slate-500 mb-1">{label}</label>
+      <label className="block text-xs font-medium text-slate-500 mb-1">{label}{required && <span className="text-red-500 ml-0.5" aria-label="필수">*</span>}</label>
       {children}
     </div>
   );
@@ -908,6 +930,7 @@ function CenterEditModal({ center, onClose, onSave, onGeocode, busy }) {
 
   return (
     <Modal title={center.id ? "센터 수정" : "센터 추가"} onClose={onClose}>
+      <p className="text-[11px] text-slate-400 -mt-1 mb-3 text-right"><span className="text-red-500">*</span> 필수 입력</p>
       <Field label="업체 아이콘 (선택)">
         <div className="flex items-center gap-3">
           {displayIcon
@@ -925,7 +948,7 @@ function CenterEditModal({ center, onClose, onSave, onGeocode, busy }) {
         </div>
         <p className="text-xs text-slate-400 mt-1.5">JPG/PNG/GIF/WEBP 이미지 파일만 가능하며, 용량은 50KB 이하여야 합니다.</p>
       </Field>
-      <Field label="센터명 (국문, 필수)"><input className={inputCls} value={form.Title || ""} onChange={set("Title")} placeholder="예: 곤지암센터" /></Field>
+      <Field label="센터명 (국문)" required><input className={inputCls} value={form.Title || ""} onChange={set("Title")} placeholder="예: 곤지암센터" /></Field>
       <Field label="지역"><input className={inputCls} value={form.Region || ""} onChange={set("Region")} placeholder="예: Seoul/Gyeonggi" /></Field>
       <Field label="센터명 (영문)"><input className={inputCls} value={form.CenterNameEn || ""} onChange={set("CenterNameEn")} /></Field>
       <Field label="법인명"><input className={inputCls} value={form.CorpNameKr || ""} onChange={set("CorpNameKr")} /></Field>
@@ -990,7 +1013,9 @@ function CenterEditModal({ center, onClose, onSave, onGeocode, busy }) {
 /* ------------------------------------------------------------------ */
 /* QR 코드 탭                                                          */
 /* ------------------------------------------------------------------ */
-function QrTab({ centers, highlightId }) {
+function QrTab({ items, kind = "center", highlightId }) {
+  // kind: "center"(센터 QR, ?t=) | "agent"(Agent 명함 QR, ?a= — 체크인 페이지가 위치를 묻지 않고 기록 후 이동)
+  const isAgent = kind === "agent";
   const canvasRefs = useRef({});
   const cardRefs = useRef({});
   const [checkinBaseUrl, setCheckinBaseUrl] = useState(() => {
@@ -999,43 +1024,47 @@ function QrTab({ centers, highlightId }) {
   });
   const [showUrlSetting, setShowUrlSetting] = useState(false);
   const [q, setQ] = useState("");
+  const qrUrl = (c) => `${checkinBaseUrl}?${isAgent ? "a" : "t"}=${c.QrToken}`;
+  const filePrefix = isAgent ? "MKQR_Agent_" : "MKQR_";
 
-  const activeCenters = centers.filter((c) => c.Active !== false);
-  const filtered = activeCenters.filter((c) => !q || c.Title?.includes(q) || c.Region?.includes(q) || c.AddressKr?.includes(q));
+  const activeItems = items.filter((c) => c.Active !== false);
+  const qq = q.trim().toLowerCase();
+  const filtered = activeItems.filter((c) => !qq || [c.Title, c.Region, c.AddressKr, c.AgentNameEn, c.CorpNameKr].some((v) => String(v || "").toLowerCase().includes(qq)));
 
   const [page, setPage] = useState(1);
   const PAGE_SIZE = 12;
   useEffect(() => { setPage(1); }, [q]);
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const pageSafe = Math.min(page, totalPages);
-  const pageCenters = filtered.slice((pageSafe - 1) * PAGE_SIZE, pageSafe * PAGE_SIZE);
+  const pageItems = filtered.slice((pageSafe - 1) * PAGE_SIZE, pageSafe * PAGE_SIZE);
 
   useEffect(() => {
-    pageCenters.forEach((c) => {
+    pageItems.forEach((c) => {
       const el = canvasRefs.current[c.id];
       if (!el || !c.QrToken) return;
-      const url = `${checkinBaseUrl}?t=${c.QrToken}`;
-      QRCode.toCanvas(el, url, { width: 180, margin: 1, color: { dark: BRAND.navy, light: "#ffffff" } });
+      QRCode.toCanvas(el, qrUrl(c), { width: 180, margin: 1, color: { dark: BRAND.navy, light: "#ffffff" } });
     });
-  }, [centers, checkinBaseUrl, pageCenters]);
+  }, [items, checkinBaseUrl, pageItems]);
 
   useEffect(() => {
     if (highlightId && cardRefs.current[highlightId]) {
       cardRefs.current[highlightId].scrollIntoView({ behavior: "smooth", block: "center" });
     }
-  }, [highlightId, centers]);
+  }, [highlightId, items]);
 
-  function download(centerId, title) {
-    const el = canvasRefs.current[centerId];
-    if (!el) return;
-    const link = document.createElement("a");
-    link.download = `MKQR_${title}.png`;
-    link.href = el.toDataURL("image/png");
-    link.click();
+  // PNG 한 장 — 화면의 180px 캔버스 대신 인쇄용 크기(600px)로 새로 만든다(명함 · 현수막 인쇄 시 흐려지지 않게, 10-08)
+  async function download(c) {
+    if (!c.QrToken) return;
+    try {
+      const dataUrl = await QRCode.toDataURL(qrUrl(c), { width: 600, margin: 1, color: { dark: BRAND.navy, light: "#ffffff" } });
+      const link = document.createElement("a");
+      link.download = `${filePrefix}${c.Title}.png`;
+      link.href = dataUrl;
+      link.click();
+    } catch (e) { alert("다운로드 실패: " + e.message); }
   }
 
-  // 화면에 안 보이는(다른 페이지) 센터도 포함해서 검색 결과 전체를 zip으로 묶어 한 번에 다운로드.
-  // 캔버스 DOM 없이도 QRCode.toDataURL로 바로 이미지를 만들 수 있어서 페이지 이동 없이 전체 처리 가능.
+  // 화면에 안 보이는(다른 페이지) 항목도 포함해서 검색 결과 전체를 zip으로 묶어 한 번에 다운로드.
   const [downloadingAll, setDownloadingAll] = useState(false);
   async function downloadAll() {
     if (!filtered.length) return;
@@ -1044,14 +1073,13 @@ function QrTab({ centers, highlightId }) {
       const zip = new JSZip();
       for (const c of filtered) {
         if (!c.QrToken) continue;
-        const url = `${checkinBaseUrl}?t=${c.QrToken}`;
-        const dataUrl = await QRCode.toDataURL(url, { width: 400, margin: 1, color: { dark: BRAND.navy, light: "#ffffff" } });
-        zip.file(`MKQR_${c.Title}.png`, dataUrl.split(",")[1], { base64: true });
+        const dataUrl = await QRCode.toDataURL(qrUrl(c), { width: 600, margin: 1, color: { dark: BRAND.navy, light: "#ffffff" } });
+        zip.file(`${filePrefix}${c.Title}.png`, dataUrl.split(",")[1], { base64: true });
       }
       const blob = await zip.generateAsync({ type: "blob" });
       const link = document.createElement("a");
       link.href = URL.createObjectURL(blob);
-      link.download = `MKQR_QR코드_전체_${new Date(new Date().getTime()+9*3600*1000).toISOString().slice(0, 10)}.zip`;
+      link.download = `${isAgent ? "MKQR_Agent_QR코드_전체_" : "MKQR_QR코드_전체_"}${new Date(new Date().getTime()+9*3600*1000).toISOString().slice(0, 10)}.zip`;
       link.click();
     } catch (e) { alert("전체 다운로드 실패: " + e.message); } finally { setDownloadingAll(false); }
   }
@@ -1059,10 +1087,15 @@ function QrTab({ centers, highlightId }) {
   return (
     <div className="max-w-5xl mx-auto">
       {downloadingAll && <BlockingOverlay message="QR 코드를 압축 파일로 만들고 있습니다..." />}
+      {isAgent && (
+        <div className="mb-4 text-xs text-slate-500 bg-white border rounded-xl px-4 py-3">
+          영업직원 명함용 QR — 스캔하면 위치(GPS)를 묻지 않고 접속 기록만 남긴 뒤 각 Agent 에 설정한 링크로 바로 이동합니다. PNG 는 인쇄용 600px 입니다.
+        </div>
+      )}
       <div className="mb-4 flex items-center justify-between flex-wrap gap-2">
         <div className="relative">
           <Search size={15} className="absolute left-2.5 top-2.5 text-slate-400" />
-          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="센터명/지역/주소로 QR 검색" className="pl-8 pr-3 py-2 border border-slate-300 rounded-lg text-sm w-64" />
+          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={isAgent ? "딜러사명/법인명/주소로 QR 검색" : "센터명/지역/주소로 QR 검색"} className="pl-8 pr-3 py-2 border border-slate-300 rounded-lg text-sm w-64" />
         </div>
         <div className="flex items-center gap-3">
           <button onClick={downloadAll} disabled={downloadingAll || !filtered.length}
@@ -1083,24 +1116,24 @@ function QrTab({ centers, highlightId }) {
         </div>
       )}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-4">
-        {pageCenters.map((c) => (
+        {pageItems.map((c) => (
           <div key={c.id} ref={(el) => (cardRefs.current[c.id] = el)}
             className={`bg-white border rounded-xl p-4 text-center ${c.id === highlightId ? "ring-2 ring-offset-2" : ""}`}
             style={c.id === highlightId ? { borderColor: BRAND.accent, boxShadow: `0 0 0 2px ${BRAND.accent}` } : {}}>
             {c.id === highlightId && <div className="text-[10px] font-semibold mb-1" style={{ color: BRAND.accent }}>방금 등록됨</div>}
-            <div className="font-medium text-sm text-slate-800 mb-2">{c.Title}</div>
+            <div className="font-medium text-sm text-slate-800 mb-2 truncate" title={c.Title}>{c.Title}</div>
             <canvas ref={(el) => (canvasRefs.current[c.id] = el)} className="mx-auto" />
             <div className="text-xs text-slate-400 mt-2 break-all">토큰: {c.QrToken}</div>
-            <button onClick={() => download(c.id, c.Title)} className="mt-2 w-full flex items-center justify-center gap-1 text-xs px-2 py-1.5 border border-slate-300 rounded-lg hover:bg-slate-50">
+            <button onClick={() => download(c)} className="mt-2 w-full flex items-center justify-center gap-1 text-xs px-2 py-1.5 border border-slate-300 rounded-lg hover:bg-slate-50">
               <Download size={13} /> PNG 다운로드
             </button>
-            <a href={`${checkinBaseUrl}?t=${c.QrToken}`} target="_blank" className="mt-1.5 w-full flex items-center justify-center gap-1 text-xs px-2 py-1.5 text-slate-500 hover:text-slate-700">
+            <a href={qrUrl(c)} target="_blank" rel="noreferrer" className="mt-1.5 w-full flex items-center justify-center gap-1 text-xs px-2 py-1.5 text-slate-500 hover:text-slate-700">
               <ExternalLink size={12} /> 링크 열기
             </a>
           </div>
         ))}
-        {!activeCenters.length && <div className="col-span-4 text-center text-slate-400 py-10">먼저 "센터 관리"에서 센터를 등록해주세요</div>}
-        {activeCenters.length > 0 && !filtered.length && <div className="col-span-4 text-center text-slate-400 py-10">검색 결과가 없습니다</div>}
+        {!activeItems.length && <div className="col-span-4 text-center text-slate-400 py-10">{isAgent ? '먼저 "Agent 관리"에서 Agent(딜러사)를 등록해주세요' : '먼저 "센터 관리"에서 센터를 등록해주세요'}</div>}
+        {activeItems.length > 0 && !filtered.length && <div className="col-span-4 text-center text-slate-400 py-10">검색 결과가 없습니다</div>}
       </div>
       {filtered.length > 0 && totalPages > 1 && (
         <div className="flex items-center justify-center gap-1 mt-5">
@@ -1122,10 +1155,238 @@ function QrTab({ centers, highlightId }) {
 }
 
 /* ------------------------------------------------------------------ */
+/* Agent(딜러사) 관리 탭 — 영업직원 명함용 QR(10-08 · mkqr-agent)          */
+/* ------------------------------------------------------------------ */
+// 체크인 기록에서 Agent 스캔 구분 — Worker 가 CenterId 를 「A{목록 항목 id}」 로 남긴다(센터 id 와 겹치지 않게)
+function isAgentCheckin(r) { return /^A\d+$/.test(String((r && r.CenterId) || "")); }
+const MK_URL_RE = /^https?:\/\/[^\s]+\.[^\s]+$/i;
+
+function AgentListMissing({ error }) {
+  return (
+    <div className="max-w-2xl mx-auto bg-white border rounded-xl p-8 text-center">
+      <Store size={28} className="mx-auto text-slate-300 mb-3" />
+      <div className="text-sm font-medium text-slate-700 mb-1">Agent 목록(SharePoint mkqr_Agents)을 불러오지 못했습니다</div>
+      <div className="text-xs text-slate-400 leading-relaxed">목록이 아직 만들어지지 않았거나 권한이 없습니다. IT(stk_it@hyosung.com)에 확인을 요청해 주세요.</div>
+      {error && <div className="text-[11px] text-slate-300 mt-3 break-all">{error}</div>}
+    </div>
+  );
+}
+
+function AgentsTab({ agents, agentsError, reload, onCreated }) {
+  const [editing, setEditing] = useState(null); // null | {} (신규) | {...} (수정)
+  const [busy, setBusy] = useState(false);
+  const [q, setQ] = useState("");
+  const qq = q.trim().toLowerCase();
+  const filtered = agents.filter((a) => !qq || [a.Title, a.AgentNameEn, a.CorpNameKr, a.AddressKr].some((v) => String(v || "").toLowerCase().includes(qq)));
+
+  const [page, setPage] = useState(1);
+  const PAGE_SIZE = 12;
+  useEffect(() => { setPage(1); }, [q]);
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const pageSafe = Math.min(page, totalPages);
+  const pageAgents = filtered.slice((pageSafe - 1) * PAGE_SIZE, pageSafe * PAGE_SIZE);
+
+  if (agentsError) return <AgentListMissing error={agentsError} />;
+
+  async function save(form) {
+    const title = String(form.Title || "").trim();
+    const url = String(form.RedirectUrl || "").trim();
+    if (!title) { alert("딜러사명을 입력해주세요."); return; }
+    if (!MK_URL_RE.test(url)) { alert("체크인 완료 후 이동시킬 링크를 http:// 또는 https:// 로 시작하는 주소로 입력해주세요."); return; }
+    setBusy(true);
+    try {
+      const fields = {
+        Title: title, AgentNameEn: String(form.AgentNameEn || "").trim(), CorpNameKr: String(form.CorpNameKr || "").trim(),
+        AddressKr: String(form.AddressKr || "").trim(), AddressEn: String(form.AddressEn || "").trim(), Phone: String(form.Phone || "").trim(),
+        RedirectUrl: url, Active: form.Active !== false,
+      };
+      if (editing?.id) {
+        await mkUpdateItem(MK_LISTS.agents, editing.id, fields);
+        setEditing(null);
+        await reload();
+      } else {
+        fields.QrToken = randomToken();
+        const created = await mkCreateItem(MK_LISTS.agents, fields);
+        setEditing(null);
+        await reload();
+        if (onCreated) onCreated(created.id);
+      }
+    } catch (e) { alert(e.message); } finally { setBusy(false); }
+  }
+
+  async function remove(a) {
+    if (!confirm(`"${a.Title}" Agent 를 삭제할까요? (이미 인쇄된 명함의 QR 도 더 이상 사용할 수 없게 됩니다)`)) return;
+    try { await mkDeleteItem(MK_LISTS.agents, a.id); await reload(); } catch (e) { alert(e.message); }
+  }
+
+  function exportAgents() {
+    const data = filtered.map((a) => ({
+      딜러사명: a.Title, "딜러사 영문명": a.AgentNameEn, "딜러사 법인명": a.CorpNameKr, 주소: a.AddressKr, "주소(영문)": a.AddressEn,
+      대표전화번호: a.Phone, "이동 링크": a.RedirectUrl, 상태: a.Active === false ? "비활성" : "활성", QR토큰: a.QrToken,
+    }));
+    const ws = XLSX.utils.json_to_sheet(data);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Agent목록");
+    XLSX.writeFile(wb, `MKQR_Agent목록_${new Date(new Date().getTime()+9*3600*1000).toISOString().slice(0, 10)}.xlsx`);
+  }
+
+  const activeCount = agents.filter((a) => a.Active !== false).length;
+  const stats = [
+    { label: "전체 Agent", value: agents.length, icon: Store, iconCls: "", bg: BRAND.accentSoft, color: BRAND.accent },
+    { label: "활성 (QR 사용 가능)", value: activeCount, icon: CheckCircle2, iconCls: "text-emerald-600", bgCls: "bg-emerald-50" },
+    { label: "비활성", value: agents.length - activeCount, icon: XCircle, iconCls: "text-slate-400", bgCls: "bg-slate-100" },
+  ];
+
+  return (
+    <div className="max-w-5xl mx-auto">
+      {busy && <BlockingOverlay message="처리하고 있습니다..." />}
+      <div className="grid grid-cols-3 gap-3 mb-5">
+        {stats.map((s) => (
+          <div key={s.label} className="bg-white rounded-xl border p-4 flex items-center gap-3">
+            <div className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 ${s.bgCls || ""}`} style={s.bg ? { background: s.bg } : undefined}>
+              <s.icon size={17} className={s.iconCls} style={s.color ? { color: s.color } : undefined} />
+            </div>
+            <div>
+              <div className="text-xl font-semibold text-slate-800">{s.value}</div>
+              <div className="text-xs text-slate-400">{s.label}</div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div className="flex items-center justify-between mb-4 gap-2 flex-wrap">
+        <div className="relative">
+          <Search size={15} className="absolute left-2.5 top-2.5 text-slate-400" />
+          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="딜러사명/법인명/주소 검색" className="pl-8 pr-3 py-2 border border-slate-300 rounded-lg text-sm w-64" />
+        </div>
+        <div className="flex gap-2">
+          <button onClick={exportAgents} disabled={!filtered.length} className="flex items-center gap-1.5 px-3 py-2 border border-slate-300 rounded-lg text-sm hover:bg-slate-50 disabled:opacity-50">
+            <Download size={15} /> 엑셀 내보내기
+          </button>
+          <button onClick={() => setEditing({})} className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm text-white" style={{ background: BRAND.accent }}>
+            <Plus size={15} /> Agent 추가
+          </button>
+        </div>
+      </div>
+
+      {filtered.length > 0 && (
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+          {pageAgents.map((a) => (
+            <div key={a.id} onClick={() => setEditing(a)}
+              className="bg-white rounded-xl border p-4 hover:shadow-md hover:border-slate-300 transition-all cursor-pointer relative group">
+              <div className="absolute top-3 right-3 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity" onClick={(e) => e.stopPropagation()}>
+                <button onClick={() => setEditing(a)} className="w-7 h-7 flex items-center justify-center rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100"><Pencil size={14} /></button>
+                <button onClick={() => remove(a)} className="w-7 h-7 flex items-center justify-center rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50"><Trash2 size={14} /></button>
+              </div>
+              <div className="flex items-start gap-3 mb-3">
+                <div className="w-11 h-11 rounded-xl flex items-center justify-center shrink-0 text-white font-semibold text-lg" style={{ background: BRAND.navy }}>
+                  {(a.Title || "?").trim().charAt(0)}
+                </div>
+                <div className="min-w-0 pr-12">
+                  <div className="font-semibold text-slate-800 truncate">{a.Title}</div>
+                  <div className="text-xs text-slate-400 truncate">{a.CorpNameKr || a.AgentNameEn || " "}</div>
+                </div>
+              </div>
+              <div className="flex items-center gap-1.5 mb-3">
+                <span className="text-[11px] px-2 py-0.5 rounded-full font-medium bg-indigo-50 text-indigo-600">Agent</span>
+                {a.Active === false
+                  ? <span className="text-[11px] px-2 py-0.5 rounded-full bg-slate-100 text-slate-500 font-medium">비활성</span>
+                  : <span className="text-[11px] px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700 font-medium">활성</span>}
+              </div>
+              <div className="space-y-1.5 text-xs text-slate-500">
+                <div className="flex items-start gap-1.5">
+                  <MapPin size={13} className="shrink-0 mt-0.5 text-slate-300" />
+                  <span className="truncate">{a.AddressKr || "주소 미입력"}</span>
+                </div>
+                {a.Phone && (
+                  <div className="flex items-center gap-1.5">
+                    <Phone size={13} className="shrink-0 text-slate-300" />
+                    <span>{a.Phone}</span>
+                  </div>
+                )}
+                <div className="flex items-center gap-1.5">
+                  <ExternalLink size={13} className="shrink-0 text-slate-300" />
+                  {a.RedirectUrl
+                    ? <span className="truncate" title={a.RedirectUrl}>{a.RedirectUrl}</span>
+                    : <span className="text-amber-600">이동 링크 미설정</span>}
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+      {filtered.length > 0 && totalPages > 1 && (
+        <div className="flex items-center justify-center gap-1 mt-5">
+          <button onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={pageSafe <= 1}
+            className="px-2.5 py-1.5 rounded-lg border border-slate-300 text-xs disabled:opacity-40 disabled:cursor-not-allowed hover:bg-slate-50">이전</button>
+          {Array.from({ length: totalPages }, (_, i) => i + 1).map((n) => (
+            <button key={n} onClick={() => setPage(n)}
+              className={`w-7 h-7 rounded-lg text-xs ${n === pageSafe ? "text-white" : "border border-slate-300 text-slate-600 hover:bg-slate-50"}`}
+              style={n === pageSafe ? { background: BRAND.accent } : {}}>
+              {n}
+            </button>
+          ))}
+          <button onClick={() => setPage((p) => Math.min(totalPages, p + 1))} disabled={pageSafe >= totalPages}
+            className="px-2.5 py-1.5 rounded-lg border border-slate-300 text-xs disabled:opacity-40 disabled:cursor-not-allowed hover:bg-slate-50">다음</button>
+        </div>
+      )}
+      {!filtered.length && (
+        <div className="bg-white rounded-xl border py-16 text-center">
+          <Store size={28} className="mx-auto text-slate-300 mb-2" />
+          <div className="text-slate-500 text-sm mb-1">{agents.length ? "검색 결과가 없습니다" : "등록된 Agent 가 없습니다"}</div>
+          {!agents.length && <div className="text-slate-400 text-xs">우측 상단 "Agent 추가"로 시작해보세요</div>}
+        </div>
+      )}
+
+      {editing !== null && <AgentEditModal agent={editing} onClose={() => setEditing(null)} onSave={save} busy={busy} />}
+    </div>
+  );
+}
+
+function AgentEditModal({ agent, onClose, onSave, busy }) {
+  const [form, setForm] = useState({ Active: true, ...agent });
+  const [touched, setTouched] = useState(false);
+  const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
+  const url = String(form.RedirectUrl || "").trim();
+  const urlOk = MK_URL_RE.test(url);
+  const titleOk = !!String(form.Title || "").trim();
+  return (
+    <Modal title={agent.id ? "Agent 수정" : "Agent 추가"} onClose={onClose}>
+      <p className="text-[11px] text-slate-400 -mt-1 mb-3 text-right"><span className="text-red-500">*</span> 필수 입력</p>
+      <Field label="딜러사명" required><input className={inputCls} value={form.Title || ""} onChange={set("Title")} placeholder="예: 스타트럭 서울모터스" /></Field>
+      <Field label="딜러사 영문명"><input className={inputCls} value={form.AgentNameEn || ""} onChange={set("AgentNameEn")} placeholder="예: Seoul Motors" /></Field>
+      <Field label="딜러사 법인명"><input className={inputCls} value={form.CorpNameKr || ""} onChange={set("CorpNameKr")} placeholder="예: ㈜서울모터스" /></Field>
+      <Field label="딜러사 주소"><input className={inputCls} value={form.AddressKr || ""} onChange={set("AddressKr")} /></Field>
+      <Field label="주소 (영문, 선택)"><input className={inputCls} value={form.AddressEn || ""} onChange={set("AddressEn")} /></Field>
+      <Field label="대표 전화번호"><input className={inputCls} value={form.Phone || ""} onChange={set("Phone")} /></Field>
+      <Field label="체크인 완료 후 이동시킬 링크" required>
+        <input className={inputCls} value={form.RedirectUrl || ""} onChange={set("RedirectUrl")} onBlur={() => setTouched(true)} placeholder="예: https://www.startruckkorea.com" />
+        {touched && !urlOk && <p className="text-xs text-red-500 mt-1">http:// 또는 https:// 로 시작하는 주소를 입력해주세요.</p>}
+        <p className="text-xs text-slate-400 mt-1">명함 QR 을 스캔하면 접속 기록만 남기고 이 링크로 바로 이동합니다(위치 확인 없음).</p>
+      </Field>
+      <Field label="상태">
+        <select className={inputCls} value={form.Active === false ? "false" : "true"} onChange={(e) => setForm((f) => ({ ...f, Active: e.target.value === "true" }))}>
+          <option value="true">활성 (QR 사용 가능)</option>
+          <option value="false">비활성 (QR 비활성화)</option>
+        </select>
+      </Field>
+      <div className="flex justify-end gap-2 mt-4">
+        <button onClick={onClose} className="px-4 py-2 text-sm rounded-lg border border-slate-300">취소</button>
+        <button disabled={busy || !titleOk || !urlOk} onClick={() => onSave(form)} className="px-4 py-2 text-sm rounded-lg text-white disabled:opacity-50" style={{ background: BRAND.accent }}>
+          {busy ? "저장 중..." : "저장"}
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* 체크인 기록 탭/* ------------------------------------------------------------------ */
 /* 체크인 기록 탭                                                       */
 /* ------------------------------------------------------------------ */
 function CheckInsTab({ checkins, centers, reload, checkinRange, onRangeChange, verifyRules }) {
   const [filter, setFilter] = useState("전체");
+  const [kindFilter, setKindFilter] = useState("전체"); // 전체 | 센터 | Agent (10-08)
   const [q, setQ] = useState("");
   const [page, setPage] = useState(1);
   const [detail, setDetail] = useState(null); // 상세보기 모달에 띄울 행
@@ -1136,6 +1397,7 @@ function CheckInsTab({ checkins, centers, reload, checkinRange, onRangeChange, v
 
   const rows = checkins
     .filter((r) => filter === "전체" ? r.VerifyStatus !== "차단해제" : r.VerifyStatus === filter)
+    .filter((r) => kindFilter === "전체" || (kindFilter === "Agent") === isAgentCheckin(r))
     .filter((r) => !q || r.CenterName?.includes(q))
     .sort((a, b) => new Date(b.ServerTimestamp || 0) - new Date(a.ServerTimestamp || 0));
 
@@ -1143,7 +1405,7 @@ function CheckInsTab({ checkins, centers, reload, checkinRange, onRangeChange, v
   const pageSafe = Math.min(page, totalPages);
   const pageRows = rows.slice((pageSafe - 1) * PAGE_SIZE, pageSafe * PAGE_SIZE);
 
-  useEffect(() => { setPage(1); }, [filter, q, checkinRange]);
+  useEffect(() => { setPage(1); }, [filter, kindFilter, q, checkinRange]);
 
   const MAX_RANGE_DAYS = 90;
   function applyCustomRange() {
@@ -1182,7 +1444,7 @@ function CheckInsTab({ checkins, centers, reload, checkinRange, onRangeChange, v
 
   function exportExcel() {
     const data = rows.map((r) => ({
-      센터: r.CenterName, 시각: fmtDate(r.ServerTimestamp),
+      센터: r.CenterName, 구분: isAgentCheckin(r) ? "Agent" : "센터", 시각: fmtDate(r.ServerTimestamp),
       공인IP: r.PublicIP, "IP위치(도시)": r.IpCity, GPS좌표: r.GpsLat ? `${r.GpsLat}, ${r.GpsLng}` : "",
       "거리(km)": r.DistanceKm, 판정: r.VerifyStatus, reCAPTCHA점수: r.RecaptchaScore, 기기요약: parseDeviceLabel(r.UserAgent), 인증코드: (r.DeviceFingerprint || "").slice(0, 16).toUpperCase(), 기기ID: r.DeviceId, UserAgent원본: r.UserAgent,
     }));
@@ -1269,9 +1531,15 @@ function CheckInsTab({ checkins, centers, reload, checkinRange, onRangeChange, v
               <option value="전체">전체 판정</option><option>정상</option><option>검증필요</option><option>GPS거부</option><option>관리자승인</option><option>차단해제</option>
             </select>
           </div>
+          <div className="flex items-center gap-1.5">
+            <span className="text-xs text-slate-400 whitespace-nowrap">구분:</span>
+            <select value={kindFilter} onChange={(e) => setKindFilter(e.target.value)} className={inputCls + " w-28"} title="센터 QR · Agent(명함) QR 구분">
+              <option value="전체">전체</option><option>센터</option><option>Agent</option>
+            </select>
+          </div>
           <div className="relative">
             <Search size={15} className="absolute left-2.5 top-2.5 text-slate-400" />
-            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="센터 검색" className="pl-8 pr-3 py-2 border border-slate-300 rounded-lg text-sm w-56" />
+            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="센터/Agent 검색" className="pl-8 pr-3 py-2 border border-slate-300 rounded-lg text-sm w-56" />
           </div>
           <button onClick={reload} className="flex items-center gap-1.5 px-3 py-2 border border-slate-300 rounded-lg text-sm hover:bg-slate-50"><RefreshCw size={14} /> 새로고침</button>
           <button onClick={exportExcel} className="flex items-center gap-1.5 px-3 py-2 border border-slate-300 rounded-lg text-sm hover:bg-slate-50"><Download size={14} /> Excel 내보내기</button>
@@ -1308,7 +1576,7 @@ function CheckInsTab({ checkins, centers, reload, checkinRange, onRangeChange, v
           <thead className="bg-slate-50 text-slate-500 text-xs whitespace-nowrap">
             <tr>
               <th className="text-left px-4 py-2.5">판정</th>
-              <th className="text-left px-4 py-2.5">센터</th>
+              <th className="text-left px-4 py-2.5">센터 / Agent</th>
               <th className="text-left px-4 py-2.5">시각(KST)</th>
               <th className="text-left px-4 py-2.5">공인 IP</th>
               <th className="text-left px-4 py-2.5">GPS 정확도</th>
@@ -1323,7 +1591,7 @@ function CheckInsTab({ checkins, centers, reload, checkinRange, onRangeChange, v
             {pageRows.map((r) => (
               <tr key={r.id} onClick={() => setDetail(r)} className="border-t hover:bg-slate-50 cursor-pointer">
                 <td className="px-4 py-2.5"><Badge status={r.VerifyStatus} /></td>
-                <td className="px-4 py-2.5 font-medium text-slate-800 truncate">{r.CenterName}</td>
+                <td className="px-4 py-2.5 font-medium text-slate-800 truncate" title={r.CenterName}>{isAgentCheckin(r) && <span className="mr-1.5 text-[10px] px-1.5 py-0.5 rounded-full bg-indigo-50 text-indigo-600 font-medium align-middle">Agent</span>}{r.CenterName}</td>
                 <td className="px-4 py-2.5 text-slate-500 truncate">{fmtDate(r.ServerTimestamp)}</td>
                 <td className="px-4 py-2.5 text-slate-500" title={`${r.PublicIP}${r.IpCity ? ` (${r.IpCity})` : ""}`}>
                   <span className="block truncate" style={{ maxWidth: "160px" }}>{r.PublicIP}{r.IpCity ? ` (${r.IpCity})` : ""}</span>
@@ -1389,6 +1657,7 @@ function CheckInDetailModal({ row, onClose }) {
       <div className="flex items-center gap-2 mb-3">
         <Badge status={row.VerifyStatus} />
         <span className="font-medium text-slate-800">{row.CenterName}</span>
+        {isAgentCheckin(row) && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-indigo-50 text-indigo-600 font-medium">Agent · 위치 확인 없음</span>}
       </div>
       <DetailRow label="시각 (KST)" value={fmtDate(row.ServerTimestamp)} />
       <DetailRow label="기기 클라이언트 시각" value={row.ClientTimestamp} />
@@ -1494,8 +1763,15 @@ function OverviewTab({ centers, checkins, admins, setTab, introText }) {
           <button onClick={() => setTab("qr")} className="bg-white rounded-xl border p-4 text-left hover:shadow-md hover:border-slate-300 transition-all flex items-center gap-3">
             <div className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0" style={{ background: BRAND.accentSoft }}><QrCode size={16} style={{ color: BRAND.accent }} /></div>
             <div>
-              <div className="font-medium text-sm text-slate-800">QR 코드</div>
+              <div className="font-medium text-sm text-slate-800">센터 QR 코드</div>
               <div className="text-xs text-slate-400">센터별 QR 생성/다운로드</div>
+            </div>
+          </button>
+          <button onClick={() => setTab("agents")} className="bg-white rounded-xl border p-4 text-left hover:shadow-md hover:border-slate-300 transition-all flex items-center gap-3">
+            <div className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0" style={{ background: BRAND.accentSoft }}><Store size={16} style={{ color: BRAND.accent }} /></div>
+            <div>
+              <div className="font-medium text-sm text-slate-800">Agent 관리 · QR 코드</div>
+              <div className="text-xs text-slate-400">딜러사 등록 · 영업직원 명함용 QR</div>
             </div>
           </button>
           <button onClick={() => setTab("checkins")} className="bg-white rounded-xl border p-4 text-left hover:shadow-md hover:border-slate-300 transition-all flex items-center gap-3">
@@ -1554,7 +1830,7 @@ function CategoryAccessTab({ admins, categoryAccess, reload }) {
     const row = categoryAccess.find((r) => (r.Email || "").toLowerCase() === p.email);
     if (!row) return 2;
     if (row.Access_admins === true) return 0;
-    return MK_CATEGORIES.some((c) => row[c.field] === true) ? 1 : 2;
+    return MK_CATEGORIES.some((c) => mkCatValue(row, c) === true) ? 1 : 2;
   };
   const sorted = filtered.map((p, i) => [p, i, accessRank(p)]).sort((a, b) => a[2] - b[2] || a[1] - b[1]);
   const grantedCount = sorted.filter((x) => x[2] < 2).length;
@@ -1573,8 +1849,14 @@ function CategoryAccessTab({ admins, categoryAccess, reload }) {
   // 서버에 실제 저장된 값 기준 (임시 변경 반영 전). 기록이 아예 없으면 기본은 전부 미허용(false).
   function savedChecked(person, cat) {
     const row = rowFor(person.email);
-    return row ? row[cat.field] === true : false;
+    return mkCatValue(row, cat) === true;
   }
+  // 목록에 아직 없는 열(새 카테고리)은 체크 · 저장하지 않는다 — 그 열에 값을 쓰면 반영 전체가 실패한다(10-08)
+  const [catCols, setCatCols] = useState(null); // Set | null(확인 전 · 확인 실패 → 막지 않음)
+  useEffect(() => { getMkListColumnNames(MK_LISTS.categoryAccess).then(setCatCols).catch(() => setCatCols(null)); }, []);
+  // 열 목록을 아직 못 받았거나 못 읽으면 기존 5칸은 그대로 쓰고, 새 칸(inherit 있는 칸)만 잠근다(fail-closed)
+  const catReady = (c) => (catCols ? catCols.has(c.field) : !c.inherit);
+  const missingCats = catCols ? MK_CATEGORIES.filter((c) => !catCols.has(c.field)) : [];
   // 화면에 보여줄 값 — 아직 반영 안 한 로컬 변경이 있으면 그걸 우선 사용
   function effectiveChecked(person, cat) {
     const o = overrides[person.email];
@@ -1586,12 +1868,13 @@ function CategoryAccessTab({ admins, categoryAccess, reload }) {
 
   // 체크박스 클릭 — 서버 호출 없이 화면(로컬 상태)만 즉시 바꾼다. "관리자 전용"을 켜면 나머지 4개도 같이 켠다.
   function toggleLocal(person, cat) {
+    if (!catReady(cat)) return;
     const newVal = !effectiveChecked(person, cat);
     setOverrides((prev) => {
       const next = { ...prev };
       const catOverrides = { ...(next[person.email] || {}) };
       if (cat.key === "admins" && newVal === true) {
-        MK_CATEGORIES.forEach((c) => {
+        MK_CATEGORIES.filter(catReady).forEach((c) => {
           if (savedChecked(person, c) === true) delete catOverrides[c.key]; // 원래도 켜져있던 건 "변경사항"이 아니므로 기록 안 함
           else catOverrides[c.key] = true;
         });
@@ -1608,13 +1891,14 @@ function CategoryAccessTab({ admins, categoryAccess, reload }) {
 
   const allCheckedForCat = (cat) => filtered.length > 0 && filtered.every((p) => effectiveChecked(p, cat));
   function toggleAllForCatLocal(cat) {
+    if (!catReady(cat)) return;
     const target = !allCheckedForCat(cat);
     setOverrides((prev) => {
       const next = { ...prev };
       filtered.forEach((p) => {
         const catOverrides = { ...(next[p.email] || {}) };
         if (cat.key === "admins" && target === true) {
-          MK_CATEGORIES.forEach((c) => {
+          MK_CATEGORIES.filter(catReady).forEach((c) => {
             if (savedChecked(p, c) === true) delete catOverrides[c.key];
             else catOverrides[c.key] = true;
           });
@@ -1648,10 +1932,16 @@ function CategoryAccessTab({ admins, categoryAccess, reload }) {
         const changes = overrides[email];
         const existing = freshRowFor(email);
         const fields = existing ? {} : { Title: person.name || email, Email: email };
-        if (!existing) MK_CATEGORIES.forEach((c) => { fields[c.field] = c.key in changes ? changes[c.key] : false; });
+        if (!existing) MK_CATEGORIES.filter(catReady).forEach((c) => { fields[c.field] = c.key in changes ? changes[c.key] : false; });
         else Object.keys(changes).forEach((catKey) => {
           const cat = MK_CATEGORIES.find((c) => c.key === catKey);
-          fields[cat.field] = changes[catKey];
+          if (cat && catReady(cat)) fields[cat.field] = changes[catKey];
+        });
+        // 비어 있어 원본 칸(센터 관리 · 센터 QR 코드)을 따라가던 새 칸은, 원본을 바꿀 때 화면에 보이던 값을 함께 저장해 따로 떼어 낸다
+        // (안 그러면 「센터 관리」만 끄고 반영해도 「Agent 관리」 가 말없이 같이 꺼진다)
+        if (existing) MK_CATEGORIES.filter((c) => c.inherit && catReady(c) && !(c.key in changes) && typeof existing[c.field] !== "boolean").forEach((c) => {
+          const src = MK_CATEGORIES.find((x) => x.field === c.inherit);
+          if (src && src.key in changes) fields[c.field] = mkCatValue(existing, c) === true;
         });
         if (existing) await mkUpdateItem(MK_LISTS.categoryAccess, existing.id, fields);
         else await mkCreateItem(MK_LISTS.categoryAccess, fields);
@@ -1745,27 +2035,33 @@ function CategoryAccessTab({ admins, categoryAccess, reload }) {
               {grantedCount > 0 && <span> · 권한이 있는 {grantedCount}명을 맨 위에 표시</span>}
             </div>
           )}
+          {missingCats.length > 0 && (
+            <div className="mb-2 text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+              SharePoint 목록 mkqr_CategoryAccess 에 아직 없는 열: {missingCats.map((c) => `${c.field}(${c.label})`).join(", ")} — 열이 생기기 전까지 이 칸은 잠겨 있고,
+              {" "}그동안 권한은 {missingCats.filter((c) => c.inherit).map((c) => `${c.label} ← ${(MK_CATEGORIES.find((x) => x.field === c.inherit) || {}).label}`).join(" · ")} 값을 그대로 따릅니다.
+            </div>
+          )}
           <div className="bg-white rounded-xl border overflow-hidden">
             <table className="w-full text-sm table-fixed">
                 <colgroup>
-                  <col style={{ width: "42%" }} />
-                  {MK_CATEGORIES.map((c) => <col key={c.key} style={{ width: "11.6%" }} />)}
+                  <col style={{ width: "30%" }} />
+                  {MK_CATEGORIES.map((c) => <col key={c.key} style={{ width: `${70 / MK_CATEGORIES.length}%` }} />)}
                 </colgroup>
                 <thead className="bg-slate-50 text-slate-500 text-xs">
                   <tr>
                     <th className="px-4 py-1.5 border-b border-slate-200"></th>
-                    <th className="px-3 py-1.5 text-center border-b border-slate-200 text-[10px] font-semibold text-slate-400 tracking-wide">개요</th>
-                    <th colSpan={3} className="px-3 py-1.5 text-center border-b border-slate-200 text-[10px] font-semibold text-slate-400 tracking-wide">운영자 영역</th>
-                    <th className="px-3 py-1.5 text-center border-b border-slate-200 text-[10px] font-semibold text-slate-400 tracking-wide">관리자 영역</th>
+                    {[["overview", "개요"], ["operator", "운영자 영역"], ["admin", "관리자 영역"]].map(([g, label]) => (
+                      <th key={g} colSpan={MK_CATEGORIES.filter((c) => c.group === g).length} className="px-3 py-1.5 text-center border-b border-slate-200 text-[10px] font-semibold text-slate-400 tracking-wide">{label}</th>
+                    ))}
                   </tr>
                   <tr>
                     <th className="text-left px-4 py-2">사용자</th>
                     {MK_CATEGORIES.map((c) => (
-                      <th key={c.key} className="text-center px-1 py-2 whitespace-nowrap">
+                      <th key={c.key} className="text-center px-1 py-2 align-top">
                         <div className="flex flex-col items-center gap-1.5">
-                          <input type="checkbox" checked={allCheckedForCat(c)}
-                            onChange={() => toggleAllForCatLocal(c)} className="w-4 h-4 cursor-pointer" title="전체 선택/해제" />
-                          <span>{c.label}</span>
+                          <input type="checkbox" checked={allCheckedForCat(c)} disabled={!catReady(c)}
+                            onChange={() => toggleAllForCatLocal(c)} className="w-4 h-4 cursor-pointer disabled:cursor-not-allowed disabled:opacity-40" title={catReady(c) ? "전체 선택/해제" : `SharePoint 열 ${c.field} 이(가) 아직 없습니다`} />
+                          <span className="leading-tight">{c.label}</span>
                         </div>
                       </th>
                     ))}
@@ -1796,8 +2092,9 @@ function CategoryAccessTab({ admins, categoryAccess, reload }) {
                         </td>
                         {MK_CATEGORIES.map((c) => (
                           <td key={c.key} className="text-center px-3 py-1">
-                            <input type="checkbox" checked={effectiveChecked(p, c)}
-                              onChange={() => toggleLocal(p, c)} className="w-4 h-4 cursor-pointer" />
+                            <input type="checkbox" checked={effectiveChecked(p, c)} disabled={!catReady(c)}
+                              onChange={() => toggleLocal(p, c)} className="w-4 h-4 cursor-pointer disabled:cursor-not-allowed disabled:opacity-40"
+                              title={catReady(c) ? undefined : `SharePoint 열 ${c.field} 이(가) 아직 없습니다 — ${(MK_CATEGORIES.find((x) => x.field === c.inherit) || {}).label || ""} 권한을 따름`} />
                           </td>
                         ))}
                       </tr>
@@ -1842,6 +2139,8 @@ function CategoryAccessTab({ admins, categoryAccess, reload }) {
 function App({ userEmail, userName }) {
   const [tab, setTab] = useState("overview");
   const [centers, setCenters] = useState([]);
+  const [agents, setAgents] = useState([]);           // mkqr_Agents (10-08)
+  const [agentsError, setAgentsError] = useState(""); // 목록이 없거나 못 읽으면 Agent 화면에 안내 — 다른 화면은 그대로
   const [checkins, setCheckins] = useState([]);
   const [categoryAccess, setCategoryAccess] = useState([]);
   // "관리자"는 더 이상 별도 목록(mkqr_Admins)이 아니라, 카테고리 접근 권한에서 "카테고리 접근 권한(Access_admins)"이
@@ -1852,6 +2151,7 @@ function App({ userEmail, userName }) {
   const [loading, setLoading] = useState(true);
   const [hasLoadedOnce, setHasLoadedOnce] = useState(false); // 최초 로딩에만 전체화면 로딩 표시 — 그 이후 새로고침은 화면을 안 갈아엎음
   const [highlightId, setHighlightId] = useState(null);
+  const [agentHighlightId, setAgentHighlightId] = useState(null); // 센터 · Agent 는 목록이 달라 id 가 겹칠 수 있어 따로 둔다
   const [permDeniedPopup, setPermDeniedPopup] = useState(false); // 권한 없는 카테고리 클릭 시 안내 팝업
   const [uiContent, setUiContent] = useState(DEFAULT_UI_CONTENT); // mkqr_ui_content.xlsx에서 불러온 화면 문구 (Overview 소개글, 판정 기준 표)
   useEffect(() => { loadUiContent().then(setUiContent); }, []);
@@ -1870,11 +2170,14 @@ function App({ userEmail, userName }) {
         const since = new Date(Date.now() - (range.days || 7) * 24 * 3600 * 1000).toISOString();
         checkinQuery = `&$filter=fields/ServerTimestamp ge '${since}'`;
       }
-      const [c, k, ca] = await Promise.all([
+      const [c, k, ca, ag] = await Promise.all([
         mkListAll(MK_LISTS.centers),
         mkListAll(MK_LISTS.checkins, checkinQuery),
         mkListAll(MK_LISTS.categoryAccess).catch(() => []),
+        mkListAll(MK_LISTS.agents).then((v) => ({ v }), (e) => ({ e })),   // Agent 목록이 없어도 나머지 화면은 열린다
       ]);
+      if (ag.e) { setAgents([]); setAgentsError(ag.e.message || String(ag.e)); }
+      else { setAgents(ag.v.map((x) => ({ id: x.id, ...x.fields }))); setAgentsError(""); }
       setCenters(c.map((x) => ({ id: x.id, ...x.fields })));
       setCheckins(k.map((x) => ({ id: x.id, ...x.fields })));
       setCategoryAccess(ca.map((x) => ({ id: x.id, ...x.fields })));
@@ -1891,6 +2194,12 @@ function App({ userEmail, userName }) {
 
   const needsVerify = checkins.filter((r) => r.VerifyStatus === "검증필요").length;
 
+  function handleAgentCreated(id) {
+    setAgentHighlightId(id);
+    setTab("agentQr");
+    setTimeout(() => setAgentHighlightId(null), 5000);
+  }
+
   function handleCenterCreated(id) {
     setHighlightId(id);
     setTab("qr");
@@ -1902,8 +2211,7 @@ function App({ userEmail, userName }) {
   function canAccess(catKey) {
     if (!myAccessRow) return true;
     const cat = MK_CATEGORIES.find((c) => c.key === catKey);
-    const val = myAccessRow[cat.field];
-    return val !== false;
+    return mkCatValue(myAccessRow, cat) !== false;   // 비어 있으면 허용(기존 규칙) · 새 칸은 이어받을 열 값을 따른다
   }
 
   // 상단 바 표시(ICS 와 같은 2줄) — 이름은 「이준순 스타트럭코리아 IT(Jimmy Lee)」 꼴이면 괄호 안 영문만, 없으면 이름 · 메일 순
@@ -1911,7 +2219,7 @@ function App({ userEmail, userName }) {
   // 권한 — 볼 수 있는 화면 묶음으로 Viewer(개요만) · Operator(센터 · QR · 체크인 중 하나라도) · Admin(카테고리 접근 권한)
   const roleLabel = (() => {
     const r = [];
-    if (["centers", "qr", "checkins"].some((k) => canAccess(k))) r.push("Operator");
+    if (["centers", "qr", "agents", "agentQr", "checkins"].some((k) => canAccess(k))) r.push("Operator");
     if (canAccess("admins")) r.push("Admin");
     return r.length ? r.join(" · ") : "Viewer";
   })();
@@ -1921,7 +2229,9 @@ function App({ userEmail, userName }) {
   ];
   const operatorNav = [
     { id: "centers", label: "센터 관리", icon: Building2, cat: "centers" },
-    { id: "qr", label: "QR 코드", icon: QrCode, cat: "qr" },
+    { id: "qr", label: "센터 QR 코드", icon: QrCode, cat: "qr" },
+    { id: "agents", label: "Agent 관리", icon: Store, cat: "agents" },
+    { id: "agentQr", label: "Agent QR 코드", icon: Contact, cat: "agentQr" },
     { id: "checkins", label: "체크인 기록", icon: ListChecks, badge: needsVerify, cat: "checkins" },
   ];
   const adminNav = [
@@ -2020,7 +2330,9 @@ function App({ userEmail, userName }) {
           <>
             {tab === "overview" && <OverviewTab centers={centers} checkins={checkins} admins={admins} setTab={setTab} introText={uiContent.overviewIntro} />}
             {tab === "centers" && <CentersTab centers={centers} reload={reload} onCreated={handleCenterCreated} />}
-            {tab === "qr" && <QrTab centers={centers} highlightId={highlightId} />}
+            {tab === "qr" && <QrTab items={centers} kind="center" highlightId={highlightId} />}
+            {tab === "agents" && <AgentsTab agents={agents} agentsError={agentsError} reload={reload} onCreated={handleAgentCreated} />}
+            {tab === "agentQr" && (agentsError ? <AgentListMissing error={agentsError} /> : <QrTab items={agents} kind="agent" highlightId={agentHighlightId} />)}
             {tab === "checkins" && <CheckInsTab checkins={checkins} centers={centers} reload={reload} checkinRange={checkinRange} onRangeChange={changeCheckinRange} verifyRules={uiContent.verifyRules} />}
             {tab === "categoryAccess" && <CategoryAccessTab admins={admins} categoryAccess={categoryAccess} reload={reload} />}
           </>
@@ -2098,7 +2410,7 @@ async function mkBoot(account) {
   try {
     const items = await mkListAll(MK_LISTS.categoryAccess);
     const rows = items.map((x) => x.fields);
-    const anyAccessRows = rows.filter((r) => MK_CATEGORIES.some((c) => r[c.field] === true));
+    const anyAccessRows = rows.filter((r) => MK_CATEGORIES.some((c) => mkCatValue(r, c) === true));
     adminEmails = rows.filter((r) => r.Access_admins === true).map((r) => (r.Email || "").trim().toLowerCase()).filter(Boolean);
     if (anyAccessRows.length > 0) {
       isAdmin = anyAccessRows.some((r) => (r.Email || "").trim().toLowerCase() === (account.username || "").trim().toLowerCase());

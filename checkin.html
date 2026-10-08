@@ -182,7 +182,53 @@ function renderError(message) {
   `);
 }
 
+// Agent(딜러사) 명함 QR(?a=, 10-08 · mkqr-agent) — 위치를 묻지 않는다. 기기 정보만 붙여 한 번에 기록 요청하고 받은 링크로 바로 이동.
+// (센터 QR 처럼 정보 조회 → 위치 확인 → 기록의 세 단계를 밟으면 명함을 찍은 고객이 위치 권한 창부터 보게 된다)
+async function runAgent(agentToken) {
+  document.querySelector("h1").textContent = "Star Truck Korea";
+  centerNameEl.textContent = "연결 중입니다...";
+  document.querySelector(".sub").textContent = "잠시 후 이동합니다";
+  setState("연결 중입니다...");
+  const fingerprint = await withTimeout(getDeviceFingerprint().catch(() => ""), 3000, "");
+  let data;
+  try {
+    const res = await fetchWithTimeout(`${API_BASE}/api/checkin`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        agentToken,
+        clientTimestamp: new Date().toISOString(),
+        deviceId: getDeviceId(),
+        deviceFingerprint: fingerprint,
+        userAgent: navigator.userAgent,
+      }),
+    }, 15000);
+    data = await res.json();
+    if (!res.ok) {
+      if (res.status === 429 && data.blocked) { centerNameEl.textContent = ""; renderBlocked(data.error); return; }
+      throw new Error(data.error || "연결에 실패했습니다");
+    }
+  } catch (e) {
+    centerNameEl.textContent = "연결할 수 없습니다";
+    renderError(e.message);
+    return;
+  }
+  if (data.name) centerNameEl.textContent = data.name;
+  if (data.redirectUrl) {
+    setState("이동 중입니다...");
+    location.replace(data.redirectUrl);
+    return;
+  }
+  showFinal(`
+    <div class="result-icon ok">✓</div>
+    <div class="result-title">확인되었습니다</div>
+    <div class="result-desc">방문해 주셔서 감사합니다.</div>
+  `);
+}
+
 async function run() {
+  const agentToken = params.get("a");
+  if (!token && agentToken) { await runAgent(agentToken); return; }
   if (!token) {
     centerNameEl.textContent = "잘못된 접근입니다";
     renderError("QR 코드를 다시 스캔해주세요.");
