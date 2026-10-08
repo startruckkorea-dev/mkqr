@@ -91,6 +91,42 @@ async function getListId(env, listName) {
   return _listIdCache[listName];
 }
 
+// ---- 체크인 기록 연도별 목록(10-09 · mkqr-year) -------------------------------------------------
+// 2026 = mkqr_CheckIns(지금 목록), 2027 부터 mkqr_CheckIns_YYYY. 연도는 한국 시간 기준.
+// 새 연도 목록은 관리자가 SharePoint 에서 「기존 목록에서 만들기」로 만든다(관리 화면이 12월부터 미리 알려 줌).
+const CK_BASE = "mkqr_CheckIns";
+const CK_BASE_YEAR = 2026;
+function kstYear(ms = Date.now()) { return new Date(ms + 9 * 3600 * 1000).getUTCFullYear(); }
+function ckListName(y) { return y <= CK_BASE_YEAR ? CK_BASE : `${CK_BASE}_${y}`; }
+
+// 목록이 있는지 — 있으면 계속 기억, 없으면 10분 동안만 기억(그 사이 만들어지면 10분 안에 새 목록으로 넘어간다).
+// 조회 자체가 실패(일시 오류)하면 throw — 부르는 쪽이 「없음」으로 오해해 기억하지 않게.
+const _ckMissing = {};
+async function listExists(env, name) {
+  if (_listIdCache[name]) return true;
+  if (_ckMissing[name] && Date.now() - _ckMissing[name] < 10 * 60 * 1000) return false;
+  const token = await getAppToken(env);
+  const siteId = await getSiteId(env);
+  const res = await fetch(`${GRAPH}/sites/${siteId}/lists?$filter=displayName eq '${name}'`, { headers: { Authorization: "Bearer " + token } });
+  if (!res.ok) throw new Error(`목록 확인 실패(${res.status}): ${name}`);
+  const data = await res.json();
+  if (data.value?.length) { _listIdCache[name] = data.value[0].id; delete _ckMissing[name]; return true; }
+  _ckMissing[name] = Date.now();
+  return false;
+}
+
+// 올해까지 실제로 있는 체크인 목록(오래된 것부터). 2026 목록은 늘 있다고 본다(없으면 기존처럼 그 자리에서 오류).
+// 일시 오류로 확인을 못 한 연도는 이번 요청에서만 빼고 넘어간다 — 기록은 직전 목록으로 이어지고, 관리 화면은 모든 목록을 함께 읽는다.
+async function ckExistingLists(env) {
+  const names = [CK_BASE];
+  for (let y = CK_BASE_YEAR + 1; y <= kstYear(); y++) {
+    const n = ckListName(y);
+    try { if (await listExists(env, n)) names.push(n); } catch (e) { console.log("[year] " + e.message); }
+  }
+  return names;
+}
+async function ckWriteList(env) { const l = await ckExistingLists(env); return l[l.length - 1]; }
+
 async function listItems(env, listName, filterQuery = "") {
   const token = await getAppToken(env);
   const siteId = await getSiteId(env);
@@ -112,20 +148,30 @@ async function listItems(env, listName, filterQuery = "") {
 // 체크인 기록이 수천 건 쌓여도 매번 전체를 긁지 않도록, ServerTimestamp 기준으로 최근 것만 서버측 필터링해서 가져온다.
 // mkqr_CheckIns 목록의 ServerTimestamp 컬럼에 "인덱스"를 걸어두는 걸 권장 (목록 설정 → 인덱스 걸린 열 → 만들기).
 // 인덱스가 없어도 Prefer 헤더 덕분에 동작은 하지만, 목록이 5,000건을 넘어가면 느려지거나 실패할 수 있다.
+// 10-09(mkqr-year): 최근 기록은 지금 쓰는 목록 아니면 바로 앞 목록(해 넘김 · 이어 쓰기)에만 있으므로 마지막 두 목록만 본다.
 async function listRecentCheckins(env, sinceMs) {
   const sinceIso = new Date(sinceMs).toISOString();
-  return listItems(env, "mkqr_CheckIns", `&$filter=fields/ServerTimestamp ge '${sinceIso}'`);
+  // 지금 쓰는 목록은 실패하면 그대로 오류(기존과 같음), 바로 앞 목록은 해 넘김 직후에만 의미가 있어 실패해도 빈 값으로 넘어간다
+  const lists = (await ckExistingLists(env)).slice(-2);
+  const last = lists.length - 1;
+  const parts = await Promise.all(lists.map((n, i) => {
+    const p = listItems(env, n, `&$filter=fields/ServerTimestamp ge '${sinceIso}'`);
+    return i === last ? p : p.catch((e) => { console.log("[year] 직전 목록 조회 실패: " + e.message); return []; });
+  }));
+  return parts.flat();
 }
 
 // 같은 센터를 같은 기기가 지금까지(기간 제한 없이) 몇 번 찍었는지 조회 - 리워드 부정사용 방지용.
-// CenterId/DeviceFingerprint는 인덱스가 없는 컬럼이라 HonorNonIndexedQueriesWarningMayFailRandomly로 조회하며,
+// CenterId/DeviceFingerprint 는 인덱스를 걸어 둔 열(10-09) — 연도 목록을 새로 만들 때도 같은 인덱스를 건다.
 // 조회 자체가 실패해도(네트워크 오류 등) 체크인 자체를 막지 않기 위해 0으로 처리한다(fail-open).
 async function countDeviceCenterVisits(env, centerId, fingerprint) {
   if (!fingerprint || !centerId) return 0;
+  // 10-09(mkqr-year): 연도 목록 전부를 센다(누적 규칙은 해가 바뀌어도 그대로). 목록 하나가 실패해도 나머지로 센다.
   try {
-    const items = await listItems(env, "mkqr_CheckIns",
-      `&$filter=fields/CenterId eq '${centerId}' and fields/DeviceFingerprint eq '${fingerprint}'`);
-    return items.filter((it) => it.fields.VerifyStatus !== "차단해제").length;
+    const lists = await ckExistingLists(env);
+    const parts = await Promise.all(lists.map((n) => listItems(env, n,
+      `&$filter=fields/CenterId eq '${centerId}' and fields/DeviceFingerprint eq '${fingerprint}'`).catch(() => [])));
+    return parts.flat().filter((it) => it.fields.VerifyStatus !== "차단해제").length;
   } catch (e) {
     return 0;
   }
@@ -291,7 +337,7 @@ export default {
           const aCf = request.cf || {};
           const aCity = [...new Set([aCf.city, aCf.region].filter(Boolean))].join(" ");
           const aNow = new Date().toISOString();
-          await createItem(env, "mkqr_CheckIns", {
+          await createItem(env, await ckWriteList(env), {
             Title: `${a.Title} ${aNow.slice(0, 16).replace("T", " ")}`,
             CenterId: agentKey,
             CenterName: a.Title,
@@ -391,7 +437,7 @@ export default {
           DeviceFingerprint: deviceFingerprint || "",
           RecaptchaScore: recaptchaScore,
         };
-        await createItem(env, "mkqr_CheckIns", fields);
+        await createItem(env, await ckWriteList(env), fields);   // 올해 목록(없으면 직전 연도 목록) — 10-09 · mkqr-year
 
         return json({ verifyStatus, distanceKm: fields.DistanceKm, gpsUsed, redirectUrl: safeRedirect(c.RedirectUrl) });
       }

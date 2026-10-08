@@ -210,6 +210,63 @@ async function mkCreateItem(listName, fields) {
   return res.json();
 }
 
+// ---- 체크인 기록 연도별 목록(10-09 · mkqr-year) — Worker 와 같은 규칙 -------------------------------
+// 2026 = mkqr_CheckIns(지금 목록), 2027 부터 mkqr_CheckIns_YYYY. 연도는 한국 시간 기준.
+// Worker 는 올해 목록이 아직 없으면 가장 가까운 지난 연도 목록에 이어 쓰므로, 목록 Y 에는 Y년 이후 기록만 있다.
+const MK_CK_BASE_YEAR = 2026;
+const MK_CK_INDEXED = ["ServerTimestamp", "DeviceFingerprint", "CenterId"];   // 연도 목록마다 필요한 인덱스
+function mkKstYear(ms = Date.now()) { return new Date(ms + 9 * 36e5).getUTCFullYear(); }
+function mkCheckinListName(y) { return y <= MK_CK_BASE_YEAR ? MK_LISTS.checkins : `${MK_LISTS.checkins}_${y}`; }
+const _mkMissing = {};   // 없는 목록 — 5분 동안 다시 묻지 않음
+async function mkListExists(name) {
+  if (_mkListIds[name]) return true;
+  if (_mkMissing[name] && Date.now() - _mkMissing[name] < 5 * 60e3) return false;
+  try { await getMkListId(name); delete _mkMissing[name]; return true; }
+  catch (e) { if (/찾을 수 없습니다/.test(e.message)) { _mkMissing[name] = Date.now(); return false; } throw e; }
+}
+// 2026 ~ toYear 중 실제로 있는 체크인 목록(오래된 것부터)
+async function mkCheckinListsUpTo(toYear) {
+  const ys = []; for (let y = MK_CK_BASE_YEAR; y <= toYear; y++) ys.push(y);
+  const ok = await Promise.all(ys.map((y) => y === MK_CK_BASE_YEAR ? true : mkListExists(mkCheckinListName(y))));
+  return ys.filter((_, i) => ok[i]).map(mkCheckinListName);
+}
+// 지금 기록이 들어가는 목록 — 올해 목록, 없으면 가장 가까운 지난 연도 목록
+async function mkCheckinWriteList() { const l = await mkCheckinListsUpTo(mkKstYear()); return l[l.length - 1]; }
+// 기간 조회 — 조회 끝 날짜의 연도까지 있는 목록을 모두 읽어 합친다. 행마다 어느 목록인지(_list) · 화면 키(_key)를 붙인다
+async function mkLoadCheckins(range, query) {
+  const toMs = range.mode === "custom" && range.to ? new Date(range.to + "T23:59:59").getTime() : Date.now();
+  const lists = await mkCheckinListsUpTo(Math.max(MK_CK_BASE_YEAR, Math.min(mkKstYear(), mkKstYear(toMs))));
+  const parts = await Promise.all(lists.map((n) => mkListAll(n, query)
+    .then((v) => v.map((x) => ({ id: x.id, ...x.fields, _list: n, _key: `${n}:${x.id}` })))));
+  return parts.flat();
+}
+// 보관 목록 점검(관리자 안내) — 올해 목록 없음 · 12월이면 내년 목록 · 각 목록의 열/인덱스 빠짐. 5분 동안 결과를 기억
+let _mkStorageCache = null;
+async function mkCheckinStorageIssues() {
+  if (_mkStorageCache && Date.now() - _mkStorageCache.at < 5 * 60e3) return _mkStorageCache.issues;
+  const Y = mkKstYear(), M = new Date(Date.now() + 9 * 36e5).getUTCMonth() + 1;
+  const token = await getGraphToken();
+  const cols = async (name) => (await apiGet(`/sites/${_siteId}/lists/${await getMkListId(name)}/columns?$select=name,indexed,hidden,readOnly`, token)).value || [];
+  const issues = [];
+  const lists = await mkCheckinListsUpTo(Y);
+  if (Y > MK_CK_BASE_YEAR && !lists.includes(mkCheckinListName(Y)))
+    issues.push({ warn: true, missing: true, text: `${Y}년 목록 ${mkCheckinListName(Y)} 이(가) 없어 ${lists[lists.length - 1]} 목록에 이어서 기록되고 있습니다. 만들어 두면 그때부터 새 목록에 쌓입니다.` });
+  if (M === 12 && !(await mkListExists(mkCheckinListName(Y + 1))))
+    issues.push({ warn: false, missing: true, text: `${Y + 1}년 목록 ${mkCheckinListName(Y + 1)} 을(를) 미리 만들어 두세요 — 1월 1일 0시(한국 시간)부터 새 기록이 그 목록에 쌓입니다.` });
+  const base = await cols(MK_LISTS.checkins);
+  const want = base.filter((c) => !c.hidden && !c.readOnly).map((c) => c.name);
+  for (const n of lists) {
+    const c = n === MK_LISTS.checkins ? base : await cols(n);
+    const has = (k) => c.find((x) => x.name === k);
+    const noCol = n === MK_LISTS.checkins ? [] : want.filter((k) => !has(k));
+    const noIdx = MK_CK_INDEXED.filter((k) => has(k) && !has(k).indexed);
+    if (noCol.length) issues.push({ warn: true, text: `${n} 에 없는 열: ${noCol.join(", ")} — 「기존 목록에서」로 다시 만들거나 열을 추가해 주세요.` });
+    if (noIdx.length) issues.push({ warn: true, text: `${n} 에 인덱스가 없는 열: ${noIdx.join(", ")} — 5,000건을 넘으면 조회 · 체크인이 실패할 수 있습니다.` });
+  }
+  _mkStorageCache = { at: Date.now(), issues };
+  return issues;
+}
+
 async function mkUpdateItem(listName, itemId, fields) {
   const token = await getGraphToken();
   const listId = await getMkListId(listName);
@@ -509,6 +566,37 @@ function BlockingOverlay({ message }) {
       <div className="bg-white rounded-xl px-8 py-6 flex flex-col items-center gap-3 shadow-xl">
         <div className="w-8 h-8 rounded-full border-4 border-slate-200 animate-spin" style={{ borderTopColor: BRAND.accent }} />
         <div className="text-sm text-slate-600">{message}</div>
+      </div>
+    </div>
+  );
+}
+
+// 체크인 보관 목록 점검 — 관리자(카테고리 접근 권한)에게만, 문제가 있을 때만 보인다(10-09 · mkqr-year)
+function CheckinStorageNotice() {
+  const [issues, setIssues] = useState(null);
+  const [open, setOpen] = useState(false);
+  useEffect(() => { mkCheckinStorageIssues().then(setIssues, (e) => { console.warn("[MKQR] 보관 목록 점검 실패:", e.message); setIssues([]); }); }, []);
+  if (!issues || !issues.length) return null;
+  const warn = issues.some((i) => i.warn);
+  const Y = mkKstYear();
+  const next = issues.some((i) => i.missing && !i.warn) ? Y + 1 : Y;
+  return (
+    <div className={`rounded-xl border px-4 py-3 mb-5 text-xs leading-relaxed ${warn ? "bg-amber-50 border-amber-200 text-amber-900" : "bg-blue-50 border-blue-100 text-blue-900"}`}>
+      <div className="flex items-start gap-2.5">
+        <AlertTriangle size={15} className={`shrink-0 mt-0.5 ${warn ? "text-amber-500" : "text-blue-500"}`} />
+        <div className="flex-1 min-w-0">
+          <div className="font-semibold mb-1">체크인 기록 연도별 목록 점검 <span className="font-normal opacity-60">· 관리자에게만 보입니다</span></div>
+          <ul className="space-y-0.5 list-disc list-inside">{issues.map((i, k) => <li key={k}>{i.text}</li>)}</ul>
+          {issues.some((i) => i.missing) && <button onClick={() => setOpen((v) => !v)} className="mt-1.5 font-medium underline underline-offset-2">{open ? "만드는 방법 접기" : "새 연도 목록 만드는 방법"}</button>}
+          {open && issues.some((i) => i.missing) && (
+            <ol className="mt-1.5 space-y-0.5 list-decimal list-inside opacity-90">
+              <li>SharePoint 사이트 → 새로 만들기 → 목록 → 「기존 목록에서」 → <b>{MK_LISTS.checkins}</b> 선택</li>
+              <li>이름을 <b>{mkCheckinListName(Math.max(next, MK_CK_BASE_YEAR + 1))}</b> 로 만들기 — 열이 그대로 복사됩니다(기록은 복사되지 않음)</li>
+              <li>새 목록 설정 → 인덱싱된 열 → {MK_CK_INDEXED.join(" · ")} 3개 만들기</li>
+              <li>화면을 새로고침하면 이 안내가 사라지고, 체크인은 10분 안에 새 목록에 기록되기 시작합니다</li>
+            </ol>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -1161,7 +1249,7 @@ function QrTab({ items, kind = "center", highlightId }) {
             </a>
           </div>
         ))}
-        {!activeItems.length && <div className="col-span-4 text-center text-slate-400 py-10">{isAgent ? '먼저 "Agent 관리"에서 Agent(딜러사)를 등록해주세요' : '먼저 "센터 관리"에서 센터를 등록해주세요'}</div>}
+        {!activeItems.length && <div className="col-span-4 text-center text-slate-400 py-10">{isAgent ? '먼저 "Agent 관리"에서 Agent 를 등록해주세요' : '먼저 "센터 관리"에서 센터를 등록해주세요'}</div>}
         {activeItems.length > 0 && !filtered.length && <div className="col-span-4 text-center text-slate-400 py-10">검색 결과가 없습니다</div>}
       </div>
       {filtered.length > 0 && totalPages > 1 && (
@@ -1453,7 +1541,7 @@ function CheckInsTab({ kind = "center", checkins, reload, checkinRange, onRangeC
   }
 
   async function approve(r) {
-    try { await mkUpdateItem(MK_LISTS.checkins, r.id, { VerifyStatus: "관리자승인" }); await reload(); } catch (e) { alert(e.message); }
+    try { await mkUpdateItem(r._list || MK_LISTS.checkins, r.id, { VerifyStatus: "관리자승인" }); await reload(); } catch (e) { alert(e.message); }
   }
 
   // 특정 기기가 1분 5회 초과로 30분 차단된 경우, 관리자가 그 전에 강제로 풀어줄 때 사용.
@@ -1463,7 +1551,7 @@ function CheckInsTab({ kind = "center", checkins, reload, checkinRange, onRangeC
     if (!r.DeviceFingerprint) { alert("이 기록엔 기기 식별코드가 없습니다."); return; }
     if (!confirm(`"${r.CenterName}" ${noun}에서 인증코드 ${r.DeviceFingerprint.slice(0, 16).toUpperCase()} 기기의 차단을 즉시 해제할까요?`)) return;
     try {
-      await mkCreateItem(MK_LISTS.checkins, {
+      await mkCreateItem(await mkCheckinWriteList(), {   // Worker 가 지금 읽는 목록에(10-09 · mkqr-year)
         Title: `차단해제 ${r.CenterName} ${new Date(new Date().getTime()+9*3600*1000).toISOString().slice(0, 16).replace("T", " ")}`,
         CenterId: r.CenterId, CenterName: r.CenterName,
         DeviceFingerprint: r.DeviceFingerprint,
@@ -1500,7 +1588,7 @@ function CheckInsTab({ kind = "center", checkins, reload, checkinRange, onRangeC
       const key = `${r.CenterId}|${r.DeviceFingerprint}`;
       if (seenKeys.has(key)) continue;
       seenKeys.add(key);
-      if (blockedDevices[key] != null) unblockRowInfo[r.id] = blockedDevices[key];
+      if (blockedDevices[key] != null) unblockRowInfo[r._key || r.id] = blockedDevices[key];
     }
   }
 
@@ -1523,7 +1611,7 @@ function CheckInsTab({ kind = "center", checkins, reload, checkinRange, onRangeC
         {s >= 0.5 ? "정상" : s >= 0.3 ? "보통" : "의심"} ({s.toFixed(1)})</span>;
   const manage = (r) => {
     const canApprove = !isAgent && ["검증필요", "GPS거부"].includes(r.VerifyStatus);
-    const blocked = unblockRowInfo[r.id] != null;
+    const blocked = unblockRowInfo[r._key || r.id] != null;
     if (!canApprove && !blocked) return dash;
     return (
       <div className="flex items-center justify-center gap-1.5">
@@ -1531,7 +1619,7 @@ function CheckInsTab({ kind = "center", checkins, reload, checkinRange, onRangeC
         {blocked && (
           <button onClick={() => unblockDevice(r)} title="지금 차단 중인 기기입니다. 눌러서 즉시 해제할 수 있습니다."
             className="text-xs px-2 py-1 rounded-md border border-red-200 text-red-600 bg-red-50 hover:bg-red-100 whitespace-nowrap">
-            차단 {unblockRowInfo[r.id]}분 · 해제
+            차단 {unblockRowInfo[r._key || r.id]}분 · 해제
           </button>
         )}
       </div>
@@ -1588,7 +1676,7 @@ function CheckInsTab({ kind = "center", checkins, reload, checkinRange, onRangeC
       {isAgent && (
         <div className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 mb-4 text-xs text-slate-500 flex items-center gap-2.5">
           <Contact size={15} className="text-slate-400 shrink-0" />
-          명함 QR 은 위치를 묻지 않고 접속만 기록한 뒤 딜러사 링크로 바로 이동합니다. 같은 기기가 1분에 5회를 넘기면 30분 동안 막히며, 아래 「해제」로 바로 풀 수 있습니다.
+          명함 QR 은 위치를 묻지 않고 접속만 기록한 뒤 Agent 마다 정한 링크로 바로 이동합니다. 같은 기기가 1분에 5회를 넘기면 30분 동안 막히며, 아래 「해제」로 바로 풀 수 있습니다.
         </div>
       )}
 
@@ -1638,7 +1726,7 @@ function CheckInsTab({ kind = "center", checkins, reload, checkinRange, onRangeC
             </thead>
             <tbody>
               {pageRows.map((r) => (
-                <tr key={r.id} onClick={() => setDetail(r)} className="border-t border-slate-100 first:border-t-0 hover:bg-slate-50 cursor-pointer">
+                <tr key={r._key || r.id} onClick={() => setDetail(r)} className="border-t border-slate-100 first:border-t-0 hover:bg-slate-50 cursor-pointer">
                   {isAgent ? (
                     <>
                       <td className={`${td} font-medium text-slate-800`} title={r.CenterName}>{r.CenterName}</td>
@@ -1727,48 +1815,28 @@ function CheckInDetailModal({ row, onClose }) {
 /* Overview 탭                                                         */
 /* ------------------------------------------------------------------ */
 function OverviewTab({ centers, agents, agentsError, checkins, admins, setTab, introText, canAccess, rangeLabel }) {
-  // 권한에 따라 보일 것만 — 센터 수(센터 관리) · Agent 수(Agent 관리) · 체크인 수치와 목록(체크인 기록) · 관리자 수(카테고리 접근 권한)
+  // 10-09(mkqr-ui4): 센터(Marketing) · Agent(HR · GA) 를 각자의 구역으로 나눈다 — 구역마다 색 하나(센터 청록 · Agent 남청),
+  // 머리(이름 · 담당 · 바로가기) → 숫자 3칸 → 최근 기록 | 순위. 검증필요는 센터에만 있는 판정이라 센터 구역 안에 둔다.
+  // 권한에 따라 보일 것만 — 센터/Agent 수(관리) · 체크인 수치와 목록(각 체크인 기록) · 관리자(카테고리 접근 권한)
   const can = (k) => canAccess(k);
   const rows = checkins.filter((r) => r.VerifyStatus !== "차단해제");
   const centerRows = rows.filter((r) => !isAgentCheckin(r));
   const agentRows = rows.filter((r) => isAgentCheckin(r));
   const byTime = (a, b) => new Date(b.ServerTimestamp || 0) - new Date(a.ServerTimestamp || 0);
-  const recentCenter = [...centerRows].sort(byTime).slice(0, 6);
-  const recentAgent = [...agentRows].sort(byTime).slice(0, 6);
+  const rankOf = (list) => Object.values(list.reduce((m, r) => {
+    const k = r.CenterId || r.CenterName; (m[k] = m[k] || { name: r.CenterName, n: 0 }).n++; return m;
+  }, {})).sort((a, b) => b.n - a.n).slice(0, 5);
+  const devices = (list) => new Set(list.map((r) => r.DeviceFingerprint).filter(Boolean)).size;
   const needsVerify = centerRows.filter((r) => r.VerifyStatus === "검증필요").length;
   const activeCenters = centers.filter((c) => c.Active !== false).length;
   const activeAgents = agents.filter((a) => a.Active !== false).length;
-  const rank = Object.values(agentRows.reduce((m, r) => {
-    const k = r.CenterId; (m[k] = m[k] || { name: r.CenterName, n: 0 }).n++; return m;
-  }, {})).sort((a, b) => b.n - a.n).slice(0, 5);
-  const rankMax = rank.length ? rank[0].n : 1;
-  const agentDevices = new Set(agentRows.map((r) => r.DeviceFingerprint).filter(Boolean)).size;
+  const AGENT = { main: "#3B5B8C", soft: "#E8EEF7" };   // Agent 구역 색(남청) — 센터는 BRAND.accent(청록)
 
-  const kpis = [
-    // 윗줄 색은 한 가지(브랜드 청록) — 카드마다 색이 달라 어수선했다(10-09). 확인 대기만 바탕색으로 구분
-    can("centers") && { label: "활성 센터", value: activeCenters, suffix: ` / ${centers.length}`, icon: Building2, tab: "centers" },
-    can("checkins") && { label: `센터 체크인 · ${rangeLabel}`, value: centerRows.length, icon: QrCode, tab: "checkins" },
-    can("checkins") && { label: "검증필요 (확인 대기)", value: needsVerify, icon: AlertTriangle, warn: needsVerify > 0, tab: "checkins" },
-    can("agents") && { label: "활성 Agent", value: agentsError ? "–" : activeAgents, suffix: agentsError ? "" : ` / ${agents.length}`, icon: Store, tab: "agents" },
-    can("agentCheckins") && { label: `Agent 스캔 · ${rangeLabel}`, value: agentRows.length, icon: Contact, tab: "agentCheckins" },
-    can("admins") && { label: "등록된 관리자", value: admins.length, icon: ShieldCheck, tab: "categoryAccess" },
-  ].filter(Boolean);
-  const KPI_COLS = { 1: "xl:grid-cols-1", 2: "xl:grid-cols-2", 3: "xl:grid-cols-3", 4: "xl:grid-cols-4", 5: "xl:grid-cols-5", 6: "xl:grid-cols-6" };
-
-  const links = [
-    { tab: "centers", cat: "centers", icon: Building2, title: "센터 관리", desc: "센터 등록 · 수정, GPS 허용 반경" },
-    { tab: "qr", cat: "qr", icon: QrCode, title: "센터 QR 코드", desc: "센터별 방문 인증 QR 내려받기" },
-    { tab: "checkins", cat: "checkins", icon: ListChecks, title: "센터 체크인 기록", desc: "방문 인증 기록 조회와 검증" },
-    { tab: "agents", cat: "agents", icon: Store, title: "Agent 관리", desc: "딜러사 등록 · 이동 링크 설정" },
-    { tab: "agentQr", cat: "agentQr", icon: Contact, title: "Agent QR 코드", desc: "영업직원 명함용 QR(인쇄용)" },
-    { tab: "agentCheckins", cat: "agentCheckins", icon: ListChecks, title: "Agent 체크인 기록", desc: "명함 QR 스캔 기록 조회" },
-  ].filter((l) => can(l.cat));
-
-  const Tile = ({ icon: Icon, title, tag, desc, chips, tab, cat }) => (
+  const Tile = ({ icon: Icon, title, tag, desc, chips, tab, cat, tint }) => (
     <div onClick={() => can(cat) && setTab(tab)}
       className={`rounded-xl p-4 bg-white/[0.06] border border-white/10 ${can(cat) ? "cursor-pointer hover:bg-white/[0.1] transition-colors" : ""}`}>
       <div className="flex items-center gap-2 mb-1.5">
-        <div className="w-7 h-7 rounded-lg flex items-center justify-center" style={{ background: "rgba(47,123,122,.35)" }}><Icon size={15} /></div>
+        <div className="w-7 h-7 rounded-lg flex items-center justify-center" style={{ background: tint }}><Icon size={15} /></div>
         <span className="font-semibold text-sm">{title}</span>
         <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-white/10 text-white/70">{tag}</span>
       </div>
@@ -1779,17 +1847,91 @@ function OverviewTab({ centers, agents, agentsError, checkins, admins, setTab, i
     </div>
   );
 
-  const Panel = ({ icon: Icon, title, count, children, onAll }) => (
-    <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden flex flex-col">
-      <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between">
-        <span className="text-sm font-semibold text-slate-700 flex items-center gap-2"><Icon size={15} className="text-slate-400" />{title}
-          {count != null && <span className="text-[11px] font-medium px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-500">{count}</span>}</span>
-        {onAll && <button onClick={onAll} className="text-xs text-slate-400 hover:text-slate-700">전체 보기 →</button>}
+  // 구역 하나 — color: 구역 색, links: [탭, 권한, 이름], stats: [이름, 값, 덧붙임, {warn, tab}], left/right: 아래 두 칸
+  const Section = ({ color, soft, icon: Icon, title, group, desc, links, stats, left, right }) => (
+    <section className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden flex flex-col">
+      <div className="h-1" style={{ background: color }} />
+      <div className="px-5 pt-4 pb-3 flex items-start gap-3 flex-wrap">
+        <div className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0" style={{ background: soft }}><Icon size={19} style={{ color }} /></div>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2 flex-wrap">
+            <h3 className="font-semibold text-slate-800">{title}</h3>
+            <span className="text-[10.5px] font-semibold px-2 py-0.5 rounded-full" style={{ background: soft, color }}>{group}</span>
+          </div>
+          <p className="text-xs text-slate-400 mt-0.5">{desc}</p>
+        </div>
+        <div className="flex items-center gap-1.5 flex-wrap">
+          {links.filter(([, cat]) => can(cat)).map(([tab, , label]) => (
+            <button key={tab} onClick={() => setTab(tab)}
+              className="text-xs px-2.5 py-1.5 rounded-lg border border-slate-200 text-slate-600 bg-white hover:bg-slate-50 hover:border-slate-300 transition-colors whitespace-nowrap">
+              {label} <span className="text-slate-300">→</span>
+            </button>
+          ))}
+        </div>
       </div>
-      <div className="flex-1">{children}</div>
+      {stats.length > 0 && (
+        <div className={`grid border-y border-slate-100 ${stats.length === 3 ? "grid-cols-3" : stats.length === 2 ? "grid-cols-2" : "grid-cols-1"}`}>
+          {stats.map(([label, value, suffix, opt = {}], i) => (
+            <button key={label} onClick={() => opt.tab && setTab(opt.tab)} disabled={!opt.tab}
+              className={`text-left px-5 py-3.5 transition-colors ${i ? "border-l border-slate-100" : ""} ${opt.tab ? "hover:bg-slate-50" : "cursor-default"}`}
+              style={opt.warn ? { background: "#FFFBEB" } : undefined}>
+              <div className="text-[11.5px] text-slate-500 flex items-center gap-1">{opt.warn && <AlertTriangle size={12} className="text-amber-500" />}{label}</div>
+              <div className="text-2xl font-bold mt-0.5 tabular-nums" style={{ color: opt.warn ? "#B45309" : "#1E293B" }}>
+                {value}{suffix && <span className="text-sm font-normal text-slate-400">{suffix}</span>}
+              </div>
+            </button>
+          ))}
+        </div>
+      )}
+      {(left || right) && (
+        <div className="grid grid-cols-1 md:grid-cols-2 flex-1">
+          <div className="min-w-0">{left}</div>
+          <div className="min-w-0 border-t md:border-t-0 md:border-l border-slate-100">{right}</div>
+        </div>
+      )}
+    </section>
+  );
+  const SubHead = ({ title, onAll }) => (
+    <div className="px-5 pt-3.5 pb-2 flex items-center justify-between">
+      <span className="text-[12px] font-semibold text-slate-500">{title}</span>
+      {onAll && <button onClick={onAll} className="text-[11.5px] text-slate-400 hover:text-slate-700">전체 보기 →</button>}
     </div>
   );
-  const Empty = ({ text }) => <div className="text-center text-slate-400 text-sm py-10">{text}</div>;
+  const Empty = ({ text }) => <div className="text-center text-slate-400 text-[13px] py-10 px-4">{text}</div>;
+  const Recent = ({ list, agent }) => list.length ? (
+    <div className="pb-2">
+      {list.map((r) => (
+        <div key={r._key || r.id} className="px-5 py-2 flex items-center justify-between gap-2 hover:bg-slate-50">
+          <div className="flex items-center gap-2 min-w-0">
+            {agent ? <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: AGENT.main }} /> : <Badge status={r.VerifyStatus} />}
+            <span className="text-[13px] text-slate-700 truncate" title={r.CenterName}>{r.CenterName}</span>
+          </div>
+          <span className="text-[11.5px] text-slate-400 shrink-0 tabular-nums">{fmtDate(r.ServerTimestamp).slice(5)}</span>
+        </div>
+      ))}
+    </div>
+  ) : <Empty text={`${rangeLabel} 기록이 없습니다`} />;
+  const Rank = ({ list, color, unit }) => {
+    const rk = rankOf(list); const max = rk.length ? rk[0].n : 1;
+    return rk.length ? (
+      <div className="px-5 pb-4 pt-1 space-y-2.5">
+        {rk.map((a, i) => (
+          <div key={a.name + i}>
+            <div className="flex items-center justify-between text-[12.5px] mb-1">
+              <span className="text-slate-700 truncate"><span className="text-slate-400 mr-1.5 tabular-nums">{i + 1}</span>{a.name}</span>
+              <span className="text-slate-500 font-semibold tabular-nums ml-2">{a.n}{unit}</span>
+            </div>
+            <div className="h-1.5 rounded-full bg-slate-100 overflow-hidden">
+              <div className="h-full rounded-full" style={{ width: `${Math.max(6, (a.n / max) * 100)}%`, background: color }} />
+            </div>
+          </div>
+        ))}
+      </div>
+    ) : <Empty text="순위를 낼 기록이 없습니다" />;
+  };
+
+  const showCenter = ["centers", "qr", "checkins"].some(can);
+  const showAgent = ["agents", "agentQr", "agentCheckins"].some(can);
 
   return (
     <div className="w-full">
@@ -1803,11 +1945,11 @@ function OverviewTab({ centers, agents, agentsError, checkins, admins, setTab, i
             <p className="text-sm text-white/70 leading-relaxed">{introText}</p>
           </div>
           <div className="lg:col-span-3 grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <Tile icon={QrCode} title="센터 QR" tag="방문 인증" tab="qr" cat="qr"
+            <Tile icon={QrCode} title="센터 QR" tag="방문 인증" tab="qr" cat="qr" tint="rgba(47,123,122,.45)"
               desc="캠페인 센터에 붙이는 QR — 스캔하면 시각 · GPS/IP 위치 · 기기 정보를 기록하고 센터 허용 반경 안인지 자동으로 판정합니다."
               chips={["GPS 반경 판정", "reCAPTCHA", "반복 접근 차단"]} />
-            <Tile icon={Contact} title="Agent QR" tag="영업직원 명함" tab="agentQr" cat="agentQr"
-              desc="딜러사(Agent) 영업직원 명함에 넣는 QR — 위치를 묻지 않고 접속 기록만 남긴 뒤 딜러사별 링크로 바로 이동합니다."
+            <Tile icon={Contact} title="Agent QR" tag="영업직원 명함" tab="agentQr" cat="agentQr" tint="rgba(99,135,190,.45)"
+              desc="Agent 영업직원 명함에 넣는 QR — 위치를 묻지 않고 접속 기록만 남긴 뒤 Agent별 링크로 바로 이동합니다."
               chips={["위치 확인 없음", "즉시 이동", "스캔 통계"]} />
           </div>
         </div>
@@ -1815,87 +1957,47 @@ function OverviewTab({ centers, agents, agentsError, checkins, admins, setTab, i
         <div className="absolute right-16 -top-10 w-24 h-24 rounded-full bg-white/5" />
       </div>
 
-      {kpis.length > 0 && (
-        <div className={`grid grid-cols-2 md:grid-cols-3 ${KPI_COLS[kpis.length]} gap-4 mb-6`}>
-          {kpis.map((s) => (
-            <button key={s.label} onClick={() => setTab(s.tab)}
-              className="relative text-left bg-white rounded-xl border border-slate-200 shadow-sm p-4 overflow-hidden transition-transform hover:-translate-y-0.5"
-              style={s.warn ? { background: "#FFFBEB", borderColor: "#FDE68A" } : undefined}>
-              <div className="absolute top-0 left-0 right-0 h-1" style={{ backgroundColor: BRAND.accent }} />
-              <div className="flex items-center justify-between mb-1.5">
-                <p className="text-xs text-slate-500 truncate">{s.label}</p>
-                <s.icon size={14} className="text-slate-300 shrink-0" />
-              </div>
-              <p className="text-2xl font-bold" style={{ color: s.warn ? "#B45309" : "#1E293B" }}>
-                {s.value}{s.suffix && <span className="text-sm font-normal text-slate-400">{s.suffix}</span>}
-              </p>
-            </button>
-          ))}
-        </div>
-      )}
-
-      {(can("checkins") || can("agentCheckins")) && (
-        <div className={`grid grid-cols-1 gap-5 mb-6 ${can("checkins") && can("agentCheckins") ? "lg:grid-cols-3" : can("agentCheckins") ? "lg:grid-cols-2" : ""}`}>
-          {can("checkins") && <Panel icon={QrCode} title="최근 센터 체크인" count={centerRows.length} onAll={() => setTab("checkins")}>
-            {recentCenter.length ? recentCenter.map((r) => (
-              <div key={r.id} className="px-4 py-2.5 border-b border-slate-100 last:border-0 flex items-center justify-between hover:bg-slate-50">
-                <div className="flex items-center gap-2.5 min-w-0">
-                  <Badge status={r.VerifyStatus} />
-                  <span className="text-sm text-slate-700 truncate">{r.CenterName}</span>
-                </div>
-                <span className="text-xs text-slate-400 shrink-0 ml-2 tabular-nums">{fmtDate(r.ServerTimestamp).slice(5)}</span>
-              </div>
-            )) : <Empty text={`${rangeLabel} 센터 체크인이 없습니다`} />}
-          </Panel>}
-          {can("agentCheckins") && <Panel icon={Contact} title="최근 Agent 스캔" count={agentRows.length} onAll={() => setTab("agentCheckins")}>
-            {recentAgent.length ? recentAgent.map((r) => (
-              <div key={r.id} className="px-4 py-2.5 border-b border-slate-100 last:border-0 flex items-center justify-between hover:bg-slate-50">
-                <div className="min-w-0">
-                  <div className="text-sm text-slate-700 truncate">{r.CenterName}</div>
-                  <div className="text-[11px] text-slate-400 truncate">{[r.IpCity, parseDeviceLabel(r.UserAgent)].filter((v) => v && v !== "-").join(" · ") || " "}</div>
-                </div>
-                <span className="text-xs text-slate-400 shrink-0 ml-2 tabular-nums">{fmtDate(r.ServerTimestamp).slice(5)}</span>
-              </div>
-            )) : <Empty text={`${rangeLabel} Agent 스캔이 없습니다`} />}
-          </Panel>}
-          {can("agentCheckins") && <Panel icon={Store} title={`Agent 스캔 순위 · ${rangeLabel}`}>
-            {rank.length ? (
-              <div className="px-4 py-3 space-y-3">
-                {rank.map((a, i) => (
-                  <div key={a.name + i}>
-                    <div className="flex items-center justify-between text-[13px] mb-1">
-                      <span className="text-slate-700 truncate"><span className="text-slate-400 mr-1.5 tabular-nums">{i + 1}</span>{a.name}</span>
-                      <span className="text-slate-500 font-semibold tabular-nums ml-2">{a.n}</span>
-                    </div>
-                    <div className="h-1.5 rounded-full bg-slate-100 overflow-hidden">
-                      <div className="h-full rounded-full" style={{ width: `${Math.max(6, (a.n / rankMax) * 100)}%`, background: BRAND.accent }} />
-                    </div>
-                  </div>
-                ))}
-                <div className="text-[11px] text-slate-400 pt-1">기기 {agentDevices}대에서 스캔 · 같은 기기의 반복 스캔 포함</div>
-              </div>
-            ) : <Empty text="아직 Agent 스캔 기록이 없습니다" />}
-          </Panel>}
-        </div>
-      )}
-
-      {links.length > 0 ? (
-        <div className={`grid grid-cols-1 sm:grid-cols-2 ${links.length === 4 ? "xl:grid-cols-4" : links.length === 2 ? "" : "xl:grid-cols-3"} gap-4`}>
-          {links.map((l) => (
-            <button key={l.tab} onClick={() => setTab(l.tab)} className="bg-white rounded-xl border border-slate-200 shadow-sm p-4 text-left hover:shadow-md hover:border-slate-300 transition-all flex items-center gap-3 group">
-              <div className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0" style={{ background: BRAND.accentSoft }}><l.icon size={16} style={{ color: BRAND.accent }} /></div>
-              <div className="min-w-0 flex-1">
-                <div className="font-medium text-sm text-slate-800">{l.title}</div>
-                <div className="text-xs text-slate-400 truncate">{l.desc}</div>
-              </div>
-              <span className="text-slate-300 group-hover:text-slate-500 transition-colors">→</span>
-            </button>
-          ))}
+      {(showCenter || showAgent) ? (
+        <div className={`grid grid-cols-1 gap-5 ${showCenter && showAgent ? "2xl:grid-cols-2" : ""}`}>
+          {showCenter && (
+            <Section color={BRAND.accent} soft={BRAND.accentSoft} icon={QrCode} title="센터 방문 인증" group="Marketing 전용"
+              desc="캠페인 센터 QR · GPS 반경 자동 판정"
+              links={[["centers", "centers", "센터 관리"], ["qr", "qr", "센터 QR"], ["checkins", "checkins", "체크인 기록"]]}
+              stats={[
+                can("centers") && ["활성 센터", activeCenters, ` / ${centers.length}`, { tab: "centers" }],
+                can("checkins") && [`체크인 · ${rangeLabel}`, centerRows.length, "건", { tab: "checkins" }],
+                can("checkins") && ["검증필요 (확인 대기)", needsVerify, "건", { tab: "checkins", warn: needsVerify > 0 }],
+              ].filter(Boolean)}
+              left={can("checkins") && <><SubHead title="최근 체크인" onAll={() => setTab("checkins")} /><Recent list={[...centerRows].sort(byTime).slice(0, 6)} /></>}
+              right={can("checkins") && <><SubHead title={`센터별 체크인 · ${rangeLabel}`} /><Rank list={centerRows} color={BRAND.accent} unit="건" /></>} />
+          )}
+          {showAgent && (
+            <Section color={AGENT.main} soft={AGENT.soft} icon={Contact} title="Agent 명함 QR" group="HR · GA 전용"
+              desc="영업직원 명함 QR · 위치 확인 없이 바로 이동"
+              links={[["agents", "agents", "Agent 관리"], ["agentQr", "agentQr", "Agent QR"], ["agentCheckins", "agentCheckins", "체크인 기록"]]}
+              stats={[
+                can("agents") && ["활성 Agent", agentsError ? "–" : activeAgents, agentsError ? "" : ` / ${agents.length}`, { tab: "agents" }],
+                can("agentCheckins") && [`스캔 · ${rangeLabel}`, agentRows.length, "건", { tab: "agentCheckins" }],
+                can("agentCheckins") && ["스캔한 기기", devices(agentRows), "대"],
+              ].filter(Boolean)}
+              left={can("agentCheckins") && <><SubHead title="최근 스캔" onAll={() => setTab("agentCheckins")} /><Recent list={[...agentRows].sort(byTime).slice(0, 6)} agent /></>}
+              right={can("agentCheckins") && <><SubHead title={`Agent별 스캔 · ${rangeLabel}`} /><Rank list={agentRows} color={AGENT.main} unit="건" /></>} />
+          )}
         </div>
       ) : (
         <div className="bg-white rounded-xl border border-slate-200 p-6 text-center text-sm text-slate-400">
           지금은 Overview 만 볼 수 있습니다. 다른 화면 권한이 필요하면 IT(stk_it@hyosung.com)에 요청해 주세요.
         </div>
+      )}
+
+      {can("admins") && (
+        <button onClick={() => setTab("categoryAccess")}
+          className="mt-5 w-full bg-white rounded-xl border border-slate-200 shadow-sm px-5 py-3 flex items-center gap-3 text-left hover:bg-slate-50 transition-colors">
+          <div className="w-8 h-8 rounded-lg bg-slate-100 flex items-center justify-center shrink-0"><KeyRound size={15} className="text-slate-500" /></div>
+          <span className="text-sm font-medium text-slate-700">카테고리 접근 권한</span>
+          <span className="text-[10.5px] font-semibold px-2 py-0.5 rounded-full bg-slate-100 text-slate-500">관리자 전용</span>
+          <span className="text-xs text-slate-400 ml-auto">등록된 관리자 <b className="text-slate-600 tabular-nums">{admins.length}</b>명 →</span>
+        </button>
       )}
     </div>
   );
@@ -2262,14 +2364,14 @@ function App({ userEmail, userName }) {
       }
       const [c, k, ca, ag] = await Promise.all([
         mkListAll(MK_LISTS.centers),
-        mkListAll(MK_LISTS.checkins, checkinQuery),
+        mkLoadCheckins(range, checkinQuery),   // 연도별 목록을 합쳐서(10-09 · mkqr-year)
         mkListAll(MK_LISTS.categoryAccess).catch(() => []),
         mkListAll(MK_LISTS.agents).then((v) => ({ v }), (e) => ({ e })),   // Agent 목록이 없어도 나머지 화면은 열린다
       ]);
       if (ag.e) { setAgents([]); setAgentsError(ag.e.message || String(ag.e)); }
       else { setAgents(ag.v.map((x) => ({ id: x.id, ...x.fields }))); setAgentsError(""); }
       setCenters(c.map((x) => ({ id: x.id, ...x.fields })));
-      setCheckins(k.map((x) => ({ id: x.id, ...x.fields })));
+      setCheckins(k);
       setCategoryAccess(ca.map((x) => ({ id: x.id, ...x.fields })));
     } catch (e) { console.error(e); alert("데이터 로딩 실패: " + e.message); }
     setLoading(false);
@@ -2421,7 +2523,7 @@ function App({ userEmail, userName }) {
             overview: [LayoutDashboard, "센터 · Agent QR 운영 현황을 한눈에 확인합니다 (카테고리 접근 권한에 따라 보이는 항목이 다릅니다)"],
             centers: [Building2, "캠페인 방문 인증용 센터를 등록하고 GPS 허용 반경 · 이동 링크를 설정합니다"],
             qr: [QrCode, "센터별 방문 인증 QR 을 만들고 내려받습니다"],
-            agents: [Store, "딜러사(Agent)를 등록하고, 명함 QR 을 스캔한 고객을 보낼 링크를 설정합니다"],
+            agents: [Store, "Agent 를 등록하고, 명함 QR 을 스캔한 고객을 보낼 링크를 설정합니다"],
             agentQr: [Contact, "영업직원 명함에 넣을 Agent QR 을 만들고 내려받습니다 (인쇄용 600px)"],
             checkins: [ListChecks, "캠페인 센터 방문 인증 기록을 조회하고, 확인이 필요한 건을 승인 처리합니다"],
             agentCheckins: [ListChecks, "영업직원 명함(Agent) QR 스캔 기록을 조회합니다"],
@@ -2436,6 +2538,7 @@ function App({ userEmail, userName }) {
           </div>
         ) : (
           <>
+            {canAccess("admins") && ["overview", "checkins", "agentCheckins"].includes(tab) && <CheckinStorageNotice />}
             {tab === "overview" && <OverviewTab centers={centers} agents={agents} agentsError={agentsError} checkins={checkins} admins={admins} setTab={setTab} introText={uiContent.overviewIntro} canAccess={canAccess}
               rangeLabel={checkinRange.mode === "custom" && checkinRange.from && checkinRange.to ? `${checkinRange.from.slice(5)}~${checkinRange.to.slice(5)}` : `최근 ${checkinRange.days || 7}일`} />}
             {tab === "centers" && <CentersTab centers={centers} reload={reload} onCreated={handleCenterCreated} />}
