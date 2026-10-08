@@ -2400,21 +2400,27 @@ function CategoryAccessTab({ admins, categoryAccess, reload }) {
       .finally(() => setDirLoading(false));
   }, []);
 
-  // 표에 띄울 전체 인원: 전사 직원 디렉토리 + (디렉토리엔 없지만 이미 권한 기록이 있는 이메일도 누락 없이 포함)
-  const dirEmails = new Set(directory.map((d) => d.email));
-  const extraEmails = new Set(categoryAccess.map((r) => (r.Email || "").toLowerCase()));
-  const merged = [...directory];
-  extraEmails.forEach((email) => {
-    if (email && !dirEmails.has(email)) {
-      const row = categoryAccess.find((r) => (r.Email || "").toLowerCase() === email);
-      merged.push({ name: (row && row.Title) || email, email, dept: "" });
-    }
+  // 표에는 등록된 사용자(mkqr_CategoryAccess 행)만 — ICS 와 같은 방식(10-09 · mkqr-users).
+  // 직원 명부(employee_search.xlsx)는 이름 · 부서 표시와 「사용자 추가」 검색에 쓰고, 명부에 없는 등록 계정은 「명부 없음」(퇴사 · 이동 의심)으로 표시한다.
+  const dirMap = new Map(directory.map((d) => [d.email, d]));
+  const dirOk = !dirError && directory.length > 0;
+  const merged = [];
+  categoryAccess.forEach((r) => {
+    const email = String(r.Email || "").trim().toLowerCase();
+    if (!email || merged.some((p) => p.email === email)) return;
+    const d = dirMap.get(email);
+    merged.push({ email, name: (d && d.name) || r.Title || email, dept: (d && d.dept) || "", missing: dirOk && !d });
   });
+  const missingCount = merged.filter((p) => p.missing).length;
+  const [onlyMissing, setOnlyMissing] = useState(false);
+  const [justAdded, setJustAdded] = useState("");
+  const [addQ, setAddQ] = useState("");
+  const [addOpen, setAddOpen] = useState(false);
 
   const qq = q.trim().toLowerCase();
-  const filtered = qq
-    ? merged.filter((p) => p.name.toLowerCase().includes(qq) || p.email.includes(qq) || (p.dept || "").toLowerCase().includes(qq))
-    : merged;
+  const filtered = merged
+    .filter((p) => !onlyMissing || p.missing)
+    .filter((p) => !qq || p.name.toLowerCase().includes(qq) || p.email.includes(qq) || (p.dept || "").toLowerCase().includes(qq));
 
   // 권한이 저장된 사람을 맨 위로 — 관리자(카테고리 접근 권한까지) → 그 밖에 한 칸이라도 체크된 사람 → 나머지(이름순 그대로).
   // 순서는 "저장된 값" 기준이라, 체크박스를 눌러도 반영 전까지는 행이 움직이지 않는다(10-02).
@@ -2424,7 +2430,7 @@ function CategoryAccessTab({ admins, categoryAccess, reload }) {
     if (row.Access_admins === true) return 0;
     return MK_CATEGORIES.some((c) => mkCatValue(row, c) === true) ? 1 : 2;
   };
-  const sorted = filtered.map((p, i) => [p, i, accessRank(p)]).sort((a, b) => a[2] - b[2] || a[1] - b[1]);
+  const sorted = filtered.map((p, i) => [p, i, p.email === justAdded ? -1 : accessRank(p)]).sort((a, b) => a[2] - b[2] || a[0].name.localeCompare(b[0].name));
   const grantedCount = sorted.filter((x) => x[2] < 2).length;
   const ordered = sorted.map((x) => x[0]);
 
@@ -2557,6 +2563,56 @@ function CategoryAccessTab({ admins, categoryAccess, reload }) {
 
   function discardChanges() { setOverrides({}); }
 
+  // 사용자 추가(ICS 와 같음) — 직원 명부에서 고르거나 이메일 직접 입력. 처음엔 권한 없이 등록하고, 표에서 체크 후 「반영」
+  const registered = new Set(merged.map((p) => p.email));
+  const aq = addQ.trim().toLowerCase();
+  const suggestions = aq.length < 1 ? [] : directory
+    .filter((d) => !registered.has(d.email) && (d.name.toLowerCase().includes(aq) || d.email.includes(aq) || (d.dept || "").toLowerCase().includes(aq)))
+    .slice(0, 8);
+  async function addUser(emailArg) {
+    let email = String(emailArg || addQ).trim().toLowerCase();
+    if (!email.includes("@") && suggestions.length === 1) email = suggestions[0].email;
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) { alert("추가할 사용자의 이메일 주소를 입력하거나 목록에서 골라 주세요."); return; }
+    if (registered.has(email)) { alert("이미 등록된 사용자입니다."); return; }
+    const d = dirMap.get(email);
+    if (dirOk && !d && !confirm(`${email} 은(는) 직원 명부에 없는 계정입니다. 그래도 추가할까요?`)) return;
+    setSaving(true);
+    try {
+      const fresh = await mkListAll(MK_LISTS.categoryAccess);   // 다른 관리자가 방금 추가했을 수 있어 저장 직전 다시 확인
+      if (fresh.some((x) => String(x.fields.Email || "").trim().toLowerCase() === email)) { alert("이미 등록된 사용자입니다."); await reload(); return; }
+      const fields = { Title: (d && d.name) || email, Email: email };
+      MK_CATEGORIES.filter(catReady).forEach((c) => { fields[c.field] = false; });
+      await mkCreateItem(MK_LISTS.categoryAccess, fields);
+      mkLog("권한", "사용자 추가", d && d.name && d.name !== email ? `${d.name} (${email})` : email, { info: { 부서: (d && d.dept) || "", "직원 명부": d ? "있음" : "없음", "처음 권한": "없음 — 표에서 체크 후 반영" } });
+      setAddQ(""); setAddOpen(false); setJustAdded(email); setQ(""); setOnlyMissing(false);
+      await reload();
+    } catch (e) { alert(e.message); } finally { setSaving(false); }
+  }
+  // 사용자 삭제(삭제 열) — 퇴사 · 이동 등. 같은 메일의 행이 여러 개면 모두 지운다. 지우기 전 권한을 이력에 남긴다
+  async function removeUser(p) {
+    const rows = categoryAccess.filter((r) => String(r.Email || "").trim().toLowerCase() === p.email);
+    if (!rows.length) return;
+    const had = MK_CATEGORIES.filter((c) => mkCatValue(rows[0], c) === true).map((c) => c.label);
+    const isAdmin = rows[0].Access_admins === true;
+    const isMe = p.email === String(_mkLogUser.email || "").toLowerCase();
+    let msg = `「${p.name}」 (${p.email}) 을(를) 목록에서 삭제할까요?\n삭제하면 MKQR 에 로그인할 수 없습니다.`;
+    msg += `\n현재 권한: ${had.length ? had.join(", ") : "없음"}`;
+    if (p.missing) msg += "\n(직원 명부에 없는 계정 — 퇴사 · 이동 의심)";
+    if (isAdmin && admins.length <= 1) msg += "\n\n⚠ 마지막 남은 관리자입니다 — 삭제하면 관리자가 0명이 됩니다.";
+    if (isMe) msg += "\n\n⚠ 본인 계정입니다 — 삭제하면 바로 이 화면 권한을 잃습니다.";
+    if (overrides[p.email]) msg += "\n\n이 사람의 반영 전 변경도 함께 취소됩니다.";
+    if (!confirm(msg)) return;
+    setSaving(true);
+    try {
+      for (const r of rows) await mkDeleteItem(MK_LISTS.categoryAccess, r.id);
+      mkLog("권한", "사용자 삭제", p.name && p.name !== p.email ? `${p.name} (${p.email})` : p.email,
+        { info: { "삭제 전 권한": had.length ? had.join(", ") : "없음", 부서: p.dept || "", "직원 명부": p.missing ? "없음(퇴사 · 이동 의심)" : dirOk ? "있음" : "확인 못 함", ...(rows.length > 1 ? { "중복 행": rows.length } : {}) } });
+      setOverrides((prev) => { const n = { ...prev }; delete n[p.email]; return n; });
+      if (justAdded === p.email) setJustAdded("");
+      await reload();
+    } catch (e) { alert(e.message); } finally { setSaving(false); }
+  }
+
   // 상단 "현재 관리자 목록" 패널에서 × 누르면 즉시 그 사람의 관리자 전용(Access_admins) 권한만 끈다.
   // (다른 카테고리 권한은 그대로 유지 — 완전히 접근을 없애려면 표에서 전체 체크 해제 후 반영)
   async function quickRevoke(a) {
@@ -2578,7 +2634,8 @@ function CategoryAccessTab({ admins, categoryAccess, reload }) {
       <div className="bg-slate-50 text-slate-500 text-xs px-4 py-3 rounded-lg mb-4 flex items-start gap-2 leading-relaxed">
         <KeyRound size={14} className="shrink-0 mt-0.5 text-slate-400" />
         <div>
-          체크박스는 화면에서만 바뀌고 <b className="text-slate-600">「반영」을 눌러야 저장</b>됩니다. 한 칸이라도 체크된 사람은 로그인할 수 있고, 모든 칸을 해제하고 반영하면 로그인이 막힙니다.
+          표에는 <b className="text-slate-600">등록된 사용자만</b> 보입니다 — 「사용자 추가」로 등록하고 필요 없어진 계정(퇴사 · 이동)은 오른쪽 끝 휴지통으로 삭제합니다. 직원 명부에 없는 등록 계정은 <b className="text-red-600">명부 없음</b>으로 표시됩니다.
+          {" "}체크박스는 화면에서만 바뀌고 <b className="text-slate-600">「반영」을 눌러야 저장</b>됩니다. 한 칸이라도 체크된 사람은 로그인할 수 있고, 모든 칸을 해제하고 반영하면 로그인이 막힙니다.
           {" "}<b className="text-slate-600">카테고리 접근 권한(관리자 전용)</b>을 체크하면 개요 · Marketing 전용 · HR · GA 전용 · 활동 이력 권한이 함께 부여됩니다. 반영한 내용은 「활동 이력」에 남습니다. 각 열 맨 위 체크박스로 전체 선택 · 해제할 수 있습니다.
         </div>
       </div>
@@ -2593,7 +2650,7 @@ function CategoryAccessTab({ admins, categoryAccess, reload }) {
           <div className="flex flex-wrap gap-1.5 max-h-32 overflow-y-auto">
             {admins.map((a) => (
               <span key={a.id} className="inline-flex items-center gap-1.5 pl-2.5 pr-1.5 py-1 rounded-full text-xs font-medium" style={{ background: BRAND.accentSoft, color: BRAND.accent }}>
-                {a.Title || a.Email}
+                {((dirMap.get(String(a.Email || "").toLowerCase()) || {}).name) || a.Title || a.Email}
                 <button onClick={() => quickRevoke(a)} title="관리자에서 제외" className="w-4 h-4 rounded-full hover:bg-white/70 flex items-center justify-center">
                   <X size={10} />
                 </button>
@@ -2603,6 +2660,35 @@ function CategoryAccessTab({ admins, categoryAccess, reload }) {
         ) : (
           <p className="text-xs text-slate-400">전체 권한을 가진 관리자가 없습니다 — 아래 표에서 「카테고리 접근 권한」까지 체크하고 「반영」을 누르면 여기 표시됩니다</p>
         )}
+      </div>
+
+      <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-4 mb-4">
+        <div className="flex items-center gap-2 mb-2.5">
+          <Plus size={15} style={{ color: BRAND.accent }} />
+          <span className="text-sm font-semibold text-slate-700">사용자 추가</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <div className="relative w-full max-w-md">
+            <input value={addQ} onChange={(e) => { setAddQ(e.target.value); setAddOpen(true); }} onFocus={() => setAddOpen(true)}
+              onBlur={() => setTimeout(() => setAddOpen(false), 150)} onKeyDown={(e) => { if (e.key === "Enter") addUser(); if (e.key === "Escape") setAddOpen(false); }}
+              placeholder="이름 또는 이메일 입력 (예: hong.gildong@hyosung.com)"
+              className="w-full h-9 px-3 border border-slate-300 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-[#2F7B7A]/40" />
+            {addOpen && suggestions.length > 0 && (
+              <div className="absolute left-0 right-0 top-full mt-1 bg-white border border-slate-200 rounded-lg shadow-lg z-40 max-h-72 overflow-y-auto mk-scroll">
+                {suggestions.map((d) => (
+                  <button key={d.email} onMouseDown={(e) => e.preventDefault()} onClick={() => addUser(d.email)}
+                    className="w-full text-left px-3 py-2 hover:bg-slate-50 flex items-center gap-2 border-b border-slate-50 last:border-0">
+                    <span className="text-[13px] font-medium text-slate-800 shrink-0">{d.name}</span>
+                    <span className="text-xs text-slate-400 truncate">{d.email}{d.dept ? ` · ${d.dept}` : ""}</span>
+                    <span className="ml-auto text-[11px] shrink-0" style={{ color: BRAND.accent }}>+ 추가</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+          <button onClick={() => addUser()} disabled={saving || !addQ.trim()} className="h-9 px-4 rounded-lg text-sm font-medium text-white disabled:opacity-40 shrink-0" style={{ background: BRAND.accent }}>+ 추가</button>
+        </div>
+        <p className="text-[11.5px] text-slate-400 mt-2">직원 명부에서 이름 · 이메일 · 부서로 찾아 고르거나 이메일을 직접 입력하세요. 추가한 사용자는 권한 없이 등록되며 「활동 이력」에 남습니다 — 아래 표에서 필요한 카테고리를 체크하고 「반영」을 눌러 주세요.</p>
       </div>
 
       <div className="flex items-center gap-2 mb-3 flex-wrap">
@@ -2617,11 +2703,17 @@ function CategoryAccessTab({ admins, categoryAccess, reload }) {
         {dirtyCount > 0 && (
           <button onClick={discardChanges} disabled={saving} className="text-xs px-3 py-2 rounded-lg border border-slate-200 text-slate-500 hover:bg-slate-50 bg-white">변경 취소</button>
         )}
+        {missingCount > 0 && (
+          <button onClick={() => setOnlyMissing((v) => !v)} title="직원 명부(employee_search.xlsx)에 없는 등록 계정 — 퇴사 · 이동 여부를 확인하고 삭제하세요"
+            className={`h-9 px-3 rounded-lg text-xs font-medium border ${onlyMissing ? "bg-red-600 border-red-600 text-white" : "bg-red-50 border-red-200 text-red-700 hover:bg-red-100"}`}>
+            명부 없음 {missingCount}명{onlyMissing ? " · 전체 보기" : ""}
+          </button>
+        )}
         <span className="ml-auto text-xs text-slate-400">
-          총 {filtered.length}명{grantedCount > 0 && <> · 권한이 있는 {grantedCount}명을 맨 위에</>}
+          등록 {merged.length}명{filtered.length !== merged.length && <> · 표시 {filtered.length}명</>}{grantedCount > 0 && <> · 권한이 있는 {grantedCount}명을 맨 위에</>}
         </span>
       </div>
-      {dirError && <p className="text-xs text-amber-600 mb-3">전 직원 명부를 불러오지 못해, 이미 등록된 사람만 표시됩니다.</p>}
+      {dirError && <p className="text-xs text-amber-600 mb-3">직원 명부를 불러오지 못해 이름 · 부서 · 「명부 없음」 표시와 사용자 검색이 제한됩니다(이메일 직접 입력은 가능).</p>}
       {missingCats.length > 0 && (
         <div className="mb-3 text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 leading-relaxed">
           SharePoint 목록 mkqr_CategoryAccess 에 아직 없는 열: {missingCats.map((c) => `${c.field}(${c.label})`).join(", ")} — 열이 생기기 전까지 이 칸은 잠겨 있고,
@@ -2635,8 +2727,9 @@ function CategoryAccessTab({ admins, categoryAccess, reload }) {
         <div className="mk-scroll bg-white rounded-xl border border-slate-200 shadow-sm overflow-auto" style={{ maxHeight: 620 }}>
           <table className="w-full text-sm table-fixed" style={{ minWidth: 1080 }}>
             <colgroup>
-              <col style={{ width: "28%" }} />
-              {MK_CATEGORIES.map((c) => <col key={c.key} style={{ width: `${72 / MK_CATEGORIES.length}%` }} />)}
+              <col style={{ width: "27%" }} />
+              {MK_CATEGORIES.map((c) => <col key={c.key} style={{ width: `${68 / MK_CATEGORIES.length}%` }} />)}
+              <col style={{ width: "5%" }} />
             </colgroup>
             <thead className="text-slate-500 text-xs">
               <tr>
@@ -2647,6 +2740,7 @@ function CategoryAccessTab({ admins, categoryAccess, reload }) {
                     <span className={g === "marketing" || g === "hrga" ? "inline-block px-2 rounded-full bg-white border border-slate-200" : ""}>{label}</span>
                   </th>
                 ))}
+                <th className="h-7 sticky top-0 z-20 bg-slate-50 border-b border-slate-200"></th>
               </tr>
               <tr>
                 <th className="text-left font-medium px-4 py-2.5 sticky top-7 left-0 z-30 bg-slate-50 border-b border-slate-200">사용자</th>
@@ -2659,6 +2753,7 @@ function CategoryAccessTab({ admins, categoryAccess, reload }) {
                     </div>
                   </th>
                 ))}
+                <th className="text-center font-medium px-2 py-2.5 sticky top-7 z-20 bg-slate-50 border-b border-slate-200 align-bottom">삭제</th>
               </tr>
             </thead>
             <tbody>
@@ -2679,6 +2774,8 @@ function CategoryAccessTab({ admins, categoryAccess, reload }) {
                         {hasFullAdminAccess
                           ? <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded-full leading-none font-medium" style={{ background: BRAND.accentSoft, color: BRAND.accent }}>관리자</span>
                           : hasAnyAccess && <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-500 leading-none">로그인 가능</span>}
+                        {p.missing && <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded-full bg-red-50 text-red-600 leading-none font-medium" title="직원 명부에 없는 계정 — 퇴사 · 이동 여부 확인 후 삭제">명부 없음</span>}
+                        {p.email === justAdded && <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 leading-none font-medium">새로 추가</span>}
                         {rowDirty && <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 leading-none">변경</span>}
                       </div>
                     </td>
@@ -2689,18 +2786,22 @@ function CategoryAccessTab({ admins, categoryAccess, reload }) {
                           title={catReady(c) ? undefined : `SharePoint 열 ${c.field} 이(가) 아직 없습니다 — ${(MK_CATEGORIES.find((x) => x.field === c.inherit) || {}).label || ""} 권한을 따름`} />
                       </td>
                     ))}
+                    <td className="text-center px-2 py-1.5">
+                      <button onClick={() => removeUser(p)} disabled={saving} title="목록에서 삭제(퇴사 · 이동 등) — 활동 이력에 남습니다"
+                        className="w-7 h-7 inline-flex items-center justify-center rounded-lg text-slate-300 hover:text-red-600 hover:bg-red-50 disabled:opacity-40"><Trash2 size={14} /></button>
+                    </td>
                   </tr>
                 );
               })}
               {!filtered.length && (
-                <tr><td colSpan={MK_CATEGORIES.length + 1} className="text-center text-slate-400 py-10">검색 결과가 없습니다</td></tr>
+                <tr><td colSpan={MK_CATEGORIES.length + 2} className="text-center text-slate-400 py-10">{merged.length ? "조회 결과가 없습니다." : "등록된 사용자가 없습니다 — 위 「사용자 추가」로 등록해 주세요."}</td></tr>
               )}
             </tbody>
           </table>
         </div>
       )}
 
-      {saving && <BlockingOverlay message="변경사항을 반영하고 있습니다..." />}
+      {saving && <BlockingOverlay message="저장하고 있습니다..." />}
 
       {savedPopup != null && (
         <Modal title="반영 완료" onClose={() => setSavedPopup(null)}>
@@ -2918,7 +3019,7 @@ function App({ userEmail, userName }) {
             checkins: [ListChecks, "캠페인 센터 방문 인증 기록을 조회하고, 확인이 필요한 건을 승인 처리합니다"],
             agentCheckins: [ListChecks, "영업직원 명함(Agent) QR 스캔 기록을 조회합니다"],
             activityLog: [History, "권한 부여 · 센터 · Agent · 체크인 처리 이력을 날짜별로 조회합니다 (기본 최근 3일)"],
-            categoryAccess: [KeyRound, "직원별 화면 접근 권한을 체크박스로 부여 · 변경합니다. 「반영」을 누르면 SharePoint(mkqr_CategoryAccess)에 저장됩니다."],
+            categoryAccess: [KeyRound, "등록된 사용자별 화면 접근 권한을 체크박스로 부여 · 변경합니다. 사용자 추가 · 삭제와 「반영」 내용은 활동 이력에 남습니다."],
           }[tab] || [LayoutDashboard, ""];
           return <PageHeader icon={meta[0]} title={nav.find((n) => n.id === tab)?.label} subtitle={meta[1]} />;
         })()}
