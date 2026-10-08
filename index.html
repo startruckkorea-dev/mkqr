@@ -1124,7 +1124,7 @@ function QrTab({ items, kind = "center", highlightId }) {
       <div className="mb-4 flex items-center justify-between flex-wrap gap-2">
         <div className="relative">
           <Search size={15} className="absolute left-2.5 top-2.5 text-slate-400" />
-          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={isAgent ? "딜러사명/법인명/주소로 QR 검색" : "센터명/지역/주소로 QR 검색"} className="pl-8 pr-3 py-2 border border-slate-300 rounded-lg text-sm w-64" />
+          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={isAgent ? "Agent 이름/법인명/주소로 QR 검색" : "센터명/지역/주소로 QR 검색"} className="pl-8 pr-3 py-2 border border-slate-300 rounded-lg text-sm w-64" />
         </div>
         <div className="flex items-center gap-3">
           <button onClick={downloadAll} disabled={downloadingAll || !filtered.length}
@@ -1220,7 +1220,7 @@ function AgentsTab({ agents, agentsError, reload, onCreated }) {
   async function save(form) {
     const title = String(form.Title || "").trim();
     const url = String(form.RedirectUrl || "").trim();
-    if (!title) { alert("딜러사명을 입력해주세요."); return; }
+    if (!title) { alert("Agent 이름을 입력해주세요."); return; }
     if (!MK_URL_RE.test(url)) { alert("체크인 완료 후 이동시킬 링크를 http:// 또는 https:// 로 시작하는 주소로 입력해주세요."); return; }
     setBusy(true);
     try {
@@ -1250,7 +1250,7 @@ function AgentsTab({ agents, agentsError, reload, onCreated }) {
 
   function exportAgents() {
     const data = filtered.map((a) => ({
-      딜러사명: a.Title, "딜러사 영문명": a.AgentNameEn, "딜러사 법인명": a.CorpNameKr, 주소: a.AddressKr, "주소(영문)": a.AddressEn,
+      "Agent 이름": a.Title, "Agent 영문이름": a.AgentNameEn, "딜러사 법인명": a.CorpNameKr, 주소: a.AddressKr, "주소(영문)": a.AddressEn,
       대표전화번호: a.Phone, "이동 링크": a.RedirectUrl, 상태: a.Active === false ? "비활성" : "활성", QR토큰: a.QrToken,
     }));
     const ws = XLSX.utils.json_to_sheet(data);
@@ -1286,7 +1286,7 @@ function AgentsTab({ agents, agentsError, reload, onCreated }) {
       <div className="flex items-center justify-between mb-4 gap-2 flex-wrap">
         <div className="relative">
           <Search size={15} className="absolute left-2.5 top-2.5 text-slate-400" />
-          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="딜러사명/법인명/주소 검색" className="pl-8 pr-3 py-2 border border-slate-300 rounded-lg text-sm w-64" />
+          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Agent 이름/법인명/주소 검색" className="pl-8 pr-3 py-2 border border-slate-300 rounded-lg text-sm w-64" />
         </div>
         <div className="flex gap-2">
           <button onClick={exportAgents} disabled={!filtered.length} className="flex items-center gap-1.5 px-3 py-2 border border-slate-300 rounded-lg text-sm hover:bg-slate-50 disabled:opacity-50">
@@ -1382,8 +1382,8 @@ function AgentEditModal({ agent, onClose, onSave, busy }) {
   return (
     <Modal title={agent.id ? "Agent 수정" : "Agent 추가"} onClose={onClose}>
       <p className="text-[11px] text-slate-400 -mt-1 mb-3 text-right"><span className="text-red-500">*</span> 필수 입력</p>
-      <Field label="딜러사명" required><input className={inputCls} value={form.Title || ""} onChange={set("Title")} placeholder="예: 스타트럭 서울모터스" /></Field>
-      <Field label="딜러사 영문명"><input className={inputCls} value={form.AgentNameEn || ""} onChange={set("AgentNameEn")} placeholder="예: Seoul Motors" /></Field>
+      <Field label="Agent 이름" required><input className={inputCls} value={form.Title || ""} onChange={set("Title")} placeholder="예: 홍길동" /></Field>
+      <Field label="Agent 영문이름"><input className={inputCls} value={form.AgentNameEn || ""} onChange={set("AgentNameEn")} placeholder="예: Gildong Hong" /></Field>
       <Field label="딜러사 법인명"><input className={inputCls} value={form.CorpNameKr || ""} onChange={set("CorpNameKr")} placeholder="예: ㈜서울모터스" /></Field>
       <Field label="딜러사 주소"><input className={inputCls} value={form.AddressKr || ""} onChange={set("AddressKr")} /></Field>
       <Field label="주소 (영문, 선택)"><input className={inputCls} value={form.AddressEn || ""} onChange={set("AddressEn")} /></Field>
@@ -1506,7 +1506,7 @@ function CheckInsTab({ kind = "center", checkins, reload, checkinRange, onRangeC
 
   // 열 — [제목, 너비(px · 없으면 남는 폭), 정렬]. 모든 칸 한 줄 · 같은 글자 크기, 숫자성 칸은 가운데
   const cols = isAgent ? [
-    ["Agent (딜러사)", 240, "left"], ["시각(KST)", 160, "left"], ["공인 IP", 210, "left"], ["IP 지역", 140, "left"],
+    ["Agent 이름", 240, "left"], ["시각(KST)", 160, "left"], ["공인 IP", 210, "left"], ["IP 지역", 140, "left"],
     ["기기", null, "left"], ["인증코드", 180, "left"], ["관리", 150, "center"],
   ] : [
     ["판정", 104, "left"], ["센터", null, "left"], ["시각(KST)", 150, "left"], ["공인 IP", 160, "left"], ["IP 지역", 100, "left"],
@@ -1614,7 +1614,7 @@ function CheckInsTab({ kind = "center", checkins, reload, checkinRange, onRangeC
           )}
           <div className="relative">
             <Search size={15} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
-            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={isAgent ? "Agent(딜러사) 검색" : "센터 검색"} className={`${ctrl} pl-8 pr-3 w-60`} />
+            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={isAgent ? "Agent 이름 검색" : "센터 검색"} className={`${ctrl} pl-8 pr-3 w-60`} />
           </div>
           <div className="ml-auto flex items-center gap-2">
             <button onClick={reload} className={btn}><RefreshCw size={14} /> 새로고침</button>
