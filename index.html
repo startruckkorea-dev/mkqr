@@ -79,7 +79,7 @@ import {
   Building2, QrCode, ListChecks, LogOut, Plus, Pencil, Trash2, X,
   Download, RefreshCw, MapPin, Search, CheckCircle2, AlertTriangle,
   Upload, ExternalLink, Phone, Navigation, LayoutDashboard, ShieldCheck,
-  ArrowUpRight, ImagePlus, KeyRound, Mail, XCircle, Settings, ChevronDown, ChevronUp, Store, Contact,
+  ArrowUpRight, ImagePlus, KeyRound, Mail, XCircle, Settings, ChevronDown, ChevronUp, Store, Contact, History,
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import QRCode from "qrcode";
@@ -152,6 +152,8 @@ const MK_CATEGORIES = [
   { key: "agentQr", label: "Agent QR 코드", field: "Access_agentQr", group: "hrga", inherit: "Access_qr" },
   { key: "agentCheckins", label: "Agent 체크인 기록", field: "Access_agentCheckins", group: "hrga", inherit: "Access_checkins" },
   { key: "admins", label: "카테고리 접근 권한", field: "Access_admins", group: "admin" },
+  // 활동 이력(10-09 · mkqr-log) — 열이 비어 있으면 카테고리 접근 권한(관리자) 값을 따른다
+  { key: "logs", label: "활동 이력", field: "Access_logs", group: "admin", inherit: "Access_admins" },
 ];
 // 저장된 권한 값 — true/false, 열이 비어 있으면 inherit 열 값, 그것도 없으면 undefined(=허용으로 보는 기존 규칙 유지)
 function mkCatValue(row, cat) {
@@ -421,6 +423,70 @@ async function getMkDocDriveId(token) {
   _mkDocDriveId = docDrive.id;
   return _mkDocDriveId;
 }
+
+// ---- 활동 이력 기록(10-09 · mkqr-log) — APS logAction 과 같은 파일 방식 ---------------------------------
+// Documents/Logging_data/MKQR/YYYY-MM-DD/HHmmss_사용자_rand.json — 한 건에 파일 하나만 새로 만든다(기존 파일을 고치지 않아 동시 기록 충돌 없음).
+// 내용: { timestampKST, user, userName, system:"MKQR", category, verb, action, target, detail:{ changes:{항목:[이전,이후]} | info:{…} } }
+// APS 「이력 조회」도 같은 폴더를 읽으므로 APS 에서도 보인다. 기록 실패는 원래 기능을 막지 않는다(fire-and-forget).
+const MK_LOG_ROOT = "Logging_data/MKQR";
+let _mkLogUser = { email: "", name: "" };
+const _mkLogFolders = new Set();
+async function mkEnsureFolder(driveId, folderPath, token) {
+  if (_mkLogFolders.has(folderPath)) return true;
+  const parts = folderPath.split("/").filter(Boolean);
+  let cur = "";
+  for (const part of parts) {
+    const next = cur ? `${cur}/${part}` : part;
+    const chk = await fetch(`${GRAPH}/drives/${driveId}/root:/${next}`, { headers: { Authorization: "Bearer " + token } });
+    if (!chk.ok) {
+      const parent = cur ? `${GRAPH}/drives/${driveId}/root:/${cur}:/children` : `${GRAPH}/drives/${driveId}/root/children`;
+      const res = await fetch(parent, { method: "POST", headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
+        body: JSON.stringify({ name: part, folder: {}, "@microsoft.graph.conflictBehavior": "fail" }) });
+      if (!res.ok && res.status !== 409) { console.warn("[MKQR 이력] 폴더 생성 실패:", next, res.status); return false; }
+    }
+    cur = next;
+  }
+  _mkLogFolders.add(folderPath);
+  return true;
+}
+function mkLog(category, verb, target, detail) {
+  (async () => {
+    try {
+      const token = await getGraphToken();
+      const driveId = await getMkDocDriveId(token);
+      const now = new Date(Date.now() + 9 * 36e5);
+      const p = (n) => String(n).padStart(2, "0");
+      const day = `${now.getUTCFullYear()}-${p(now.getUTCMonth() + 1)}-${p(now.getUTCDate())}`;
+      const hms = `${p(now.getUTCHours())}${p(now.getUTCMinutes())}${p(now.getUTCSeconds())}`;
+      const user = _mkLogUser.email || "unknown";
+      const tag = user.split("@")[0].replace(/[^a-zA-Z0-9._-]/g, "_");
+      const folder = `${MK_LOG_ROOT}/${day}`;
+      if (!(await mkEnsureFolder(driveId, folder, token))) return;
+      const body = JSON.stringify({
+        timestampKST: `${day} ${p(now.getUTCHours())}:${p(now.getUTCMinutes())}:${p(now.getUTCSeconds())}`,
+        user, userName: _mkLogUser.name || "", system: "MKQR", category, verb, action: `${category} ${verb}`, target: target || "", detail: detail || {},
+      });
+      const res = await fetch(`${GRAPH}/drives/${driveId}/root:/${folder}/${hms}_${tag}_${Math.random().toString(36).slice(2, 6)}.json:/content`, {
+        method: "PUT", headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" }, body,
+      });
+      if (!res.ok) console.warn("[MKQR 이력] 기록 실패:", res.status);
+    } catch (e) { console.warn("[MKQR 이력] 기록 실패(원래 기능에는 영향 없음):", e.message); }
+  })();
+}
+// 바뀐 칸만 { 화면 이름: [이전, 이후] } — labels: { 열: 화면 이름 }
+function mkDiff(before, after, labels) {
+  const out = {};
+  Object.keys(labels).forEach((k) => {
+    if (!(k in after)) return;
+    const a = before && before[k] != null ? before[k] : "", b = after[k] != null ? after[k] : "";
+    if (String(a) !== String(b)) out[labels[k]] = [a, b];
+  });
+  return out;
+}
+const MK_CENTER_LABELS = { Title: "센터명", Region: "지역", CenterNameEn: "센터명(영문)", CorpNameKr: "법인명", AddressKr: "주소", AddressEn: "주소(영문)",
+  Phone: "전화번호", Lat: "위도", Lng: "경도", RedirectUrl: "이동 링크", VerifyRadiusM: "허용 반경(m)", Active: "활성", IconDriveItemId: "아이콘" };
+const MK_AGENT_LABELS = { Title: "Agent 이름", AgentNameEn: "Agent 영문이름", CorpNameKr: "딜러사 법인명", AddressKr: "딜러사 주소", AddressEn: "주소(영문)",
+  Phone: "대표 전화번호", RedirectUrl: "이동 링크", Active: "활성" };
 
 // system_config_final.xlsx(다른 모든 APS 시스템이 공용으로 쓰는 설정 파일)에서 이름/이메일이 적힌 모든 행을
 // 시스템 구분 없이 긁어모아 "직원 검색용 디렉토리"로 만든다. 관리자 등록 시 이메일을 직접 타이핑하지 않고
@@ -760,11 +826,13 @@ function CentersTab({ centers, reload, onCreated }) {
       }
       if (editing?.id) {
         await mkUpdateItem(MK_LISTS.centers, editing.id, fields);
+        mkLog("센터", "수정", fields.Title || editing.Title, { id: editing.id, changes: mkDiff(editing, fields, MK_CENTER_LABELS) });
         setEditing(null);
         await reload();
       } else {
         fields.QrToken = randomToken();
         const created = await mkCreateItem(MK_LISTS.centers, fields);
+        mkLog("센터", "등록", fields.Title, { id: created.id, info: { 지역: fields.Region, 주소: fields.AddressKr, "허용 반경(m)": fields.VerifyRadiusM, "이동 링크": fields.RedirectUrl, 활성: fields.Active } });
         setEditing(null);
         await reload();
         if (onCreated) onCreated(created.id);
@@ -774,7 +842,11 @@ function CentersTab({ centers, reload, onCreated }) {
 
   async function remove(c) {
     if (!confirm(`"${c.Title}" 센터를 삭제할까요? (관련 QR도 더 이상 사용할 수 없게 됩니다)`)) return;
-    try { await mkDeleteItem(MK_LISTS.centers, c.id); await reload(); } catch (e) { alert(e.message); }
+    try {
+      await mkDeleteItem(MK_LISTS.centers, c.id);
+      mkLog("센터", "삭제", c.Title, { id: c.id, info: { 지역: c.Region, 주소: c.AddressKr, "QR 토큰": c.QrToken } });
+      await reload();
+    } catch (e) { alert(e.message); }
   }
 
   async function geocode(form, setForm) {
@@ -801,6 +873,7 @@ function CentersTab({ centers, reload, onCreated }) {
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "센터목록");
     XLSX.writeFile(wb, `MKQR_센터목록_${new Date(new Date().getTime()+9*3600*1000).toISOString().slice(0, 10)}.xlsx`);
+    mkLog("센터", "Excel 내보내기", "센터 목록", { info: { 건수: data.length } });
   }
 
   // mkqr 전용 가져오기 양식 다운로드 — "템플릿 다운로드" 버튼에서 사용
@@ -858,6 +931,7 @@ function CentersTab({ centers, reload, onCreated }) {
         totalCount++;
         created++;
       }
+      if (created || skipped || blockedByLimit) mkLog("센터", "엑셀 일괄 등록", `${created}개 등록`, { info: { 파일: file.name, 등록: created, "중복 건너뜀": skipped, "한도 초과": blockedByLimit } });
       let msg = `${created}개 센터를 가져왔습니다.`;
       if (blockedByLimit) msg += `\nQR 최대 ${MAX_CENTERS}개 제한으로 ${blockedByLimit}건은 등록되지 않았습니다. (기존 센터를 정리하시거나 관리자에게 문의해주세요)`;
       if (skipped) msg += `\n센터명 중복 ${skipped}건은 건너뜀.`;
@@ -1379,11 +1453,13 @@ function AgentsTab({ agents, agentsError, reload, onCreated }) {
       };
       if (editing?.id) {
         await mkUpdateItem(MK_LISTS.agents, editing.id, fields);
+        mkLog("Agent", "수정", fields.Title || editing.Title, { id: editing.id, changes: mkDiff(editing, fields, MK_AGENT_LABELS) });
         setEditing(null);
         await reload();
       } else {
         fields.QrToken = randomToken();
         const created = await mkCreateItem(MK_LISTS.agents, fields);
+        mkLog("Agent", "등록", fields.Title, { id: created.id, info: { "딜러사 법인명": fields.CorpNameKr, "이동 링크": fields.RedirectUrl, 활성: fields.Active } });
         setEditing(null);
         await reload();
         if (onCreated) onCreated(created.id);
@@ -1393,7 +1469,11 @@ function AgentsTab({ agents, agentsError, reload, onCreated }) {
 
   async function remove(a) {
     if (!confirm(`"${a.Title}" Agent 를 삭제할까요? (이미 인쇄된 명함의 QR 도 더 이상 사용할 수 없게 됩니다)`)) return;
-    try { await mkDeleteItem(MK_LISTS.agents, a.id); await reload(); } catch (e) { alert(e.message); }
+    try {
+      await mkDeleteItem(MK_LISTS.agents, a.id);
+      mkLog("Agent", "삭제", a.Title, { id: a.id, info: { "딜러사 법인명": a.CorpNameKr, "이동 링크": a.RedirectUrl, "QR 토큰": a.QrToken } });
+      await reload();
+    } catch (e) { alert(e.message); }
   }
 
   function exportAgents() {
@@ -1405,6 +1485,7 @@ function AgentsTab({ agents, agentsError, reload, onCreated }) {
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Agent목록");
     XLSX.writeFile(wb, `MKQR_Agent목록_${new Date(new Date().getTime()+9*3600*1000).toISOString().slice(0, 10)}.xlsx`);
+    mkLog("Agent", "Excel 내보내기", "Agent 목록", { info: { 건수: data.length } });
   }
 
   const activeCount = agents.filter((a) => a.Active !== false).length;
@@ -1601,7 +1682,11 @@ function CheckInsTab({ kind = "center", checkins, reload, checkinRange, onRangeC
   }
 
   async function approve(r) {
-    try { await mkUpdateItem(MK_LISTS.checkins, r.id, { VerifyStatus: "관리자승인" }, r._site); await reload(); } catch (e) { alert(e.message); }
+    try {
+      await mkUpdateItem(MK_LISTS.checkins, r.id, { VerifyStatus: "관리자승인" }, r._site);
+      mkLog(`${noun} 체크인`, "승인 처리", r.CenterName, { id: r.id, changes: { 판정: [r.VerifyStatus, "관리자승인"] }, info: { "체크인 시각": fmtDate(r.ServerTimestamp), 인증코드: (r.DeviceFingerprint || "").slice(0, 16).toUpperCase(), 보관연도: r._year } });
+      await reload();
+    } catch (e) { alert(e.message); }
   }
 
   // 특정 기기가 1분 5회 초과로 30분 차단된 경우, 관리자가 그 전에 강제로 풀어줄 때 사용.
@@ -1619,6 +1704,7 @@ function CheckInsTab({ kind = "center", checkins, reload, checkinRange, onRangeC
         VerifyStatus: "차단해제",
         ServerTimestamp: new Date().toISOString(),
       }, ckSite);
+      mkLog(`${noun} 체크인`, "차단 해제", r.CenterName, { info: { 인증코드: r.DeviceFingerprint.slice(0, 16).toUpperCase(), "남은 차단(분)": unblockRowInfo[r._key || r.id] } });
       alert("차단을 해제했습니다.");
       await reload();
     } catch (e) { alert(e.message); }
@@ -1637,6 +1723,7 @@ function CheckInsTab({ kind = "center", checkins, reload, checkinRange, onRangeC
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, isAgent ? "Agent체크인기록" : "센터체크인기록");
     XLSX.writeFile(wb, `MKQR_${isAgent ? "Agent" : "센터"}체크인기록_${new Date(new Date().getTime()+9*3600*1000).toISOString().slice(0, 10)}.xlsx`);
+    mkLog(`${noun} 체크인`, "Excel 내보내기", `${noun} 체크인 기록`, { info: { 건수: data.length, 기간: checkinRange.mode === "custom" ? `${checkinRange.from} ~ ${checkinRange.to}` : `최근 ${checkinRange.days}일` } });
   }
 
   // "차단해제" 버튼은 이제 실제로 지금 차단 중인 기기에만 보여준다 (예전엔 최근 행마다 항상 떠서 오해가 있었음).
@@ -1662,13 +1749,13 @@ function CheckInsTab({ kind = "center", checkins, reload, checkinRange, onRangeC
     ["GPS 정확도", 96, "center"], ["거리", 120, "left"], ["기기", 210, "left"], ["인증코드", 164, "left"], ["로봇확인", 100, "center"], ["관리", 120, "center"],
   ];
   const minW = cols.reduce((s, c) => s + (c[1] || 160), 0);
-  const td = "px-3 py-2.5 text-[13px] whitespace-nowrap overflow-hidden text-ellipsis";
+  const td = "px-3 py-[5px] text-[12.5px] leading-5 whitespace-nowrap overflow-hidden text-ellipsis";   // 행 높이 줄임(10-09)
   const ctrl = "h-9 border border-slate-300 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-[#2F7B7A]/40";
   const btn = "h-9 flex items-center gap-1.5 px-3 border border-slate-300 rounded-lg text-sm text-slate-600 bg-white hover:bg-slate-50";
   const dash = <span className="text-slate-300">-</span>;
   const robot = (s) => s == null
     ? <span className="text-xs text-slate-400">미확인</span>
-    : <span className={`text-xs px-2 py-0.5 rounded-full ${s >= 0.5 ? "bg-emerald-100 text-emerald-700" : s >= 0.3 ? "bg-amber-100 text-amber-700" : "bg-red-100 text-red-700"}`}>
+    : <span className={`text-[11px] leading-5 inline-block px-2 rounded-full ${s >= 0.5 ? "bg-emerald-100 text-emerald-700" : s >= 0.3 ? "bg-amber-100 text-amber-700" : "bg-red-100 text-red-700"}`}>
         {s >= 0.5 ? "정상" : s >= 0.3 ? "보통" : "의심"} ({s.toFixed(1)})</span>;
   const manage = (r) => {
     const canApprove = !isAgent && ["검증필요", "GPS거부"].includes(r.VerifyStatus);
@@ -1676,10 +1763,10 @@ function CheckInsTab({ kind = "center", checkins, reload, checkinRange, onRangeC
     if (!canApprove && !blocked) return dash;
     return (
       <div className="flex items-center justify-center gap-1.5">
-        {canApprove && <button onClick={() => approve(r)} className="text-xs px-2.5 py-1 rounded-md text-white whitespace-nowrap" style={{ background: BRAND.accent }}>승인 처리</button>}
+        {canApprove && <button onClick={() => approve(r)} className="text-[11.5px] h-6 leading-6 px-2.5 rounded-md text-white whitespace-nowrap" style={{ background: BRAND.accent }}>승인 처리</button>}
         {blocked && (
           <button onClick={() => unblockDevice(r)} title="지금 차단 중인 기기입니다. 눌러서 즉시 해제할 수 있습니다."
-            className="text-xs px-2 py-1 rounded-md border border-red-200 text-red-600 bg-red-50 hover:bg-red-100 whitespace-nowrap">
+            className="text-[11.5px] h-6 leading-[22px] px-2 rounded-md border border-red-200 text-red-600 bg-red-50 hover:bg-red-100 whitespace-nowrap">
             차단 {unblockRowInfo[r._key || r.id]}분 · 해제
           </button>
         )}
@@ -1783,7 +1870,7 @@ function CheckInsTab({ kind = "center", checkins, reload, checkinRange, onRangeC
           <table className="w-full table-fixed" style={{ minWidth: minW }}>
             <colgroup>{cols.map(([h, w]) => <col key={h} style={w ? { width: w } : undefined} />)}</colgroup>
             <thead className="bg-slate-50 text-slate-500 text-xs">
-              <tr>{cols.map(([h, , a]) => <th key={h} className={`px-3 py-2.5 font-medium whitespace-nowrap border-b border-slate-200 ${a === "center" ? "text-center" : "text-left"}`}>{h}</th>)}</tr>
+              <tr>{cols.map(([h, , a]) => <th key={h} className={`px-3 py-2 text-[11.5px] font-medium whitespace-nowrap border-b border-slate-200 ${a === "center" ? "text-center" : "text-left"}`}>{h}</th>)}</tr>
             </thead>
             <tbody>
               {pageRows.map((r) => (
@@ -1797,7 +1884,7 @@ function CheckInsTab({ kind = "center", checkins, reload, checkinRange, onRangeC
                     </>
                   ) : (
                     <>
-                      <td className={td}><Badge status={r.VerifyStatus} /></td>
+                      <td className={td}><span className="inline-flex align-middle scale-95 origin-left"><Badge status={r.VerifyStatus} /></span></td>
                       <td className={`${td} font-medium text-slate-800`} title={r.CenterName}>{r.CenterName}</td>
                       <td className={`${td} text-slate-500 tabular-nums`}>{fmtDate(r.ServerTimestamp)}</td>
                       {ipCell(r)}{cityCell(r)}
@@ -1829,6 +1916,243 @@ function CheckInsTab({ kind = "center", checkins, reload, checkinRange, onRangeC
       </div>
 
       {detail && <CheckInDetailModal row={detail} onClose={() => setDetail(null)} />}
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* 활동 이력 탭(관리자 전용, 10-09 · mkqr-log) — Logging_data/MKQR/날짜/*.json 을 기간으로 읽어 표로   */
+/* ------------------------------------------------------------------ */
+const MK_LOG_CATS = ["권한", "센터", "Agent", "센터 체크인", "Agent 체크인"];
+const MK_LOG_MAX_DAYS = 31;
+function mkDayStr(d) { return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}`; }
+function mkDayAdd(s, n) { const d = new Date(s + "T00:00:00Z"); d.setUTCDate(d.getUTCDate() + n); return mkDayStr(d); }
+function mkTodayKst() { return mkDayStr(new Date(Date.now() + 9 * 36e5)); }
+function mkLogCatStyle(c) {
+  return { "권한": "bg-violet-50 text-violet-700", "센터": "bg-teal-50 text-teal-700", "센터 체크인": "bg-teal-50 text-teal-700",
+    "Agent": "bg-blue-50 text-blue-700", "Agent 체크인": "bg-blue-50 text-blue-700" }[c] || "bg-slate-100 text-slate-600";
+}
+function mkLogVerbStyle(v) {
+  return /삭제|해제/.test(v) && !/차단 해제/.test(v) ? "text-red-600" : /등록|부여|추가/.test(v) ? "text-emerald-700" : /승인/.test(v) ? "text-blue-700" : "text-slate-700";
+}
+function mkFmtVal(v) { return v === true ? "예" : v === false ? "아니요" : v === "" || v == null ? "(빈 값)" : String(v); }
+function mkLogSummary(l) {
+  const d = l.detail || {};
+  if (d.changes && Object.keys(d.changes).length) return Object.entries(d.changes).map(([k, [a, b]]) => `${k}: ${mkFmtVal(a)} → ${mkFmtVal(b)}`).join(" · ");
+  if (d.info && typeof d.info === "object") return Object.entries(d.info).filter(([, v]) => v !== "" && v != null).map(([k, v]) => `${k}: ${mkFmtVal(v)}`).join(" · ");
+  return "";
+}
+
+// 기간(시작~끝, KST 날짜) 안의 이력 파일을 모두 읽는다 — 날짜 폴더만 골라 들어가고, 파일은 6개씩 동시에 읽는다(429 · 503 은 다시 시도)
+async function mkLoadLogs(from, to, onProgress) {
+  const token = await getGraphToken();
+  const d = await getMkDocDriveId(token);
+  const H = { headers: { Authorization: "Bearer " + token } };
+  const all = async (url) => {
+    let out = [];
+    while (url) {
+      const r = await fetch(url, H);
+      if (r.status === 404) return null;
+      if (!r.ok) throw new Error(`이력 폴더 조회 실패 (${r.status})`);
+      const j = await r.json(); out = out.concat(j.value || []); url = j["@odata.nextLink"] || null;
+    }
+    return out;
+  };
+  const days = await all(`${GRAPH}/drives/${d}/root:/${MK_LOG_ROOT}:/children?$select=id,name,folder&$top=200`);
+  if (!days) return [];
+  const picked = days.filter((x) => x.folder && /^\d{4}-\d{2}-\d{2}$/.test(x.name) && x.name >= from && x.name <= to);
+  const files = [];
+  for (const day of picked) {
+    const ch = (await all(`${GRAPH}/drives/${d}/items/${day.id}/children?$select=id,name,file,content.downloadUrl&$top=200`)) || [];
+    ch.filter((c) => c.file && /\.json$/i.test(c.name)).forEach((c) => files.push({ id: c.id, name: c.name, day: day.name, url: c["@microsoft.graph.downloadUrl"] || "" }));
+  }
+  const out = []; let done = 0; const q = files.slice();
+  const read = async (f, n = 0) => {
+    const r = f.url ? await fetch(f.url, { cache: "no-store" }) : await fetch(`${GRAPH}/drives/${d}/items/${f.id}/content`, H);
+    if ((r.status === 429 || r.status === 503) && n < 3) { await new Promise((ok) => setTimeout(ok, 1200 * (n + 1))); return read(f, n + 1); }
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    return r.json();
+  };
+  const worker = async () => {
+    while (q.length) {
+      const f = q.shift();
+      try { const j = await read(f); out.push({ ...j, _id: f.id, _file: f.name }); }
+      catch (e) { out.push({ _id: f.id, _file: f.name, timestampKST: `${f.day} ??:??:??`, action: "(읽기 실패)", category: "-", verb: "읽기 실패", target: f.name, detail: { info: { 오류: e.message } } }); }
+      done++; if (onProgress && done % 10 === 0) onProgress(done, files.length);
+    }
+  };
+  await Promise.all(Array.from({ length: 6 }, worker));
+  return out.sort((a, b) => String(b.timestampKST).localeCompare(String(a.timestampKST)));
+}
+
+function ActivityLogTab() {
+  const today = mkTodayKst();
+  const [from, setFrom] = useState(mkDayAdd(today, -2));   // 기본: 최근 3일(오늘 포함) — APS 와 같은 방식
+  const [to, setTo] = useState(today);
+  const [rows, setRows] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [progress, setProgress] = useState("");
+  const [error, setError] = useState("");
+  const [cat, setCat] = useState("전체");
+  const [q, setQ] = useState("");
+  const [page, setPage] = useState(1);
+  const [detail, setDetail] = useState(null);
+  const [loadedRange, setLoadedRange] = useState("");
+  const PAGE_SIZE = 20;
+
+  async function load(f = from, t = to) {
+    if (!f || !t || f > t) { alert("조회 기간을 확인해 주세요."); return; }
+    if (mkDayAdd(f, MK_LOG_MAX_DAYS - 1) < t) { alert(`한 번에 ${MK_LOG_MAX_DAYS}일까지 조회할 수 있습니다. 기간을 줄여 주세요.`); return; }
+    setLoading(true); setError(""); setProgress("");
+    try {
+      const r = await mkLoadLogs(f, t, (d, n) => setProgress(`${d.toLocaleString()} / ${n.toLocaleString()}건`));
+      setRows(r); setLoadedRange(`${f} ~ ${t}`); setPage(1);
+    } catch (e) { setError(e.message); setRows([]); }
+    setLoading(false);
+  }
+  useEffect(() => { load(); }, []);
+  useEffect(() => { setPage(1); }, [cat, q]);
+
+  function preset(days) {
+    const t = mkTodayKst(), f = days === 1 ? t : mkDayAdd(t, -(days - 1));
+    setFrom(f); setTo(t); load(f, t);
+  }
+  function shift(dir) {
+    const len = Math.round((new Date(to + "T00:00:00Z") - new Date(from + "T00:00:00Z")) / 864e5) + 1;
+    let nf = mkDayAdd(from, dir * len), nt = mkDayAdd(to, dir * len);
+    if (nt > today) { nt = today; nf = mkDayAdd(today, -(len - 1)); }
+    setFrom(nf); setTo(nt); load(nf, nt);
+  }
+
+  const view = (rows || [])
+    .filter((l) => cat === "전체" || l.category === cat)
+    .filter((l) => {
+      if (!q.trim()) return true;
+      const s = q.trim().toLowerCase();
+      return [l.user, l.userName, l.target, l.action, mkLogSummary(l)].some((v) => String(v || "").toLowerCase().includes(s));
+    });
+  const totalPages = Math.max(1, Math.ceil(view.length / PAGE_SIZE));
+  const pageSafe = Math.min(page, totalPages);
+  const pageRows = view.slice((pageSafe - 1) * PAGE_SIZE, pageSafe * PAGE_SIZE);
+
+  function exportExcel() {
+    const data = view.map((l) => ({ "시각(KST)": l.timestampKST, 사용자: l.userName ? `${l.userName} (${l.user})` : l.user, 구분: l.category, 작업: l.verb || l.action, 대상: l.target, 내용: mkLogSummary(l), 파일: l._file }));
+    const ws = XLSX.utils.json_to_sheet(data);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "활동이력");
+    XLSX.writeFile(wb, `MKQR_활동이력_${from}_${to}.xlsx`);
+  }
+
+  const ctrl = "h-9 border border-slate-300 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-[#2F7B7A]/40";
+  const btn = "h-9 flex items-center gap-1.5 px-3 border border-slate-300 rounded-lg text-sm text-slate-600 bg-white hover:bg-slate-50 disabled:opacity-50";
+  const td = "px-3 py-[5px] text-[12.5px] leading-5 whitespace-nowrap overflow-hidden text-ellipsis";
+  const presets = [[1, "오늘"], [3, "3일"], [7, "7일"], [30, "30일"]];
+  const curLen = Math.round((new Date(to + "T00:00:00Z") - new Date(from + "T00:00:00Z")) / 864e5) + 1;
+
+  return (
+    <div className="w-full">
+      <div className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 mb-4 text-xs text-slate-500 flex items-start gap-2.5 leading-relaxed">
+        <History size={15} className="text-slate-400 shrink-0 mt-0.5" />
+        <div>권한 부여 · 센터 · Agent 등록/수정/삭제 · 체크인 승인/차단 해제 · Excel 내보내기를 한 건에 파일 하나로 남깁니다(APS 와 같은 방식, APS 「이력 조회」에서도 보임).
+          기본은 <b className="text-slate-600">최근 3일</b>이며 한 번에 최대 {MK_LOG_MAX_DAYS}일까지 조회할 수 있습니다.</div>
+      </div>
+
+      <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+        <div className="px-4 py-3 border-b border-slate-100 flex items-center gap-2 flex-wrap">
+          <div className="flex items-center rounded-lg border border-slate-300 overflow-hidden h-9">
+            {presets.map(([n, label], i) => {
+              const on = to === today && curLen === n;
+              return (
+                <button key={n} onClick={() => preset(n)} disabled={loading}
+                  className={`px-3 h-full text-sm ${i ? "border-l border-slate-300" : ""} ${on ? "text-white" : "text-slate-600 bg-white hover:bg-slate-50"}`}
+                  style={on ? { background: BRAND.accent } : undefined}>{label}</button>
+              );
+            })}
+          </div>
+          <div className="flex items-center gap-1">
+            <button onClick={() => shift(-1)} disabled={loading} className={`${btn} px-2`} title="앞 기간">‹</button>
+            <input type="date" value={from} max={to} onChange={(e) => setFrom(e.target.value)} className={`${ctrl} px-2`} />
+            <span className="text-slate-400 text-xs">~</span>
+            <input type="date" value={to} min={from} max={today} onChange={(e) => setTo(e.target.value)} className={`${ctrl} px-2`} />
+            <button onClick={() => shift(1)} disabled={loading || to >= today} className={`${btn} px-2`} title="다음 기간">›</button>
+            <button onClick={() => load()} disabled={loading} className="h-9 text-sm px-4 rounded-lg text-white disabled:opacity-50" style={{ background: BRAND.accent }}>조회</button>
+          </div>
+          <select value={cat} onChange={(e) => setCat(e.target.value)} className={`${ctrl} px-3 w-36`}>
+            <option value="전체">전체 구분</option>{MK_LOG_CATS.map((c) => <option key={c}>{c}</option>)}
+          </select>
+          <div className="relative">
+            <Search size={15} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="사용자 · 대상 · 내용 검색" className={`${ctrl} pl-8 pr-3 w-56`} />
+          </div>
+          <div className="ml-auto flex items-center gap-2">
+            <button onClick={exportExcel} disabled={!view.length} className={btn}><Download size={14} /> Excel 내보내기</button>
+          </div>
+        </div>
+        <div className="mk-scroll overflow-x-auto">
+          <table className="w-full table-fixed" style={{ minWidth: 1080 }}>
+            <colgroup><col style={{ width: 166 }} /><col style={{ width: 210 }} /><col style={{ width: 104 }} /><col style={{ width: 110 }} /><col style={{ width: 220 }} /><col /></colgroup>
+            <thead className="bg-slate-50 text-slate-500 text-[11.5px]">
+              <tr>{["시각(KST)", "사용자", "구분", "작업", "대상", "내용"].map((h) => <th key={h} className="px-3 py-2 font-medium text-left whitespace-nowrap border-b border-slate-200">{h}</th>)}</tr>
+            </thead>
+            <tbody>
+              {loading ? (
+                <tr><td colSpan={6} className="text-center text-slate-400 text-sm py-14">
+                  <div className="w-6 h-6 mx-auto mb-2 rounded-full border-2 border-slate-200 animate-spin" style={{ borderTopColor: BRAND.accent }} />
+                  이력을 불러오는 중입니다... {progress}
+                </td></tr>
+              ) : error ? (
+                <tr><td colSpan={6} className="text-center text-red-500 text-sm py-12">이력을 불러오지 못했습니다 — {error}</td></tr>
+              ) : pageRows.length ? pageRows.map((l) => (
+                <tr key={l._id} onClick={() => setDetail(l)} className="border-t border-slate-100 first:border-t-0 hover:bg-slate-50 cursor-pointer">
+                  <td className={`${td} text-slate-500 tabular-nums`}>{l.timestampKST}</td>
+                  <td className={`${td} text-slate-700`} title={l.user}>{l.userName || l.user}{l.userName && <span className="text-slate-400 text-[11.5px]"> · {String(l.user || "").split("@")[0]}</span>}</td>
+                  <td className={td}><span className={`text-[11px] px-2 rounded-full font-medium leading-5 inline-block ${mkLogCatStyle(l.category)}`}>{l.category || "-"}</span></td>
+                  <td className={`${td} font-medium ${mkLogVerbStyle(l.verb || l.action || "")}`}>{l.verb || l.action}</td>
+                  <td className={`${td} text-slate-800`} title={l.target}>{l.target || "-"}</td>
+                  <td className={`${td} text-slate-500`} title={mkLogSummary(l)}>{mkLogSummary(l) || <span className="text-slate-300">-</span>}</td>
+                </tr>
+              )) : (
+                <tr><td colSpan={6} className="text-center text-slate-400 text-sm py-12">조회 결과가 없습니다.</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+        <div className="px-4 py-2.5 border-t border-slate-100 flex items-center justify-between gap-3 text-xs text-slate-500">
+          <span>{loadedRange && <>{loadedRange} · </>}총 <b className="text-slate-700 font-semibold">{view.length}</b>건{rows && view.length !== rows.length && <> (전체 {rows.length}건 중)</>}</span>
+          {totalPages > 1 && (
+            <div className="flex items-center gap-1">
+              <button onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={pageSafe <= 1} className="px-2.5 py-1 rounded-md border border-slate-300 disabled:opacity-40 hover:bg-slate-50">이전</button>
+              <span className="px-2 tabular-nums">{pageSafe} / {totalPages}</span>
+              <button onClick={() => setPage((p) => Math.min(totalPages, p + 1))} disabled={pageSafe >= totalPages} className="px-2.5 py-1 rounded-md border border-slate-300 disabled:opacity-40 hover:bg-slate-50">다음</button>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {detail && (
+        <Modal title="활동 이력 상세" onClose={() => setDetail(null)} wide>
+          <div className="flex items-center gap-2 mb-3 flex-wrap">
+            <span className={`text-[11px] px-2 rounded-full font-medium leading-5 ${mkLogCatStyle(detail.category)}`}>{detail.category || "-"}</span>
+            <span className={`font-semibold ${mkLogVerbStyle(detail.verb || detail.action || "")}`}>{detail.verb || detail.action}</span>
+            <span className="text-slate-800">{detail.target}</span>
+          </div>
+          <DetailRow label="시각 (KST)" value={detail.timestampKST} />
+          <DetailRow label="사용자" value={detail.userName ? `${detail.userName} (${detail.user})` : detail.user} />
+          {detail.detail && detail.detail.changes && Object.keys(detail.detail.changes).length > 0 && (
+            <div className="mt-3">
+              <div className="text-xs font-semibold text-slate-500 mb-1.5">변경 내용</div>
+              <table className="w-full text-[12.5px] border border-slate-200 rounded-lg overflow-hidden">
+                <thead className="bg-slate-50 text-slate-500 text-[11.5px]"><tr><th className="text-left px-3 py-1.5 font-medium w-40">항목</th><th className="text-left px-3 py-1.5 font-medium">이전</th><th className="text-left px-3 py-1.5 font-medium">이후</th></tr></thead>
+                <tbody>{Object.entries(detail.detail.changes).map(([k, [a, b]]) => (
+                  <tr key={k} className="border-t border-slate-100"><td className="px-3 py-1.5 text-slate-600">{k}</td><td className="px-3 py-1.5 text-slate-400 line-through break-all">{mkFmtVal(a)}</td><td className="px-3 py-1.5 text-slate-800 font-medium break-all">{mkFmtVal(b)}</td></tr>
+                ))}</tbody>
+              </table>
+            </div>
+          )}
+          {detail.detail && detail.detail.info && Object.entries(detail.detail.info).map(([k, v]) => <DetailRow key={k} label={k} value={mkFmtVal(v)} />)}
+          <DetailRow label="이력 파일" value={detail._file} />
+        </Modal>
+      )}
     </div>
   );
 }
@@ -2213,6 +2537,17 @@ function CategoryAccessTab({ admins, categoryAccess, reload }) {
         });
         if (existing) await mkUpdateItem(MK_LISTS.categoryAccess, existing.id, fields);
         else await mkCreateItem(MK_LISTS.categoryAccess, fields);
+        // 이력 — 화면에서 보이던 값(이어받기 포함) → 반영한 값, 바뀐 칸만
+        const logChanges = {};
+        MK_CATEGORIES.forEach((c) => {
+          if (!(c.field in fields)) return;
+          const before = existing ? mkCatValue(existing, c) === true : false;
+          if (before !== (fields[c.field] === true)) logChanges[c.label] = [before, fields[c.field] === true];
+        });
+        if (Object.keys(logChanges).length) {
+          const on = Object.values(logChanges).filter(([, b]) => b).length, off = Object.values(logChanges).length - on;
+          mkLog("권한", !existing ? "신규 부여" : on && !off ? "권한 추가" : off && !on ? "권한 해제" : "권한 변경", person.name && person.name !== email ? `${person.name} (${email})` : email, { changes: logChanges, info: person.dept ? { 부서: person.dept } : undefined });
+        }
       }
       setOverrides({});
       await reload();
@@ -2230,7 +2565,10 @@ function CategoryAccessTab({ admins, categoryAccess, reload }) {
     } else if (!confirm(`"${a.Title || a.Email}"을 관리자에서 제외할까요? (다른 화면 권한은 유지됩니다)`)) return;
     try {
       const row = categoryAccess.find((r) => r.id === a.id);
-      if (row) await mkUpdateItem(MK_LISTS.categoryAccess, row.id, { Access_admins: false });
+      if (row) {
+        await mkUpdateItem(MK_LISTS.categoryAccess, row.id, { Access_admins: false });
+        mkLog("권한", "관리자 해제", a.Title && a.Title !== a.Email ? `${a.Title} (${a.Email})` : a.Email, { changes: { "카테고리 접근 권한": [true, false] } });
+      }
       await reload();
     } catch (e) { alert(e.message); }
   }
@@ -2241,7 +2579,7 @@ function CategoryAccessTab({ admins, categoryAccess, reload }) {
         <KeyRound size={14} className="shrink-0 mt-0.5 text-slate-400" />
         <div>
           체크박스는 화면에서만 바뀌고 <b className="text-slate-600">「반영」을 눌러야 저장</b>됩니다. 한 칸이라도 체크된 사람은 로그인할 수 있고, 모든 칸을 해제하고 반영하면 로그인이 막힙니다.
-          {" "}<b className="text-slate-600">카테고리 접근 권한(관리자 전용)</b>을 체크하면 개요 · Marketing 전용 · HR · GA 전용 권한이 함께 부여됩니다. 각 열 맨 위 체크박스로 전체 선택 · 해제할 수 있습니다.
+          {" "}<b className="text-slate-600">카테고리 접근 권한(관리자 전용)</b>을 체크하면 개요 · Marketing 전용 · HR · GA 전용 · 활동 이력 권한이 함께 부여됩니다. 반영한 내용은 「활동 이력」에 남습니다. 각 열 맨 위 체크박스로 전체 선택 · 해제할 수 있습니다.
         </div>
       </div>
 
@@ -2484,6 +2822,7 @@ function App({ userEmail, userName }) {
   ];
   const adminNav = [
     { id: "categoryAccess", label: "카테고리 접근 권한", icon: KeyRound, cat: "admins" },
+    { id: "activityLog", label: "활동 이력", icon: History, cat: "logs" },
   ];
   const nav = [...allNav, ...marketingNav, ...hrgaNav, ...adminNav]; // 항상 전체 표시 — 권한 없는 항목은 숨기지 않고 흐릿하게 비활성화만 함
   const accessibleNav = nav.filter((n) => canAccess(n.cat));
@@ -2578,6 +2917,7 @@ function App({ userEmail, userName }) {
             agentQr: [Contact, "영업직원 명함에 넣을 Agent QR 을 만들고 내려받습니다 (인쇄용 600px)"],
             checkins: [ListChecks, "캠페인 센터 방문 인증 기록을 조회하고, 확인이 필요한 건을 승인 처리합니다"],
             agentCheckins: [ListChecks, "영업직원 명함(Agent) QR 스캔 기록을 조회합니다"],
+            activityLog: [History, "권한 부여 · 센터 · Agent · 체크인 처리 이력을 날짜별로 조회합니다 (기본 최근 3일)"],
             categoryAccess: [KeyRound, "직원별 화면 접근 권한을 체크박스로 부여 · 변경합니다. 「반영」을 누르면 SharePoint(mkqr_CategoryAccess)에 저장됩니다."],
           }[tab] || [LayoutDashboard, ""];
           return <PageHeader icon={meta[0]} title={nav.find((n) => n.id === tab)?.label} subtitle={meta[1]} />;
@@ -2598,6 +2938,7 @@ function App({ userEmail, userName }) {
             {tab === "agentQr" && (agentsError ? <AgentListMissing error={agentsError} /> : <QrTab items={agents} kind="agent" highlightId={agentHighlightId} />)}
             {tab === "checkins" && <CheckInsTab key="center" kind="center" checkins={checkins} reload={reload} checkinRange={checkinRange} onRangeChange={changeCheckinRange} verifyRules={uiContent.verifyRules} />}
             {tab === "agentCheckins" && <CheckInsTab key="agent" kind="agent" checkins={checkins} reload={reload} checkinRange={checkinRange} onRangeChange={changeCheckinRange} />}
+            {tab === "activityLog" && <ActivityLogTab />}
             {tab === "categoryAccess" && <CategoryAccessTab admins={admins} categoryAccess={categoryAccess} reload={reload} />}
           </>
         )}
@@ -2652,6 +2993,7 @@ function AccessDenied({ userEmail }) {
 }
 
 async function mkBoot(account) {
+  _mkLogUser = { email: account.username || "", name: (/\(([^()]+)\)\s*$/.exec(account.name || "") || [])[1] || account.name || "" };   // 이력에 남길 사용자(10-09)
   document.getElementById("login-screen").style.display = "none";
   document.getElementById("loading").style.display = "flex";
   try {
