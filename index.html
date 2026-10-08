@@ -455,7 +455,7 @@ function computeBlockedDevices(allCheckins) {
 /* ------------------------------------------------------------------ */
 /* UI 공통 부품                                                        */
 /* ------------------------------------------------------------------ */
-const BRAND = { navy: "#101B34", accent: "#2F7B7A", accentSoft: "#E4F1F0" };
+const BRAND = { navy: "#101B34", navyHover: "#17253F", navySoft: "#22304C", accent: "#2F7B7A", accentSoft: "#E4F1F0" };   // ICS 와 같은 값(10-08)
 
 function Badge({ status }) {
   const map = {
@@ -1839,7 +1839,7 @@ function CategoryAccessTab({ admins, categoryAccess, reload }) {
   );
 }
 
-function App({ userEmail }) {
+function App({ userEmail, userName }) {
   const [tab, setTab] = useState("overview");
   const [centers, setCenters] = useState([]);
   const [checkins, setCheckins] = useState([]);
@@ -1906,6 +1906,16 @@ function App({ userEmail }) {
     return val !== false;
   }
 
+  // 상단 바 표시(ICS 와 같은 2줄) — 이름은 「이준순 스타트럭코리아 IT(Jimmy Lee)」 꼴이면 괄호 안 영문만, 없으면 이름 · 메일 순
+  const shortName = (() => { const m = /\(([^()]+)\)\s*$/.exec(userName || ""); return (m ? m[1] : userName || userEmail || "").trim(); })();
+  // 권한 — 볼 수 있는 화면 묶음으로 Viewer(개요만) · Operator(센터 · QR · 체크인 중 하나라도) · Admin(카테고리 접근 권한)
+  const roleLabel = (() => {
+    const r = [];
+    if (["centers", "qr", "checkins"].some((k) => canAccess(k))) r.push("Operator");
+    if (canAccess("admins")) r.push("Admin");
+    return r.length ? r.join(" · ") : "Viewer";
+  })();
+
   const allNav = [
     { id: "overview", label: "Overview", icon: LayoutDashboard, cat: "overview" },
   ];
@@ -1932,76 +1942,75 @@ function App({ userEmail }) {
 
   return (
     <div className="h-screen flex overflow-hidden" style={{ background: "#F5F6F8" }}>
-      <aside className="w-56 shrink-0 text-white flex flex-col" style={{ background: BRAND.navy }}>
-        <div className="px-4 pt-5 pb-4 border-b border-white/10">
+      {/* 화면 틀은 ICS 와 같게(10-08 · mkqr-ics-hdr) — 사이드바 · 상단 흰 바 · 본문 스크롤 */}
+      <aside className="w-64 shrink-0 flex flex-col h-full" style={{ background: BRAND.navy }}>
+        <div className="px-4 pt-5 pb-4">
           <div className="bg-white rounded-lg px-3 py-2 flex items-center justify-center">
             <img src={LOGO_SRC} alt="Star Truck Korea" style={{ width: "100%", height: "auto", display: "block" }} />
           </div>
-          <p className="text-slate-400 text-[10px] text-center mt-1.5">MKQR · 방문인증 QR</p>
+          <p className="text-[13px] font-medium text-slate-300 tracking-tight mt-3 text-center">MKQR · 방문인증 QR</p>
         </div>
-        <nav className="flex-1 py-3 overflow-y-auto">
-          <div className="px-5 pt-1 pb-1.5 text-[10px] font-semibold text-white/30 tracking-wide">개요</div>
-          {allNav.map((n) => {
-            const allowed = canAccess(n.cat);
-            return (
-              <button key={n.id} onClick={() => allowed ? setTab(n.id) : setPermDeniedPopup(true)}
-                className={`w-full flex items-center gap-2.5 px-5 py-2.5 text-sm ${
-                  !allowed ? "text-white/20 hover:text-white/40" : tab === n.id ? "bg-white/10 text-white" : "text-white/60 hover:text-white/90"
-                }`}>
-                <n.icon size={16} /> {n.label}
-                {!!n.badge && allowed && <span className="ml-auto bg-amber-400 text-amber-900 text-[10px] font-bold px-1.5 py-0.5 rounded-full">{n.badge}</span>}
-              </button>
-            );
-          })}
-          <div className="px-5 pt-4 pb-1.5 text-[10px] font-semibold text-white/30 tracking-wide">운영자 전용</div>
-          {operatorNav.map((n) => {
-            const allowed = canAccess(n.cat);
-            return (
-              <button key={n.id} onClick={() => allowed ? setTab(n.id) : setPermDeniedPopup(true)}
-                className={`w-full flex items-center gap-2.5 px-5 py-2.5 text-sm ${
-                  !allowed ? "text-white/20 hover:text-white/40" : tab === n.id ? "bg-white/10 text-white" : "text-white/60 hover:text-white/90"
-                }`}>
-                <n.icon size={16} /> {n.label}
-                {!!n.badge && allowed && <span className="ml-auto bg-amber-400 text-amber-900 text-[10px] font-bold px-1.5 py-0.5 rounded-full">{n.badge}</span>}
-              </button>
-            );
-          })}
-          <div className="px-5 pt-4 pb-1.5 text-[10px] font-semibold text-white/30 tracking-wide">관리자 전용</div>
-          {adminNav.map((n) => {
-            const allowed = canAccess(n.cat);
-            return (
-              <button key={n.id} onClick={() => allowed ? setTab(n.id) : setPermDeniedPopup(true)}
-                className={`w-full flex items-center gap-2.5 px-5 py-2.5 text-sm ${
-                  !allowed ? "text-white/20 hover:text-white/40" : tab === n.id ? "bg-white/10 text-white" : "text-white/60 hover:text-white/90"
-                }`}>
-                <n.icon size={16} /> {n.label}
-                {!!n.badge && allowed && <span className="ml-auto bg-amber-400 text-amber-900 text-[10px] font-bold px-1.5 py-0.5 rounded-full">{n.badge}</span>}
-              </button>
-            );
-          })}
-        </nav>
-        <div className="px-5 py-3 border-t border-white/10 text-[10px] text-white/30">MKQR</div>
-      </aside>
-      <main className="flex-1 p-6 overflow-y-auto">
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-lg font-semibold text-slate-800">{nav.find((n) => n.id === tab)?.label}</h2>
-          <div className="flex items-center gap-2">
-            <div className="flex items-center gap-2 bg-white border border-slate-200 rounded-full pl-1.5 pr-3 py-1">
-              <div className="w-6 h-6 rounded-full flex items-center justify-center text-white text-[11px] font-semibold shrink-0" style={{ background: BRAND.navy }}>
-                {(userEmail || "?").charAt(0).toUpperCase()}
-              </div>
-              <span className="text-xs text-slate-600 max-w-[160px] truncate">{userEmail}</span>
+        <nav className="flex-1 px-3 py-4 overflow-y-auto">
+          {[["MKQR OVERVIEW", allNav], ["운영자 전용", operatorNav], ["관리자 전용", adminNav]].map(([label, items]) => (
+            <div key={label} className="mb-4">
+              <p className="text-[11px] uppercase tracking-wider text-slate-500 font-semibold px-3 mb-1.5">{label}</p>
+              {items.map((n) => {
+                const allowed = canAccess(n.cat);
+                const active = allowed && tab === n.id;
+                return (
+                  <button key={n.id} onClick={() => allowed ? setTab(n.id) : setPermDeniedPopup(true)}
+                    className="w-full flex items-center text-left gap-2.5 px-3 py-2.5 rounded-lg text-sm mb-0.5 transition-colors"
+                    style={{
+                      backgroundColor: active ? BRAND.navySoft : "transparent",
+                      color: active ? "#fff" : allowed ? "#B7C0D1" : "#5B6472",
+                      borderLeft: active ? `3px solid ${BRAND.accent}` : "3px solid transparent",
+                    }}
+                    onMouseEnter={(e) => { if (!active) e.currentTarget.style.backgroundColor = BRAND.navyHover; }}
+                    onMouseLeave={(e) => { if (!active) e.currentTarget.style.backgroundColor = "transparent"; }}>
+                    <n.icon size={17} className="shrink-0" />
+                    <span className="leading-snug flex-1">{n.label}</span>
+                    {!!n.badge && allowed && (
+                      <span className="shrink-0 text-[11px] font-semibold rounded-full px-1.5 min-w-[18px] text-center" style={{ backgroundColor: "#DC2626", color: "#fff" }}>
+                        {n.badge > 99 ? "99+" : n.badge}
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
             </div>
-            <a href="https://aps.startruckkorea.com/" target="_blank" rel="noreferrer"
-              className="flex items-center gap-1.5 text-xs text-slate-600 bg-white border border-slate-200 rounded-full px-3 py-1.5 hover:bg-slate-50">
-              <ArrowUpRight size={13} /> APS로 돌아가기
+          ))}
+        </nav>
+        <div className="px-4 py-3 border-t border-white/10">
+          <p className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold mb-1">문의</p>
+          <a href="mailto:stk_it@hyosung.com" className="flex items-center gap-1.5 text-xs text-slate-400 hover:text-white transition-colors">
+            <Mail size={12} className="shrink-0" /><span className="truncate">stk_it@hyosung.com</span>
+          </a>
+        </div>
+      </aside>
+      <div className="flex-1 flex flex-col min-w-0">
+        <div className="h-14 shrink-0 bg-white border-b border-slate-100 flex items-center justify-between px-6">
+          <div className="flex items-center gap-2 text-sm text-slate-400 min-w-0">
+            <span className="shrink-0">Star Truck Korea</span>
+            <span>/</span>
+            <span className="text-slate-700 font-medium truncate">{nav.find((n) => n.id === tab)?.label}</span>
+          </div>
+          <div className="flex items-center gap-4 shrink-0">
+            <div className="leading-tight text-sm text-slate-500" title={[userName, userEmail].filter(Boolean).join("\n")}>
+              <div>{shortName}</div>
+              <div className="text-[11px] text-slate-400">{roleLabel}</div>
+            </div>
+            <a href="https://aps.startruckkorea.com/" target="_self"
+              className="flex items-center gap-1.5 text-xs font-medium text-slate-500 border border-slate-200 rounded-lg px-3 py-1.5 hover:border-teal-400 hover:text-teal-600 transition-colors">
+              📬 돌아가기
             </a>
             <button onClick={() => msalApp.logoutRedirect()}
-              className="flex items-center gap-1.5 text-xs text-slate-600 bg-white border border-slate-200 rounded-full px-3 py-1.5 hover:bg-slate-50">
-              <LogOut size={13} /> 로그아웃
+              className="text-xs font-medium text-slate-500 border border-slate-200 rounded-lg px-3 py-1.5 hover:border-red-300 hover:text-red-500 transition-colors">
+              로그아웃
             </button>
           </div>
         </div>
+      <main className="flex-1 p-6 overflow-y-auto">
+        <h2 className="text-lg font-semibold text-slate-800 mb-4">{nav.find((n) => n.id === tab)?.label}</h2>
         {!hasLoadedOnce ? <div className="text-slate-400 text-sm">불러오는 중...</div> : !canAccess(nav.find((n) => n.id === tab)?.cat) ? (
           <div className="bg-white rounded-xl border p-10 text-center">
             <ShieldCheck size={28} className="mx-auto text-slate-300 mb-2" />
@@ -2021,6 +2030,7 @@ function App({ userEmail }) {
           <div>This system is internally developed by Star Truck Korea IT Dept. Unauthorized access is strictly prohibited.</div>
         </div>
       </main>
+      </div>
 
       {permDeniedPopup && (
         <Modal title="접근 권한 없음" onClose={() => setPermDeniedPopup(false)}>
@@ -2037,28 +2047,27 @@ function App({ userEmail }) {
   );
 }
 
-function AccessDenied({ userEmail, adminEmails }) {
+// 접근 권한 없음(10-08 · mkqr-ics-hdr) — APS 공통(SSC) 과 같은 카드로 통일. 관리자 메일 목록 대신 ITSM 권한 신청 안내.
+function AccessDenied({ userEmail }) {
   return (
-    <div className="min-h-screen flex items-center justify-center p-6" style={{ background: "#F5F6F8" }}>
-      <div className="bg-white rounded-xl border p-8 max-w-md w-full text-center">
-        <AlertTriangle size={32} className="mx-auto text-amber-500 mb-3" />
-        <h2 className="text-lg font-semibold text-slate-800 mb-1">접근 권한 없음</h2>
-        <p className="text-sm text-slate-500 mb-4">Marketing부서 전용 시스템으로 현재 계정({userEmail})은 접근 권한이 없습니다.</p>
-        {adminEmails.length > 0 && (
-          <div className="bg-slate-50 rounded-lg p-4 text-left mb-4">
-            <div className="text-xs font-medium text-slate-500 mb-2">아래 등록된 관리자에게 접근 권한을 요청해주세요</div>
-            <div className="space-y-1">
-              {adminEmails.map((email) => (
-                <a key={email} href={`mailto:${email}?subject=${encodeURIComponent("MKQR 접근 권한 요청")}&body=${encodeURIComponent(`MKQR 관리자 화면 접근 권한을 요청드립니다.\n계정: ${userEmail}`)}`}
-                  className="flex items-center gap-1.5 text-sm text-slate-700 hover:underline">
-                  <Mail size={13} className="text-slate-400 shrink-0" /> {email}
-                </a>
-              ))}
-            </div>
+    <div style={{ display: "flex", alignItems: "center", justifyContent: "center", minHeight: "100vh", background: "linear-gradient(145deg,#0f2744 0%,#0078d4 100%)" }}>
+      <div style={{ background: "#fff", borderRadius: 20, padding: "48px 44px", textAlign: "center", boxShadow: "0 24px 60px rgba(0,0,0,.22)", maxWidth: 400, width: "90%" }}>
+        <div style={{ fontSize: "3rem", marginBottom: 16 }}>📱</div>
+        <div style={{ fontSize: "1.15rem", fontWeight: 800, color: "#0f2744", marginBottom: 6 }}>MKQR</div>
+        <div style={{ fontSize: ".82rem", color: "#0078d4", fontWeight: 600, marginBottom: 20 }}>Marketing QR · Star Truck Korea</div>
+        <div style={{ background: "#f8faff", borderRadius: 10, padding: "16px 18px", marginBottom: 24, textAlign: "left", border: "1px solid #e0eaff" }}>
+          <div style={{ fontSize: ".85rem", fontWeight: 700, color: "#1e3a5f", marginBottom: 6 }}>🔒 접근 권한 없음</div>
+          <div style={{ fontSize: ".8rem", color: "#374151", lineHeight: 1.8 }}>
+            MKQR은 <strong>Marketing, GA 부서 담당자</strong>만<br />접근 가능합니다.<br /><br />
+            권한 신청은 아래 시스템을 이용해 주세요.<br />
+            <a href="https://itsm-ticket.startruckkorea.com" target="_blank" rel="noreferrer" style={{ color: "#0078d4", fontWeight: 600, wordBreak: "break-all", textDecoration: "none" }}>itsm-ticket.startruckkorea.com</a>
           </div>
-        )}
-        <a href="https://aps.startruckkorea.com/" className="inline-flex items-center gap-1.5 text-sm text-slate-600 bg-slate-50 border border-slate-200 rounded-full px-4 py-2 hover:bg-slate-100">
-          <ArrowUpRight size={14} /> APS로 돌아가기
+        </div>
+        <div style={{ fontSize: ".75rem", color: "#94a3b8", marginBottom: 20 }}>문의: <a href="mailto:stk_it@hyosung.com" style={{ color: "#0078d4", textDecoration: "none" }}>stk_it@hyosung.com</a></div>
+        <a href="https://aps.startruckkorea.com/" target="_self" title={userEmail ? "현재 계정: " + userEmail : undefined}
+          style={{ textDecoration: "none", display: "inline-flex", alignItems: "center", gap: 7, background: "#0078d4", color: "#fff", borderRadius: 10, padding: "10px 28px", fontSize: ".85rem", fontWeight: 600, boxShadow: "0 1px 4px rgba(0,120,212,.25)" }}
+          onMouseOver={(e) => { e.currentTarget.style.background = "#106ebe"; }} onMouseOut={(e) => { e.currentTarget.style.background = "#0078d4"; }}>
+          <span style={{ fontSize: "1rem", lineHeight: 1 }}>📬</span><span>돌아가기</span>
         </a>
       </div>
     </div>
@@ -2105,7 +2114,7 @@ async function mkBoot(account) {
     createRoot(rootEl).render(<AccessDenied userEmail={account.username} adminEmails={adminEmails} />);
     return;
   }
-  createRoot(rootEl).render(<App userEmail={account.username} />);
+  createRoot(rootEl).render(<App userEmail={account.username} userName={account.name || ""} />);
 }
 
 (async function initMsal() {
