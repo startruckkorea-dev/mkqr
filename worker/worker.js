@@ -68,69 +68,101 @@ async function getAppToken(env) {
   return _cachedToken;
 }
 
-let _siteIdCache = null;
-async function getSiteId(env) {
-  if (_siteIdCache) return _siteIdCache;
+// 사이트 · 목록 id — sitePath 를 주면 그 사이트(연도별 체크인 보관 사이트), 없으면 지금 사이트(10-09 · mkqr-site)
+const _siteIds = {};
+async function getSiteId(env, sitePath = SITE_PATH) {
+  if (_siteIds[sitePath]) return _siteIds[sitePath];
   const token = await getAppToken(env);
-  const res = await fetch(`${GRAPH}/sites/${SITE_PATH}`, { headers: { Authorization: "Bearer " + token } });
+  const res = await fetch(`${GRAPH}/sites/${sitePath}`, { headers: { Authorization: "Bearer " + token } });
   const data = await res.json();
   if (!res.ok) throw new Error("사이트 조회 실패: " + JSON.stringify(data));
-  _siteIdCache = data.id;
-  return _siteIdCache;
+  _siteIds[sitePath] = data.id;
+  return data.id;
 }
 
 const _listIdCache = {};
-async function getListId(env, listName) {
-  if (_listIdCache[listName]) return _listIdCache[listName];
+async function getListId(env, listName, sitePath = SITE_PATH) {
+  const k = `${sitePath}|${listName}`;
+  if (_listIdCache[k]) return _listIdCache[k];
   const token = await getAppToken(env);
-  const siteId = await getSiteId(env);
+  const siteId = await getSiteId(env, sitePath);
   const res = await fetch(`${GRAPH}/sites/${siteId}/lists?$filter=displayName eq '${listName}'`, { headers: { Authorization: "Bearer " + token } });
   const data = await res.json();
   if (!res.ok || !data.value?.length) throw new Error(`목록을 찾을 수 없음: ${listName}`);
-  _listIdCache[listName] = data.value[0].id;
-  return _listIdCache[listName];
+  _listIdCache[k] = data.value[0].id;
+  return _listIdCache[k];
 }
 
-// ---- 체크인 기록 연도별 목록(10-09 · mkqr-year) -------------------------------------------------
-// 2026 = mkqr_CheckIns(지금 목록), 2027 부터 mkqr_CheckIns_YYYY. 연도는 한국 시간 기준.
-// 새 연도 목록은 관리자가 SharePoint 에서 「기존 목록에서 만들기」로 만든다(관리 화면이 12월부터 미리 알려 줌).
-const CK_BASE = "mkqr_CheckIns";
+// ---- 체크인 기록 연도별 보관(10-09 · mkqr-site) -----------------------------------------------------
+// APS 처럼 연도마다 SharePoint 사이트를 나눈다(연도는 한국 시간). 목록 이름은 어느 사이트든 mkqr_CheckIns.
+// 새 연도 사이트가 준비되면(목록 · 인덱스 3개 · 이 앱의 Sites.Selected 쓰기 권한) 아래 표와 index.html 의 MK_CK_SITES 에 한 줄씩 더하고 배포한다.
+//   형식: 2027: "startruckkorea.sharepoint.com:/sites/<사이트 주소 이름>:"
+// 센터 · Agent 목록은 계속 지금 사이트(인쇄된 QR 토큰 유지).
+const WORKER_VERSION = "2026-10-09.mkqr-site";   // /api/version — 배포 확인용
+const CK_LIST = "mkqr_CheckIns";
 const CK_BASE_YEAR = 2026;
+const CK_SITES = { 2026: SITE_PATH };
 function kstYear(ms = Date.now()) { return new Date(ms + 9 * 3600 * 1000).getUTCFullYear(); }
-function ckListName(y) { return y <= CK_BASE_YEAR ? CK_BASE : `${CK_BASE}_${y}`; }
 
-// 목록이 있는지 — 있으면 계속 기억, 없으면 10분 동안만 기억(그 사이 만들어지면 10분 안에 새 목록으로 넘어간다).
-// 조회 자체가 실패(일시 오류)하면 throw — 부르는 쪽이 「없음」으로 오해해 기억하지 않게.
+// 연도 사이트에 체크인 목록이 쓸 수 있게 있는지 — 있으면 계속 기억. 없으면 10분, 확인 실패(권한 없음 · 주소 틀림 · 일시 오류)면 2분 동안
+// 「아직 준비 전」으로 보고 직전 위치에 이어 쓴다 — 어떤 경우에도 체크인은 멈추지 않는다.
 const _ckMissing = {};
-async function listExists(env, name) {
-  if (_listIdCache[name]) return true;
-  if (_ckMissing[name] && Date.now() - _ckMissing[name] < 10 * 60 * 1000) return false;
-  const token = await getAppToken(env);
-  const siteId = await getSiteId(env);
-  const res = await fetch(`${GRAPH}/sites/${siteId}/lists?$filter=displayName eq '${name}'`, { headers: { Authorization: "Bearer " + token } });
-  if (!res.ok) throw new Error(`목록 확인 실패(${res.status}): ${name}`);
-  const data = await res.json();
-  if (data.value?.length) { _listIdCache[name] = data.value[0].id; delete _ckMissing[name]; return true; }
-  _ckMissing[name] = Date.now();
-  return false;
-}
-
-// 올해까지 실제로 있는 체크인 목록(오래된 것부터). 2026 목록은 늘 있다고 본다(없으면 기존처럼 그 자리에서 오류).
-// 일시 오류로 확인을 못 한 연도는 이번 요청에서만 빼고 넘어간다 — 기록은 직전 목록으로 이어지고, 관리 화면은 모든 목록을 함께 읽는다.
-async function ckExistingLists(env) {
-  const names = [CK_BASE];
-  for (let y = CK_BASE_YEAR + 1; y <= kstYear(); y++) {
-    const n = ckListName(y);
-    try { if (await listExists(env, n)) names.push(n); } catch (e) { console.log("[year] " + e.message); }
+async function ckListExists(env, sitePath) {
+  const k = `${sitePath}|${CK_LIST}`;
+  if (_listIdCache[k]) return true;
+  const miss = _ckMissing[k];
+  if (miss && Date.now() - miss.at < miss.ttl) return false;
+  try {
+    const token = await getAppToken(env);
+    const siteId = await getSiteId(env, sitePath);
+    const res = await fetch(`${GRAPH}/sites/${siteId}/lists?$filter=displayName eq '${CK_LIST}'`, { headers: { Authorization: "Bearer " + token } });
+    if (!res.ok) throw new Error(`목록 확인 실패(${res.status})`);
+    const data = await res.json();
+    if (data.value?.length) { _listIdCache[k] = data.value[0].id; delete _ckMissing[k]; return true; }
+    _ckMissing[k] = { at: Date.now(), ttl: 10 * 60 * 1000 };
+    return false;
+  } catch (e) {
+    console.log(`[year] 보관 위치 확인 실패: ${e.message}`);
+    _ckMissing[k] = { at: Date.now(), ttl: 2 * 60 * 1000 };
+    return false;
   }
-  return names;
 }
-async function ckWriteList(env) { const l = await ckExistingLists(env); return l[l.length - 1]; }
 
-async function listItems(env, listName, filterQuery = "") {
+// 올해까지 쓸 수 있는 보관 위치(오래된 것부터). 지금 사이트(2026)는 늘 있다고 본다(없으면 기존처럼 그 자리에서 오류).
+async function ckLocations(env) {
+  const locs = [SITE_PATH];
+  for (let y = CK_BASE_YEAR + 1; y <= kstYear(); y++) {
+    const site = CK_SITES[y];
+    if (site && !locs.includes(site) && await ckListExists(env, site)) locs.push(site);
+  }
+  return locs;
+}
+// 체크인 기록 쓰기 — 올해 위치에 쓰다 실패하면(쓰기 권한 없음 · 열 빠짐 등) 그 위치를 2분 동안 「준비 전」으로 두고 직전 위치에 다시 쓴다.
+// 목록 확인은 됐는데 쓰기가 안 되는 설정 실수가 있어도 체크인은 멈추지 않는다. 지금 사이트(2026)에서도 실패하면 기존처럼 오류.
+async function ckCreate(env, fields) {
+  const locs = await ckLocations(env);
+  for (let i = locs.length - 1; i >= 0; i--) {
+    try { return await createItem(env, CK_LIST, fields, locs[i]); }
+    catch (e) {
+      if (i === 0) throw e;
+      console.log(`[year] 기록 실패 — 직전 위치로 다시 씀: ${e.message}`);
+      const k = `${locs[i]}|${CK_LIST}`;
+      delete _listIdCache[k];
+      _ckMissing[k] = { at: Date.now(), ttl: 2 * 60 * 1000 };
+    }
+  }
+}
+// 지금 기록 중인 연도(사이트 이름은 내지 않음) — 관리 화면이 Worker 와 같은 위치를 보는지 확인하는 데 쓴다
+async function ckWriteYear(env) {
+  const l = await ckLocations(env); const site = l[l.length - 1];
+  const y = Object.keys(CK_SITES).find((k) => CK_SITES[k] === site);
+  return y ? Number(y) : CK_BASE_YEAR;
+}
+
+async function listItems(env, listName, filterQuery = "", sitePath = SITE_PATH) {
   const token = await getAppToken(env);
-  const siteId = await getSiteId(env);
-  const listId = await getListId(env, listName);
+  const siteId = await getSiteId(env, sitePath);
+  const listId = await getListId(env, listName, sitePath);
   let items = [];
   let url = `${GRAPH}/sites/${siteId}/lists/${listId}/items?expand=fields&$top=200${filterQuery}`;
   while (url) {
@@ -148,15 +180,15 @@ async function listItems(env, listName, filterQuery = "") {
 // 체크인 기록이 수천 건 쌓여도 매번 전체를 긁지 않도록, ServerTimestamp 기준으로 최근 것만 서버측 필터링해서 가져온다.
 // mkqr_CheckIns 목록의 ServerTimestamp 컬럼에 "인덱스"를 걸어두는 걸 권장 (목록 설정 → 인덱스 걸린 열 → 만들기).
 // 인덱스가 없어도 Prefer 헤더 덕분에 동작은 하지만, 목록이 5,000건을 넘어가면 느려지거나 실패할 수 있다.
-// 10-09(mkqr-year): 최근 기록은 지금 쓰는 목록 아니면 바로 앞 목록(해 넘김 · 이어 쓰기)에만 있으므로 마지막 두 목록만 본다.
+// 10-09(mkqr-site): 최근 기록은 지금 쓰는 위치 아니면 바로 앞 위치(해 넘김 · 이어 쓰기)에만 있으므로 마지막 두 위치만 본다.
 async function listRecentCheckins(env, sinceMs) {
   const sinceIso = new Date(sinceMs).toISOString();
-  // 지금 쓰는 목록은 실패하면 그대로 오류(기존과 같음), 바로 앞 목록은 해 넘김 직후에만 의미가 있어 실패해도 빈 값으로 넘어간다
-  const lists = (await ckExistingLists(env)).slice(-2);
+  // 지금 쓰는 위치는 실패하면 그대로 오류(기존과 같음), 바로 앞 위치는 해 넘김 직후에만 의미가 있어 실패해도 빈 값으로 넘어간다
+  const lists = (await ckLocations(env)).slice(-2);
   const last = lists.length - 1;
-  const parts = await Promise.all(lists.map((n, i) => {
-    const p = listItems(env, n, `&$filter=fields/ServerTimestamp ge '${sinceIso}'`);
-    return i === last ? p : p.catch((e) => { console.log("[year] 직전 목록 조회 실패: " + e.message); return []; });
+  const parts = await Promise.all(lists.map((site, i) => {
+    const p = listItems(env, CK_LIST, `&$filter=fields/ServerTimestamp ge '${sinceIso}'`, site);
+    return i === last ? p : p.catch((e) => { console.log("[year] 직전 위치 조회 실패: " + e.message); return []; });
   }));
   return parts.flat();
 }
@@ -166,21 +198,21 @@ async function listRecentCheckins(env, sinceMs) {
 // 조회 자체가 실패해도(네트워크 오류 등) 체크인 자체를 막지 않기 위해 0으로 처리한다(fail-open).
 async function countDeviceCenterVisits(env, centerId, fingerprint) {
   if (!fingerprint || !centerId) return 0;
-  // 10-09(mkqr-year): 연도 목록 전부를 센다(누적 규칙은 해가 바뀌어도 그대로). 목록 하나가 실패해도 나머지로 센다.
+  // 10-09(mkqr-site): 연도 위치 전부를 센다(누적 규칙은 해가 바뀌어도 그대로). 위치 하나가 실패해도 나머지로 센다.
   try {
-    const lists = await ckExistingLists(env);
-    const parts = await Promise.all(lists.map((n) => listItems(env, n,
-      `&$filter=fields/CenterId eq '${centerId}' and fields/DeviceFingerprint eq '${fingerprint}'`).catch(() => [])));
+    const locs = await ckLocations(env);
+    const parts = await Promise.all(locs.map((site) => listItems(env, CK_LIST,
+      `&$filter=fields/CenterId eq '${centerId}' and fields/DeviceFingerprint eq '${fingerprint}'`, site).catch(() => [])));
     return parts.flat().filter((it) => it.fields.VerifyStatus !== "차단해제").length;
   } catch (e) {
     return 0;
   }
 }
 
-async function createItem(env, listName, fields) {
+async function createItem(env, listName, fields, sitePath = SITE_PATH) {
   const token = await getAppToken(env);
-  const siteId = await getSiteId(env);
-  const listId = await getListId(env, listName);
+  const siteId = await getSiteId(env, sitePath);
+  const listId = await getListId(env, listName, sitePath);
   const res = await fetch(`${GRAPH}/sites/${siteId}/lists/${listId}/items`, {
     method: "POST",
     headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
@@ -297,6 +329,10 @@ export default {
     if (request.method === "OPTIONS") return new Response(null, { headers: CORS_HEADERS });
 
     try {
+      // 배포 확인용(10-09 · mkqr-site) — 코드 버전과 등록된 보관 연도만(사이트 이름은 내지 않음)
+      if (url.pathname === "/api/version" && request.method === "GET") {
+        return json({ version: WORKER_VERSION, years: Object.keys(CK_SITES).map(Number), writeYear: await ckWriteYear(env).catch(() => null) });
+      }
       if (url.pathname === "/api/center" && request.method === "GET") {
         const agentToken = url.searchParams.get("a");
         if (agentToken) {
@@ -337,7 +373,7 @@ export default {
           const aCf = request.cf || {};
           const aCity = [...new Set([aCf.city, aCf.region].filter(Boolean))].join(" ");
           const aNow = new Date().toISOString();
-          await createItem(env, await ckWriteList(env), {
+          await ckCreate(env, {   // 올해 위치(준비 전 · 쓰기 실패면 직전 위치) — 10-09 · mkqr-site
             Title: `${a.Title} ${aNow.slice(0, 16).replace("T", " ")}`,
             CenterId: agentKey,
             CenterName: a.Title,
@@ -437,7 +473,7 @@ export default {
           DeviceFingerprint: deviceFingerprint || "",
           RecaptchaScore: recaptchaScore,
         };
-        await createItem(env, await ckWriteList(env), fields);   // 올해 목록(없으면 직전 연도 목록) — 10-09 · mkqr-year
+        await ckCreate(env, fields);   // 올해 위치(준비 전 · 쓰기 실패면 직전 위치) — 10-09 · mkqr-site
 
         return json({ verifyStatus, distanceKm: fields.DistanceKm, gpsUsed, redirectUrl: safeRedirect(c.RedirectUrl) });
       }

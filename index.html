@@ -162,13 +162,22 @@ function mkCatValue(row, cat) {
 }
 const _mkListIds = {};
 
-async function getMkListId(listName) {
-  if (_mkListIds[listName]) return _mkListIds[listName];
+// sitePath(연도별 체크인 보관 사이트)를 주면 그 사이트에서, 없으면 지금 사이트에서 찾는다(10-09 · mkqr-site)
+const _mkSiteIds = {};
+async function mkSiteId(sitePath) {
+  if (!sitePath || sitePath === SITE_PATH) return _siteId;
+  if (_mkSiteIds[sitePath]) return _mkSiteIds[sitePath];
+  const r = await apiGet(`/sites/${sitePath}`, await getGraphToken());
+  return (_mkSiteIds[sitePath] = r.id);
+}
+async function getMkListId(listName, sitePath) {
+  const k = sitePath && sitePath !== SITE_PATH ? `${sitePath}|${listName}` : listName;
+  if (_mkListIds[k]) return _mkListIds[k];
   const token = await getGraphToken();
-  const res = await apiGet(`/sites/${_siteId}/lists?$filter=displayName eq '${listName}'`, token);
+  const res = await apiGet(`/sites/${await mkSiteId(sitePath)}/lists?$filter=displayName eq '${listName}'`, token);
   if (!res.value || !res.value.length) throw new Error(`SharePoint 목록을 찾을 수 없습니다: ${listName} (관리자에게 목록 생성 요청 필요)`);
-  _mkListIds[listName] = res.value[0].id;
-  return _mkListIds[listName];
+  _mkListIds[k] = res.value[0].id;
+  return _mkListIds[k];
 }
 
 // 목록의 열(내부 이름) — 아직 만들지 않은 열에 값을 쓰면 Graph 가 400 을 돌려 저장 전체가 실패하므로 먼저 확인한다(10-08)
@@ -183,11 +192,11 @@ async function getMkListColumnNames(listName) {
 }
 
 // apiAll() 패턴과 동일 — 5,000건 임계값 대비 nextLink를 따라 무제한 순회
-async function mkListAll(listName, extraQuery = "") {
+async function mkListAll(listName, extraQuery = "", sitePath) {
   const token = await getGraphToken();
-  const listId = await getMkListId(listName);
+  const listId = await getMkListId(listName, sitePath);
   let items = [];
-  let url = `${GRAPH}/sites/${_siteId}/lists/${listId}/items?expand=fields&$top=200${extraQuery}`;
+  let url = `${GRAPH}/sites/${await mkSiteId(sitePath)}/lists/${listId}/items?expand=fields&$top=200${extraQuery}`;
   while (url) {
     const res = await fetch(url, { headers: { Authorization: "Bearer " + token, Prefer: "HonorNonIndexedQueriesWarningMayFailRandomly" } });
     if (!res.ok) throw new Error(`${listName} 조회 실패 (${res.status})`);
@@ -198,10 +207,10 @@ async function mkListAll(listName, extraQuery = "") {
   return items;
 }
 
-async function mkCreateItem(listName, fields) {
+async function mkCreateItem(listName, fields, sitePath) {
   const token = await getGraphToken();
-  const listId = await getMkListId(listName);
-  const res = await fetch(`${GRAPH}/sites/${_siteId}/lists/${listId}/items`, {
+  const listId = await getMkListId(listName, sitePath);
+  const res = await fetch(`${GRAPH}/sites/${await mkSiteId(sitePath)}/lists/${listId}/items`, {
     method: "POST",
     headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
     body: JSON.stringify({ fields }),
@@ -210,67 +219,119 @@ async function mkCreateItem(listName, fields) {
   return res.json();
 }
 
-// ---- 체크인 기록 연도별 목록(10-09 · mkqr-year) — Worker 와 같은 규칙 -------------------------------
-// 2026 = mkqr_CheckIns(지금 목록), 2027 부터 mkqr_CheckIns_YYYY. 연도는 한국 시간 기준.
-// Worker 는 올해 목록이 아직 없으면 가장 가까운 지난 연도 목록에 이어 쓰므로, 목록 Y 에는 Y년 이후 기록만 있다.
+// ---- 체크인 기록 연도별 보관(10-09 · mkqr-site) — Worker(worker.js 의 CK_SITES)와 같은 규칙 ---------------
+// APS 처럼 연도마다 SharePoint 사이트를 나눈다(연도는 한국 시간). 목록 이름은 어느 사이트든 mkqr_CheckIns.
+// 새 연도 사이트가 준비되면(목록 · 인덱스 · Worker 앱 쓰기 권한 · 사용자 권한) 아래 표와 worker.js 의 CK_SITES 에 한 줄씩 더한다.
+//   형식: 2027: "startruckkorea.sharepoint.com:/sites/<사이트 주소 이름>:"
+// 센터 · Agent · 권한 목록은 연도와 무관한 기준 정보라 계속 지금 사이트 — 인쇄된 QR 이 해마다 바뀌면 안 된다.
+// 올해 위치가 아직 준비 전이면 Worker 는 가장 가까운 지난 연도 위치에 이어 쓴다 → 위치 Y 에는 Y년 이후 기록만 있다.
 const MK_CK_BASE_YEAR = 2026;
-const MK_CK_INDEXED = ["ServerTimestamp", "DeviceFingerprint", "CenterId"];   // 연도 목록마다 필요한 인덱스
+const MK_CK_SITES = { 2026: SITE_PATH };
+const MK_CK_INDEXED = ["ServerTimestamp", "DeviceFingerprint", "CenterId"];   // 연도 위치마다 필요한 인덱스
 function mkKstYear(ms = Date.now()) { return new Date(ms + 9 * 36e5).getUTCFullYear(); }
-function mkCheckinListName(y) { return y <= MK_CK_BASE_YEAR ? MK_LISTS.checkins : `${MK_LISTS.checkins}_${y}`; }
-const _mkMissing = {};   // 없는 목록 — 5분 동안 다시 묻지 않음
-async function mkListExists(name) {
-  if (_mkListIds[name]) return true;
-  if (_mkMissing[name] && Date.now() - _mkMissing[name] < 5 * 60e3) return false;
-  try { await getMkListId(name); delete _mkMissing[name]; return true; }
-  catch (e) { if (/찾을 수 없습니다/.test(e.message)) { _mkMissing[name] = Date.now(); return false; } throw e; }
+const _mkMissing = {};   // 목록이 없는 연도 사이트 — 5분 동안 다시 묻지 않음
+async function mkCkListExists(sitePath) {
+  const k = `${sitePath}|${MK_LISTS.checkins}`;
+  if (_mkListIds[k]) return true;
+  if (_mkMissing[k] && Date.now() - _mkMissing[k] < 5 * 60e3) return false;
+  try { await getMkListId(MK_LISTS.checkins, sitePath); delete _mkMissing[k]; return true; }
+  catch (e) { if (/찾을 수 없습니다/.test(e.message)) { _mkMissing[k] = Date.now(); return false; } throw e; }
 }
-// 2026 ~ toYear 중 실제로 있는 체크인 목록(오래된 것부터)
-async function mkCheckinListsUpTo(toYear) {
-  const ys = []; for (let y = MK_CK_BASE_YEAR; y <= toYear; y++) ys.push(y);
-  const ok = await Promise.all(ys.map((y) => y === MK_CK_BASE_YEAR ? true : mkListExists(mkCheckinListName(y))));
-  return ys.filter((_, i) => ok[i]).map(mkCheckinListName);
+// 2026 ~ toYear 중 기록이 있을 수 있는 위치(오래된 것부터) — [{ year, site }]
+// 등록된 연도 사이트에 접근이 안 되면(권한 · 주소) 일부 기록을 몰래 빼고 보여주지 않도록 오류로 알린다(사이트 이름은 화면에 내지 않음)
+async function mkCkLocations(toYear) {
+  const locs = [{ year: MK_CK_BASE_YEAR, site: SITE_PATH }];
+  for (let y = MK_CK_BASE_YEAR + 1; y <= toYear; y++) {
+    const site = MK_CK_SITES[y];
+    if (!site || site === SITE_PATH) continue;
+    let ok;
+    try { ok = await mkCkListExists(site); }
+    catch (e) { console.warn(`[MKQR] ${y}년 보관 위치 확인 실패:`, e.message); throw new Error(`${y}년 체크인 기록 보관 위치에 접근할 수 없습니다 — 그 사이트의 권한을 확인해 주세요.`); }
+    if (ok) locs.push({ year: y, site });
+  }
+  return locs;
 }
-// 지금 기록이 들어가는 목록 — 올해 목록, 없으면 가장 가까운 지난 연도 목록
-async function mkCheckinWriteList() { const l = await mkCheckinListsUpTo(mkKstYear()); return l[l.length - 1]; }
-// 기간 조회 — 조회 끝 날짜의 연도까지 있는 목록을 모두 읽어 합친다. 행마다 어느 목록인지(_list) · 화면 키(_key)를 붙인다
+// Worker 가 지금 기록 중인 연도(/api/version) — 1분 기억. 못 받으면 null
+let _mkWorkerInfo = null;
+async function mkWorkerInfo() {
+  if (_mkWorkerInfo && Date.now() - _mkWorkerInfo.at < 60e3) return _mkWorkerInfo.v;
+  let v = null;
+  try { const r = await fetch(`${CHECKIN_API_BASE}/api/version`, { cache: "no-store" }); if (r.ok) v = await r.json(); } catch (e) { v = null; }
+  _mkWorkerInfo = { at: Date.now(), v };
+  return v;
+}
+// 지금 기록이 들어가는 위치 — Worker 가 알려 준 연도를 우선(차단 해제 표시가 Worker 가 읽는 곳에 가야 함),
+// 못 받으면 같은 규칙으로 계산(올해 위치, 준비 전이면 가장 가까운 지난 연도 위치)
+async function mkCheckinWriteSite() {
+  const l = await mkCkLocations(mkKstYear());
+  const w = await mkWorkerInfo();
+  const hit = w && l.find((x) => x.year === w.writeYear);
+  return (hit || l[l.length - 1]).site;
+}
+// 기간 조회 — 조회 끝 날짜의 연도까지 모든 위치를 읽어 합친다. 행마다 위치(_site · _year) · 화면 키(_key)를 붙인다
 async function mkLoadCheckins(range, query) {
   const toMs = range.mode === "custom" && range.to ? new Date(range.to + "T23:59:59").getTime() : Date.now();
-  const lists = await mkCheckinListsUpTo(Math.max(MK_CK_BASE_YEAR, Math.min(mkKstYear(), mkKstYear(toMs))));
-  const parts = await Promise.all(lists.map((n) => mkListAll(n, query)
-    .then((v) => v.map((x) => ({ id: x.id, ...x.fields, _list: n, _key: `${n}:${x.id}` })))));
+  const locs = await mkCkLocations(Math.max(MK_CK_BASE_YEAR, Math.min(mkKstYear(), mkKstYear(toMs))));
+  const parts = await Promise.all(locs.map((l) => mkListAll(MK_LISTS.checkins, query, l.site)
+    .then((v) => v.map((x) => ({ id: x.id, ...x.fields, _site: l.site, _year: l.year, _key: `${l.year}:${x.id}` })))));
   return parts.flat();
 }
-// 보관 목록 점검(관리자 안내) — 올해 목록 없음 · 12월이면 내년 목록 · 각 목록의 열/인덱스 빠짐. 5분 동안 결과를 기억
+// 보관 위치 점검(관리자 안내) — 올해 위치 준비 전 · 12월이면 내년 위치 · 각 위치의 열/인덱스 빠짐. 5분 동안 결과를 기억
 let _mkStorageCache = null;
 async function mkCheckinStorageIssues() {
   if (_mkStorageCache && Date.now() - _mkStorageCache.at < 5 * 60e3) return _mkStorageCache.issues;
   const Y = mkKstYear(), M = new Date(Date.now() + 9 * 36e5).getUTCMonth() + 1;
   const token = await getGraphToken();
-  const cols = async (name) => (await apiGet(`/sites/${_siteId}/lists/${await getMkListId(name)}/columns?$select=name,indexed,hidden,readOnly`, token)).value || [];
+  const cols = async (site) => (await apiGet(`/sites/${await mkSiteId(site)}/lists/${await getMkListId(MK_LISTS.checkins, site)}/columns?$select=name,indexed,hidden,readOnly`, token)).value || [];
   const issues = [];
-  const lists = await mkCheckinListsUpTo(Y);
-  if (Y > MK_CK_BASE_YEAR && !lists.includes(mkCheckinListName(Y)))
-    issues.push({ warn: true, missing: true, text: `${Y}년 목록 ${mkCheckinListName(Y)} 이(가) 없어 ${lists[lists.length - 1]} 목록에 이어서 기록되고 있습니다. 만들어 두면 그때부터 새 목록에 쌓입니다.` });
-  if (M === 12 && !(await mkListExists(mkCheckinListName(Y + 1))))
-    issues.push({ warn: false, missing: true, text: `${Y + 1}년 목록 ${mkCheckinListName(Y + 1)} 을(를) 미리 만들어 두세요 — 1월 1일 0시(한국 시간)부터 새 기록이 그 목록에 쌓입니다.` });
-  const base = await cols(MK_LISTS.checkins);
+  let locs;
+  try { locs = await mkCkLocations(Y); }
+  catch (e) { issues.push({ warn: true, text: e.message }); locs = [{ year: MK_CK_BASE_YEAR, site: SITE_PATH }]; }
+  const last = locs[locs.length - 1];
+  if (Y > MK_CK_BASE_YEAR && last.year !== Y && !issues.length)
+    issues.push({ warn: true, missing: true, text: MK_CK_SITES[Y]
+      ? `${Y}년 보관 사이트에 ${MK_LISTS.checkins} 목록이 없어 ${last.year}년 위치에 이어서 기록되고 있습니다.`
+      : `${Y}년 체크인 보관 사이트가 아직 연결되지 않아 ${last.year}년 위치에 이어서 기록되고 있습니다.` });
+  const check = [...locs];
+  if (M === 12) {
+    const nx = MK_CK_SITES[Y + 1];
+    if (!nx) issues.push({ warn: false, missing: true, text: `${Y + 1}년 체크인 보관 사이트를 미리 준비해 두세요 — 1월 1일 0시(한국 시간)부터 새 기록이 그곳에 쌓입니다.` });
+    else {
+      try {
+        if (await mkCkListExists(nx)) check.push({ year: Y + 1, site: nx });
+        else issues.push({ warn: false, missing: true, text: `${Y + 1}년 보관 사이트에 ${MK_LISTS.checkins} 목록을 만들어 두세요.` });
+      } catch (e) { issues.push({ warn: true, text: `${Y + 1}년 보관 사이트에 접근할 수 없습니다 — 권한을 확인해 주세요.` }); }
+    }
+  }
+  // Worker 와 화면이 같은 위치를 보는지 — 연결 표가 다르면(Worker 배포 전) · 기록 연도가 다르면(Worker 앱 권한 문제) 알린다
+  const w = await mkWorkerInfo();
+  if (w && Array.isArray(w.years)) {
+    const mine = Object.keys(MK_CK_SITES).map(Number);
+    if (mine.some((y) => !w.years.includes(y)) || w.years.some((y) => !mine.includes(y)))
+      issues.push({ warn: true, text: `체크인 처리 앱(Worker)의 보관 연도 설정(${w.years.join(", ")})이 화면(${mine.join(", ")})과 다릅니다 — Worker 를 다시 배포해 주세요.` });
+    else if (w.writeYear && w.writeYear !== last.year)
+      issues.push({ warn: true, text: `체크인 처리 앱(Worker)은 ${w.writeYear}년 위치에 기록 중입니다(화면 기준 ${last.year}년) — 그 사이트에 대한 앱의 쓰기 권한을 확인해 주세요.` });
+  }
+  const base = await cols(SITE_PATH);
   const want = base.filter((c) => !c.hidden && !c.readOnly).map((c) => c.name);
-  for (const n of lists) {
-    const c = n === MK_LISTS.checkins ? base : await cols(n);
+  for (const l of check) {
+    let c;
+    try { c = l.site === SITE_PATH ? base : await cols(l.site); }
+    catch (e) { console.warn("[MKQR] 열 확인 실패:", e.message); issues.push({ warn: true, text: `${l.year}년 ${MK_LISTS.checkins} 목록의 열을 확인하지 못했습니다 — 그 사이트의 권한을 확인해 주세요.` }); continue; }
     const has = (k) => c.find((x) => x.name === k);
-    const noCol = n === MK_LISTS.checkins ? [] : want.filter((k) => !has(k));
+    const noCol = l.site === SITE_PATH ? [] : want.filter((k) => !has(k));
     const noIdx = MK_CK_INDEXED.filter((k) => has(k) && !has(k).indexed);
-    if (noCol.length) issues.push({ warn: true, text: `${n} 에 없는 열: ${noCol.join(", ")} — 「기존 목록에서」로 다시 만들거나 열을 추가해 주세요.` });
-    if (noIdx.length) issues.push({ warn: true, text: `${n} 에 인덱스가 없는 열: ${noIdx.join(", ")} — 5,000건을 넘으면 조회 · 체크인이 실패할 수 있습니다.` });
+    if (noCol.length) issues.push({ warn: true, text: `${l.year}년 ${MK_LISTS.checkins} 목록에 없는 열: ${noCol.join(", ")}` });
+    if (noIdx.length) issues.push({ warn: true, text: `${l.year}년 ${MK_LISTS.checkins} 목록에 인덱스가 없는 열: ${noIdx.join(", ")} — 5,000건을 넘으면 조회 · 체크인이 실패할 수 있습니다.` });
   }
   _mkStorageCache = { at: Date.now(), issues };
   return issues;
 }
 
-async function mkUpdateItem(listName, itemId, fields) {
+async function mkUpdateItem(listName, itemId, fields, sitePath) {
   const token = await getGraphToken();
-  const listId = await getMkListId(listName);
-  const res = await fetch(`${GRAPH}/sites/${_siteId}/lists/${listId}/items/${itemId}/fields`, {
+  const listId = await getMkListId(listName, sitePath);
+  const res = await fetch(`${GRAPH}/sites/${await mkSiteId(sitePath)}/lists/${listId}/items/${itemId}/fields`, {
     method: "PATCH",
     headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
     body: JSON.stringify(fields),
@@ -578,22 +639,21 @@ function CheckinStorageNotice() {
   useEffect(() => { mkCheckinStorageIssues().then(setIssues, (e) => { console.warn("[MKQR] 보관 목록 점검 실패:", e.message); setIssues([]); }); }, []);
   if (!issues || !issues.length) return null;
   const warn = issues.some((i) => i.warn);
-  const Y = mkKstYear();
-  const next = issues.some((i) => i.missing && !i.warn) ? Y + 1 : Y;
   return (
     <div className={`rounded-xl border px-4 py-3 mb-5 text-xs leading-relaxed ${warn ? "bg-amber-50 border-amber-200 text-amber-900" : "bg-blue-50 border-blue-100 text-blue-900"}`}>
       <div className="flex items-start gap-2.5">
         <AlertTriangle size={15} className={`shrink-0 mt-0.5 ${warn ? "text-amber-500" : "text-blue-500"}`} />
         <div className="flex-1 min-w-0">
-          <div className="font-semibold mb-1">체크인 기록 연도별 목록 점검 <span className="font-normal opacity-60">· 관리자에게만 보입니다</span></div>
+          <div className="font-semibold mb-1">체크인 기록 연도별 보관 점검 <span className="font-normal opacity-60">· 관리자에게만 보입니다</span></div>
           <ul className="space-y-0.5 list-disc list-inside">{issues.map((i, k) => <li key={k}>{i.text}</li>)}</ul>
-          {issues.some((i) => i.missing) && <button onClick={() => setOpen((v) => !v)} className="mt-1.5 font-medium underline underline-offset-2">{open ? "만드는 방법 접기" : "새 연도 목록 만드는 방법"}</button>}
+          {issues.some((i) => i.missing) && <button onClick={() => setOpen((v) => !v)} className="mt-1.5 font-medium underline underline-offset-2">{open ? "준비 순서 접기" : "새 연도 보관 사이트 준비 순서"}</button>}
           {open && issues.some((i) => i.missing) && (
             <ol className="mt-1.5 space-y-0.5 list-decimal list-inside opacity-90">
-              <li>SharePoint 사이트 → 새로 만들기 → 목록 → 「기존 목록에서」 → <b>{MK_LISTS.checkins}</b> 선택</li>
-              <li>이름을 <b>{mkCheckinListName(Math.max(next, MK_CK_BASE_YEAR + 1))}</b> 로 만들기 — 열이 그대로 복사됩니다(기록은 복사되지 않음)</li>
-              <li>새 목록 설정 → 인덱싱된 열 → {MK_CK_INDEXED.join(" · ")} 3개 만들기</li>
-              <li>화면을 새로고침하면 이 안내가 사라지고, 체크인은 10분 안에 새 목록에 기록되기 시작합니다</li>
+              <li>새 연도용 SharePoint 사이트를 만든다</li>
+              <li>{MK_LISTS.checkins} 목록을 열 구조만 옮겨 만들고(기록은 옮기지 않음), 인덱싱된 열 {MK_CK_INDEXED.join(" · ")} 3개를 만든다</li>
+              <li>체크인 처리 앱(Worker)에 새 사이트 쓰기 권한을 준다 — 지금 사이트에 준 것과 같은 방식</li>
+              <li>MKQR 담당자(Marketing · HR · GA)에게 새 사이트 편집 권한을 준다</li>
+              <li>IT 가 MKQR 설정에 새 사이트를 등록하고 배포한다 — 그때부터 체크인이 새 사이트에 쌓인다</li>
             </ol>
           )}
         </div>
@@ -1541,7 +1601,7 @@ function CheckInsTab({ kind = "center", checkins, reload, checkinRange, onRangeC
   }
 
   async function approve(r) {
-    try { await mkUpdateItem(r._list || MK_LISTS.checkins, r.id, { VerifyStatus: "관리자승인" }); await reload(); } catch (e) { alert(e.message); }
+    try { await mkUpdateItem(MK_LISTS.checkins, r.id, { VerifyStatus: "관리자승인" }, r._site); await reload(); } catch (e) { alert(e.message); }
   }
 
   // 특정 기기가 1분 5회 초과로 30분 차단된 경우, 관리자가 그 전에 강제로 풀어줄 때 사용.
@@ -1551,13 +1611,14 @@ function CheckInsTab({ kind = "center", checkins, reload, checkinRange, onRangeC
     if (!r.DeviceFingerprint) { alert("이 기록엔 기기 식별코드가 없습니다."); return; }
     if (!confirm(`"${r.CenterName}" ${noun}에서 인증코드 ${r.DeviceFingerprint.slice(0, 16).toUpperCase()} 기기의 차단을 즉시 해제할까요?`)) return;
     try {
-      await mkCreateItem(await mkCheckinWriteList(), {   // Worker 가 지금 읽는 목록에(10-09 · mkqr-year)
+      const ckSite = await mkCheckinWriteSite();   // Worker 가 지금 읽는 위치에(10-09 · mkqr-site)
+      await mkCreateItem(MK_LISTS.checkins, {
         Title: `차단해제 ${r.CenterName} ${new Date(new Date().getTime()+9*3600*1000).toISOString().slice(0, 16).replace("T", " ")}`,
         CenterId: r.CenterId, CenterName: r.CenterName,
         DeviceFingerprint: r.DeviceFingerprint,
         VerifyStatus: "차단해제",
         ServerTimestamp: new Date().toISOString(),
-      });
+      }, ckSite);
       alert("차단을 해제했습니다.");
       await reload();
     } catch (e) { alert(e.message); }
@@ -1825,25 +1886,24 @@ function OverviewTab({ centers, agents, agentsError, checkins, admins, setTab, i
   const byTime = (a, b) => new Date(b.ServerTimestamp || 0) - new Date(a.ServerTimestamp || 0);
   const rankOf = (list) => Object.values(list.reduce((m, r) => {
     const k = r.CenterId || r.CenterName; (m[k] = m[k] || { name: r.CenterName, n: 0 }).n++; return m;
-  }, {})).sort((a, b) => b.n - a.n).slice(0, 5);
+  }, {})).sort((a, b) => b.n - a.n).slice(0, 8);
   const devices = (list) => new Set(list.map((r) => r.DeviceFingerprint).filter(Boolean)).size;
   const needsVerify = centerRows.filter((r) => r.VerifyStatus === "검증필요").length;
   const activeCenters = centers.filter((c) => c.Active !== false).length;
   const activeAgents = agents.filter((a) => a.Active !== false).length;
   const AGENT = { main: "#3B5B8C", soft: "#E8EEF7" };   // Agent 구역 색(남청) — 센터는 BRAND.accent(청록)
 
+  // 소개 띠 타일 — 한 줄 머리(아이콘 · 이름 · 꼬리표 · 특징) + 두 줄 설명. 예전보다 낮게(10-09)
   const Tile = ({ icon: Icon, title, tag, desc, chips, tab, cat, tint }) => (
     <div onClick={() => can(cat) && setTab(tab)}
-      className={`rounded-xl p-4 bg-white/[0.06] border border-white/10 ${can(cat) ? "cursor-pointer hover:bg-white/[0.1] transition-colors" : ""}`}>
-      <div className="flex items-center gap-2 mb-1.5">
-        <div className="w-7 h-7 rounded-lg flex items-center justify-center" style={{ background: tint }}><Icon size={15} /></div>
-        <span className="font-semibold text-sm">{title}</span>
-        <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-white/10 text-white/70">{tag}</span>
+      className={`rounded-xl px-4 py-3 bg-white/[0.06] border border-white/10 ${can(cat) ? "cursor-pointer hover:bg-white/[0.1] transition-colors" : ""}`}>
+      <div className="flex items-center gap-2 min-w-0">
+        <div className="w-6 h-6 rounded-md flex items-center justify-center shrink-0" style={{ background: tint }}><Icon size={13} /></div>
+        <span className="font-semibold text-[13px] whitespace-nowrap">{title}</span>
+        <span className="text-[10px] px-1.5 py-px rounded-full bg-white/10 text-white/70 whitespace-nowrap">{tag}</span>
+        <span className="ml-auto hidden 2xl:block text-[10.5px] text-white/45 truncate">{chips.join(" · ")}</span>
       </div>
-      <p className="text-[12.5px] text-white/70 leading-relaxed">{desc}</p>
-      <div className="flex flex-wrap gap-1 mt-2.5">
-        {chips.map((c) => <span key={c} className="text-[10.5px] px-2 py-0.5 rounded-full border border-white/15 text-white/75">{c}</span>)}
-      </div>
+      <p className="text-[12px] text-white/65 leading-snug mt-1.5">{desc}</p>
     </div>
   );
 
@@ -1935,21 +1995,21 @@ function OverviewTab({ centers, agents, agentsError, checkins, admins, setTab, i
 
   return (
     <div className="w-full">
-      <div className="rounded-2xl p-6 mb-6 text-white relative overflow-hidden" style={{ background: `linear-gradient(135deg, ${BRAND.navy}, #1A3A5C)` }}>
-        <div className="relative z-10 grid grid-cols-1 lg:grid-cols-5 gap-6 items-start">
+      <div className="rounded-2xl px-6 py-5 mb-6 text-white relative overflow-hidden" style={{ background: `linear-gradient(135deg, ${BRAND.navy}, #1A3A5C)` }}>
+        <div className="relative z-10 grid grid-cols-1 lg:grid-cols-5 gap-5 items-center">
           <div className="lg:col-span-2">
             <div className="flex items-center gap-2 mb-2">
               <div className="w-8 h-8 rounded-lg bg-white/10 flex items-center justify-center"><QrCode size={16} /></div>
               <h3 className="font-semibold">MKQR이란?</h3>
             </div>
-            <p className="text-sm text-white/70 leading-relaxed">{introText}</p>
+            <p className="text-[13px] text-white/70 leading-relaxed">{introText}</p>
           </div>
           <div className="lg:col-span-3 grid grid-cols-1 sm:grid-cols-2 gap-3">
             <Tile icon={QrCode} title="센터 QR" tag="방문 인증" tab="qr" cat="qr" tint="rgba(47,123,122,.45)"
-              desc="캠페인 센터에 붙이는 QR — 스캔하면 시각 · GPS/IP 위치 · 기기 정보를 기록하고 센터 허용 반경 안인지 자동으로 판정합니다."
+              desc="캠페인 센터에 붙이는 QR — 시각 · GPS/IP 위치 · 기기를 기록하고 허용 반경 안인지 자동 판정합니다."
               chips={["GPS 반경 판정", "reCAPTCHA", "반복 접근 차단"]} />
             <Tile icon={Contact} title="Agent QR" tag="영업직원 명함" tab="agentQr" cat="agentQr" tint="rgba(99,135,190,.45)"
-              desc="Agent 영업직원 명함에 넣는 QR — 위치를 묻지 않고 접속 기록만 남긴 뒤 Agent별 링크로 바로 이동합니다."
+              desc="영업직원 명함에 넣는 QR — 위치를 묻지 않고 접속만 기록한 뒤 Agent별 링크로 바로 이동합니다."
               chips={["위치 확인 없음", "즉시 이동", "스캔 통계"]} />
           </div>
         </div>
@@ -1968,7 +2028,7 @@ function OverviewTab({ centers, agents, agentsError, checkins, admins, setTab, i
                 can("checkins") && [`체크인 · ${rangeLabel}`, centerRows.length, "건", { tab: "checkins" }],
                 can("checkins") && ["검증필요 (확인 대기)", needsVerify, "건", { tab: "checkins", warn: needsVerify > 0 }],
               ].filter(Boolean)}
-              left={can("checkins") && <><SubHead title="최근 체크인" onAll={() => setTab("checkins")} /><Recent list={[...centerRows].sort(byTime).slice(0, 6)} /></>}
+              left={can("checkins") && <><SubHead title="최근 체크인" onAll={() => setTab("checkins")} /><Recent list={[...centerRows].sort(byTime).slice(0, 9)} /></>}
               right={can("checkins") && <><SubHead title={`센터별 체크인 · ${rangeLabel}`} /><Rank list={centerRows} color={BRAND.accent} unit="건" /></>} />
           )}
           {showAgent && (
@@ -1980,7 +2040,7 @@ function OverviewTab({ centers, agents, agentsError, checkins, admins, setTab, i
                 can("agentCheckins") && [`스캔 · ${rangeLabel}`, agentRows.length, "건", { tab: "agentCheckins" }],
                 can("agentCheckins") && ["스캔한 기기", devices(agentRows), "대"],
               ].filter(Boolean)}
-              left={can("agentCheckins") && <><SubHead title="최근 스캔" onAll={() => setTab("agentCheckins")} /><Recent list={[...agentRows].sort(byTime).slice(0, 6)} agent /></>}
+              left={can("agentCheckins") && <><SubHead title="최근 스캔" onAll={() => setTab("agentCheckins")} /><Recent list={[...agentRows].sort(byTime).slice(0, 9)} agent /></>}
               right={can("agentCheckins") && <><SubHead title={`Agent별 스캔 · ${rangeLabel}`} /><Rank list={agentRows} color={AGENT.main} unit="건" /></>} />
           )}
         </div>
@@ -1990,15 +2050,6 @@ function OverviewTab({ centers, agents, agentsError, checkins, admins, setTab, i
         </div>
       )}
 
-      {can("admins") && (
-        <button onClick={() => setTab("categoryAccess")}
-          className="mt-5 w-full bg-white rounded-xl border border-slate-200 shadow-sm px-5 py-3 flex items-center gap-3 text-left hover:bg-slate-50 transition-colors">
-          <div className="w-8 h-8 rounded-lg bg-slate-100 flex items-center justify-center shrink-0"><KeyRound size={15} className="text-slate-500" /></div>
-          <span className="text-sm font-medium text-slate-700">카테고리 접근 권한</span>
-          <span className="text-[10.5px] font-semibold px-2 py-0.5 rounded-full bg-slate-100 text-slate-500">관리자 전용</span>
-          <span className="text-xs text-slate-400 ml-auto">등록된 관리자 <b className="text-slate-600 tabular-nums">{admins.length}</b>명 →</span>
-        </button>
-      )}
     </div>
   );
 }
