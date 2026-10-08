@@ -2420,7 +2420,12 @@ function CategoryAccessTab({ admins, categoryAccess, reload }) {
   const missingCount = merged.filter((p) => p.missing).length;
   const altCount = merged.filter((p) => p.altEmail).length;
   const [onlyMissing, setOnlyMissing] = useState(false);
-  const [justAdded, setJustAdded] = useState("");
+  const [justAdded, setJustAdded] = useState(() => new Set());   // 새로 추가한 메일들 — 표 맨 위에 「새로 추가」(10-09 · mkqr-bulk)
+  const [selected, setSelected] = useState(() => new Set());     // 계정 선택(검색을 바꿔도 유지) — 일괄 권한 · 일괄 삭제
+  const [bulkCats, setBulkCats] = useState(() => new Set());     // 일괄 부여/해제할 카테고리
+  const [finder, setFinder] = useState(false);                   // 「명부에만 있는 직원」 창
+  const [finderQ, setFinderQ] = useState("");
+  const [finderSel, setFinderSel] = useState(() => new Set());
   const [addQ, setAddQ] = useState("");
   const [addOpen, setAddOpen] = useState(false);
 
@@ -2437,7 +2442,7 @@ function CategoryAccessTab({ admins, categoryAccess, reload }) {
     if (row.Access_admins === true) return 0;
     return MK_CATEGORIES.some((c) => mkCatValue(row, c) === true) ? 1 : 2;
   };
-  const sorted = filtered.map((p, i) => [p, i, p.email === justAdded ? -1 : accessRank(p)]).sort((a, b) => a[2] - b[2] || a[0].name.localeCompare(b[0].name));
+  const sorted = filtered.map((p, i) => [p, i, justAdded.has(p.email) ? -1 : accessRank(p)]).sort((a, b) => a[2] - b[2] || a[0].name.localeCompare(b[0].name));
   const grantedCount = sorted.filter((x) => x[2] < 2).length;
   const ordered = sorted.map((x) => x[0]);
 
@@ -2591,7 +2596,7 @@ function CategoryAccessTab({ admins, categoryAccess, reload }) {
       MK_CATEGORIES.filter(catReady).forEach((c) => { fields[c.field] = false; });
       await mkCreateItem(MK_LISTS.categoryAccess, fields);
       mkLog("권한", "사용자 추가", d && d.name && d.name !== email ? `${d.name} (${email})` : email, { info: { 부서: (d && d.dept) || "", "직원 명부": d ? "있음" : "없음", "처음 권한": "없음 — 표에서 체크 후 반영" } });
-      setAddQ(""); setAddOpen(false); setJustAdded(email); setQ(""); setOnlyMissing(false);
+      setAddQ(""); setAddOpen(false); setJustAdded(new Set([email])); setSelected(new Set([email])); setQ(""); setOnlyMissing(false);
       await reload();
     } catch (e) { alert(e.message); } finally { setSaving(false); }
   }
@@ -2610,14 +2615,95 @@ function CategoryAccessTab({ admins, categoryAccess, reload }) {
     if (overrides[p.email]) msg += "\n\n이 사람의 반영 전 변경도 함께 취소됩니다.";
     if (!confirm(msg)) return;
     setSaving(true);
-    try {
+    try { await deleteUserRows(p); await reload(); } catch (e) { alert(e.message); } finally { setSaving(false); }
+  }
+  // 한 사람의 행 삭제 + 이력(확인창 없음) — 단건 · 일괄 삭제 공용
+  async function deleteUserRows(p, bulkInfo) {
+    const rows = categoryAccess.filter((r) => String(r.Email || "").trim().toLowerCase() === p.email);
+    if (!rows.length) return;
+    const had = MK_CATEGORIES.filter((c) => mkCatValue(rows[0], c) === true).map((c) => c.label);
+    {
       for (const r of rows) await mkDeleteItem(MK_LISTS.categoryAccess, r.id);
       mkLog("권한", "사용자 삭제", p.name && p.name !== p.email ? `${p.name} (${p.email})` : p.email,
-        { info: { "삭제 전 권한": had.length ? had.join(", ") : "없음", 부서: p.dept || "", "직원 명부": p.missing ? "없음(퇴사 · 이동 의심)" : p.altEmail ? `메일 다름(명부: ${p.altEmail})` : dirOk ? "있음" : "확인 못 함", ...(rows.length > 1 ? { "중복 행": rows.length } : {}) } });
+        { info: { "삭제 전 권한": had.length ? had.join(", ") : "없음", 부서: p.dept || "", "직원 명부": p.missing ? "없음(퇴사 · 이동 의심)" : p.altEmail ? `메일 다름(명부: ${p.altEmail})` : dirOk ? "있음" : "확인 못 함", ...(rows.length > 1 ? { "중복 행": rows.length } : {}), ...(bulkInfo || {}) } });
       setOverrides((prev) => { const n = { ...prev }; delete n[p.email]; return n; });
-      if (justAdded === p.email) setJustAdded("");
-      await reload();
-    } catch (e) { alert(e.message); } finally { setSaving(false); }
+      setJustAdded((prev) => { const n = new Set(prev); n.delete(p.email); return n; });
+      setSelected((prev) => { const n = new Set(prev); n.delete(p.email); return n; });
+    }
+  }
+
+  // ---- 계정 선택 · 일괄 처리(10-09 · mkqr-bulk) ----
+  const selectedList = merged.filter((p) => selected.has(p.email));
+  const allVisibleSelected = filtered.length > 0 && filtered.every((p) => selected.has(p.email));
+  function toggleSel(email) { setSelected((prev) => { const n = new Set(prev); n.has(email) ? n.delete(email) : n.add(email); return n; }); }
+  function toggleSelVisible() {
+    setSelected((prev) => { const n = new Set(prev); filtered.forEach((p) => (allVisibleSelected ? n.delete(p.email) : n.add(p.email))); return n; });
+  }
+  // 선택한 사람들에게 고른 카테고리를 부여(true) / 해제(false) — 표에만 반영(노란색), 저장은 「반영」. 「카테고리 접근 권한」 부여는 모든 칸을 함께 부여
+  function bulkSet(val) {
+    const keys = MK_CATEGORIES.filter((c) => catReady(c) && bulkCats.has(c.key)).map((c) => c.key);
+    if (!keys.length || !selectedList.length) return;
+    const target = val && keys.includes("admins") ? MK_CATEGORIES.filter(catReady).map((c) => c.key) : keys;
+    setOverrides((prev) => {
+      const next = { ...prev };
+      selectedList.forEach((p) => {
+        const o = { ...(next[p.email] || {}) };
+        target.forEach((k) => {
+          const cat = MK_CATEGORIES.find((c) => c.key === k);
+          if (val === savedChecked(p, cat)) delete o[k]; else o[k] = val;
+        });
+        if (Object.keys(o).length) next[p.email] = o; else delete next[p.email];
+      });
+      return next;
+    });
+  }
+  async function bulkRemove() {
+    const list = selectedList;
+    if (!list.length) return;
+    const me = String(_mkLogUser.email || "").toLowerCase();
+    const adminsIn = list.filter((p) => (rowFor(p.email) || {}).Access_admins === true).length;
+    let msg = `선택한 ${list.length}명을 목록에서 삭제할까요? 삭제하면 MKQR 에 로그인할 수 없습니다.\n\n` +
+      list.slice(0, 12).map((p) => `· ${p.name} (${p.email})${p.missing ? " — 명부 없음" : ""}`).join("\n") + (list.length > 12 ? `\n… 외 ${list.length - 12}명` : "");
+    if (adminsIn && adminsIn >= admins.length) msg += "\n\n⚠ 관리자가 모두 포함되어 있습니다 — 삭제하면 관리자가 0명이 됩니다.";
+    if (list.some((p) => p.email === me)) msg += "\n\n⚠ 본인 계정이 포함되어 있습니다 — 삭제하면 바로 이 화면 권한을 잃습니다.";
+    if (!confirm(msg)) return;
+    setSaving(true);
+    let done = 0;
+    try {
+      for (const p of list) { await deleteUserRows(p, { 일괄: `${list.length}명 중 ${done + 1}` }); done++; }
+    } catch (e) { alert(`${done}명 삭제 후 오류: ${e.message}`); }
+    await reload();
+    setSaving(false);
+  }
+
+  // ---- 「명부에만 있는 직원」 — 직원 명부에는 있고 여기 등록되지 않은 사람을 찾아 일괄 추가 ----
+  const notRegistered = directory.filter((d) => !registered.has(d.email));
+  const altOf = new Map(merged.filter((p) => p.altEmail).map((p) => [p.altEmail, p.email]));   // 명부 메일 → 다른 표기로 등록된 메일
+  const fq = finderQ.trim().toLowerCase();
+  const finderList = notRegistered.filter((d) => !fq || d.name.toLowerCase().includes(fq) || d.email.includes(fq) || (d.dept || "").toLowerCase().includes(fq));
+  const finderAllOn = finderList.length > 0 && finderList.every((d) => finderSel.has(d.email));
+  async function bulkAdd() {
+    const list = notRegistered.filter((d) => finderSel.has(d.email));
+    if (!list.length) return;
+    setSaving(true);
+    const added = [];
+    try {
+      const fresh = await mkListAll(MK_LISTS.categoryAccess);   // 저장 직전 중복 재확인
+      const have = new Set(fresh.map((x) => String(x.fields.Email || "").trim().toLowerCase()));
+      for (const d of list) {
+        if (have.has(d.email)) continue;
+        const fields = { Title: d.name || d.email, Email: d.email };
+        MK_CATEGORIES.filter(catReady).forEach((c) => { fields[c.field] = false; });
+        await mkCreateItem(MK_LISTS.categoryAccess, fields);
+        mkLog("권한", "사용자 추가", d.name && d.name !== d.email ? `${d.name} (${d.email})` : d.email,
+          { info: { 부서: d.dept || "", "직원 명부": "있음", "처음 권한": "없음 — 표에서 체크 후 반영", 일괄: `명부에서 ${list.length}명 추가` } });
+        added.push(d.email);
+      }
+    } catch (e) { alert(`${added.length}명 추가 후 오류: ${e.message}`); }
+    setFinder(false); setFinderSel(new Set()); setFinderQ("");
+    if (added.length) { setJustAdded(new Set(added)); setSelected(new Set(added)); setQ(""); setOnlyMissing(false); }
+    await reload();
+    setSaving(false);
   }
 
   // 상단 "현재 관리자 목록" 패널에서 × 누르면 즉시 그 사람의 관리자 전용(Access_admins) 권한만 끈다.
@@ -2641,7 +2727,7 @@ function CategoryAccessTab({ admins, categoryAccess, reload }) {
       <div className="bg-slate-50 text-slate-500 text-xs px-4 py-3 rounded-lg mb-4 flex items-start gap-2 leading-relaxed">
         <KeyRound size={14} className="shrink-0 mt-0.5 text-slate-400" />
         <div>
-          표에는 <b className="text-slate-600">등록된 사용자만</b> 보입니다 — 「사용자 추가」로 등록하고 필요 없어진 계정(퇴사 · 이동)은 오른쪽 끝 휴지통으로 삭제합니다. 직원 명부에 없는 등록 계정은 <b className="text-red-600">명부 없음</b>으로 표시됩니다.
+          표에는 <b className="text-slate-600">등록된 사용자만</b> 보입니다 — 「사용자 추가」 · 「명부에만 있는 직원」으로 등록하고 필요 없어진 계정(퇴사 · 이동)은 휴지통으로 삭제합니다. 이름 왼쪽 체크박스로 여러 명을 골라 <b className="text-slate-600">권한을 한 번에 부여 · 해제하거나 한 번에 삭제</b>할 수 있습니다. 직원 명부에 없는 등록 계정은 <b className="text-red-600">명부 없음</b>으로 표시됩니다.
           {" "}체크박스는 화면에서만 바뀌고 <b className="text-slate-600">「반영」을 눌러야 저장</b>됩니다. 한 칸이라도 체크된 사람은 로그인할 수 있고, 모든 칸을 해제하고 반영하면 로그인이 막힙니다.
           {" "}<b className="text-slate-600">카테고리 접근 권한(관리자 전용)</b>을 체크하면 개요 · Marketing 전용 · HR · GA 전용 · 활동 이력 권한이 함께 부여됩니다. 반영한 내용은 「활동 이력」에 남습니다. 각 열 맨 위 체크박스로 전체 선택 · 해제할 수 있습니다.
         </div>
@@ -2673,6 +2759,12 @@ function CategoryAccessTab({ admins, categoryAccess, reload }) {
         <div className="flex items-center gap-2 mb-2.5">
           <Plus size={15} style={{ color: BRAND.accent }} />
           <span className="text-sm font-semibold text-slate-700">사용자 추가</span>
+          {dirOk && (
+            <button onClick={() => { setFinder(true); setFinderSel(new Set()); setFinderQ(""); }}
+              className="ml-auto text-xs font-medium px-3 h-8 rounded-lg border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 flex items-center gap-1.5">
+              <Search size={13} /><span>명부에만 있는 직원 <b style={{ color: BRAND.accent }}>{notRegistered.length}</b>명 찾아 추가</span>
+            </button>
+          )}
         </div>
         <div className="flex items-center gap-2">
           <div className="relative w-full max-w-md">
@@ -2721,6 +2813,30 @@ function CategoryAccessTab({ admins, categoryAccess, reload }) {
         </span>
       </div>
       {dirError && <p className="text-xs text-amber-600 mb-3">직원 명부를 불러오지 못해 이름 · 부서 · 「명부 없음」 표시와 사용자 검색이 제한됩니다(이메일 직접 입력은 가능).</p>}
+      {selectedList.length > 0 && (
+        <div className="mb-3 rounded-xl border px-4 py-2.5 shadow-sm" style={{ borderColor: "rgba(47,123,122,.35)", background: "#F2F8F8" }}>
+          <div className="flex items-center gap-x-3 gap-y-2 flex-wrap">
+            <span className="text-sm font-semibold" style={{ color: BRAND.accent }}>{selectedList.length}명 선택</span>
+            <button onClick={() => setSelected(new Set())} className="text-xs text-slate-500 hover:text-slate-700 underline underline-offset-2">선택 해제</button>
+            <span className="w-px h-5 bg-slate-300" />
+            <span className="text-xs text-slate-500">권한</span>
+            <div className="flex items-center gap-1 flex-wrap">
+              {MK_CATEGORIES.filter(catReady).map((c) => {
+                const on = bulkCats.has(c.key);
+                return (
+                  <button key={c.key} onClick={() => setBulkCats((prev) => { const n = new Set(prev); n.has(c.key) ? n.delete(c.key) : n.add(c.key); return n; })}
+                    className={`text-[11.5px] h-7 px-2.5 rounded-full border transition-colors ${on ? "text-white border-transparent" : "bg-white border-slate-300 text-slate-600 hover:border-slate-400"}`}
+                    style={on ? { background: BRAND.accent } : undefined}>{c.label}</button>
+                );
+              })}
+            </div>
+            <button onClick={() => bulkSet(true)} disabled={!bulkCats.size} className="h-7 px-3 rounded-lg text-xs font-medium text-white disabled:opacity-40" style={{ background: BRAND.accent }}>부여</button>
+            <button onClick={() => bulkSet(false)} disabled={!bulkCats.size} className="h-7 px-3 rounded-lg text-xs font-medium border border-slate-300 bg-white text-slate-600 hover:bg-slate-50 disabled:opacity-40">해제</button>
+            <button onClick={bulkRemove} disabled={saving} className="ml-auto h-7 px-3 rounded-lg text-xs font-medium border border-red-200 bg-red-50 text-red-600 hover:bg-red-100 flex items-center gap-1"><Trash2 size={12} /> 선택 {selectedList.length}명 삭제</button>
+          </div>
+          <p className="text-[11px] text-slate-500 mt-1.5">카테고리를 고르고 「부여」 · 「해제」를 누르면 선택한 사람들의 표에 노란색으로 표시되고, 「반영」을 눌러야 저장됩니다. 검색어를 바꿔 가며 한 명씩 체크해도 선택은 유지됩니다.</p>
+        </div>
+      )}
       {missingCats.length > 0 && (
         <div className="mb-3 text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 leading-relaxed">
           SharePoint 목록 mkqr_CategoryAccess 에 아직 없는 열: {missingCats.map((c) => `${c.field}(${c.label})`).join(", ")} — 열이 생기기 전까지 이 칸은 잠겨 있고,
@@ -2750,7 +2866,12 @@ function CategoryAccessTab({ admins, categoryAccess, reload }) {
                 <th className="h-7 sticky top-0 z-20 bg-slate-50 border-b border-slate-200"></th>
               </tr>
               <tr>
-                <th className="text-left font-medium px-4 py-2.5 sticky top-7 left-0 z-30 bg-slate-50 border-b border-slate-200">사용자</th>
+                <th className="text-left font-medium px-4 py-2.5 sticky top-7 left-0 z-30 bg-slate-50 border-b border-slate-200">
+                  <label className="inline-flex items-center gap-2.5 cursor-pointer select-none">
+                    <input type="checkbox" checked={allVisibleSelected} onChange={toggleSelVisible} className="w-4 h-4 cursor-pointer" title="보이는 사용자 전체 선택 / 해제" />
+                    사용자
+                  </label>
+                </th>
                 {MK_CATEGORIES.map((c) => (
                   <th key={c.key} className="text-center font-medium px-2 py-2.5 sticky top-7 z-20 bg-slate-50 border-b border-slate-200 align-top">
                     <div className="flex flex-col items-center gap-1.5">
@@ -2771,9 +2892,10 @@ function CategoryAccessTab({ admins, categoryAccess, reload }) {
                 const rowDirty = !!overrides[p.email];
                 const bg = rowDirty ? "bg-amber-50" : "bg-white";
                 return (
-                  <tr key={p.email} className={`border-t border-slate-100 hover:bg-slate-50 ${rowDirty ? "bg-amber-50/60" : ""}`}>
-                    <td className={`px-4 py-1.5 sticky left-0 z-10 ${bg}`}>
+                  <tr key={p.email} className={`border-t border-slate-100 hover:bg-slate-50 ${rowDirty ? "bg-amber-50/60" : ""} ${selected.has(p.email) ? "outline outline-1 -outline-offset-1 outline-[#2F7B7A]/30" : ""}`}>
+                    <td className={`px-4 py-1.5 sticky left-0 z-10 ${selected.has(p.email) && !rowDirty ? "bg-[#F2F8F8]" : bg}`}>
                       <div className="flex items-center gap-2 min-w-0">
+                        <input type="checkbox" checked={selected.has(p.email)} onChange={() => toggleSel(p.email)} className="w-4 h-4 cursor-pointer shrink-0 mr-0.5" title="선택(일괄 권한 · 일괄 삭제)" />
                         <div className="min-w-0 truncate text-[13px] leading-6" title={`${p.name} (${p.email}${p.dept ? ` · ${p.dept}` : ""})`}>
                           <span className={`font-medium ${hasAnyAccess ? "text-slate-800" : "text-slate-500"}`}>{p.name}</span>{" "}
                           <span className="text-xs text-slate-400">{p.email}{p.dept ? ` · ${p.dept}` : ""}</span>
@@ -2783,7 +2905,7 @@ function CategoryAccessTab({ admins, categoryAccess, reload }) {
                           : hasAnyAccess && <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-500 leading-none">로그인 가능</span>}
                         {p.missing && <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded-full bg-red-50 text-red-600 leading-none font-medium" title="직원 명부(employee_search.xlsx)에 없는 계정 — 퇴사 · 이동 여부 확인 후 삭제">명부 없음</span>}
                         {p.altEmail && <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded-full bg-amber-50 text-amber-700 leading-none font-medium" title={`직원 명부에는 ${p.altEmail} 로 있음 — 같은 사람이면 이 메일로 다시 추가하고 지금 행은 삭제`}>메일 다름 · {p.altEmail}</span>}
-                        {p.email === justAdded && <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 leading-none font-medium">새로 추가</span>}
+                        {justAdded.has(p.email) && <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 leading-none font-medium">새로 추가</span>}
                         {rowDirty && <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 leading-none">변경</span>}
                       </div>
                     </td>
@@ -2810,6 +2932,41 @@ function CategoryAccessTab({ admins, categoryAccess, reload }) {
       )}
 
       {saving && <BlockingOverlay message="저장하고 있습니다..." />}
+
+      {finder && (
+        <Modal title="명부에만 있는 직원 — 찾아서 추가" onClose={() => setFinder(false)} wide>
+          <p className="text-xs text-slate-500 -mt-1 mb-3">직원 명부(employee_search.xlsx)에는 있지만 아직 등록되지 않은 {notRegistered.length}명입니다. 체크해서 한 번에 추가하면 권한 없이 등록되고, 표 맨 위에 선택된 상태로 나타나 바로 「권한 부여」를 할 수 있습니다.</p>
+          <div className="flex items-center gap-2 mb-2">
+            <div className="relative flex-1">
+              <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+              <input value={finderQ} onChange={(e) => setFinderQ(e.target.value)} placeholder="이름 · 이메일 · 부서 검색" autoFocus
+                className="w-full h-9 pl-8 pr-3 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#2F7B7A]/40" />
+            </div>
+            <span className="text-xs text-slate-400 shrink-0">{finderList.length}명 · 선택 {finderSel.size}명</span>
+          </div>
+          <div className="border border-slate-200 rounded-lg overflow-hidden">
+            <label className="flex items-center gap-2.5 px-3 py-2 bg-slate-50 border-b border-slate-200 text-xs text-slate-500 cursor-pointer select-none">
+              <input type="checkbox" checked={finderAllOn} onChange={() => setFinderSel((prev) => { const n = new Set(prev); finderList.forEach((d) => (finderAllOn ? n.delete(d.email) : n.add(d.email))); return n; })} className="w-4 h-4" />
+              보이는 {finderList.length}명 전체 선택
+            </label>
+            <div className="max-h-[52vh] overflow-y-auto mk-scroll">
+              {finderList.length ? finderList.map((d) => (
+                <label key={d.email} className={`flex items-center gap-2.5 px-3 py-1.5 border-b border-slate-50 last:border-0 cursor-pointer hover:bg-slate-50 ${finderSel.has(d.email) ? "bg-[#F2F8F8]" : ""}`}>
+                  <input type="checkbox" checked={finderSel.has(d.email)} onChange={() => setFinderSel((prev) => { const n = new Set(prev); n.has(d.email) ? n.delete(d.email) : n.add(d.email); return n; })} className="w-4 h-4 shrink-0" />
+                  <span className="text-[13px] font-medium text-slate-800 shrink-0">{d.name}</span>
+                  <span className="text-xs text-slate-400 truncate">{d.email}</span>
+                  {altOf.get(d.email) && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-amber-50 text-amber-700 leading-none font-medium shrink-0" title="같은 사람이 다른 메일 표기로 등록돼 있음 — 이 메일로 추가한 뒤 옛 행을 삭제하세요">{altOf.get(d.email)} 로 등록됨</span>}
+                  {d.dept && <span className="ml-auto text-[11px] text-slate-500 shrink-0 bg-slate-100 rounded-full px-2 leading-5">{d.dept}</span>}
+                </label>
+              )) : <div className="text-center text-slate-400 text-sm py-10">조회 결과가 없습니다.</div>}
+            </div>
+          </div>
+          <div className="flex justify-end gap-2 mt-4">
+            <button onClick={() => setFinder(false)} className="px-4 py-2 text-sm rounded-lg border border-slate-300">닫기</button>
+            <button onClick={bulkAdd} disabled={!finderSel.size || saving} className="px-4 py-2 text-sm rounded-lg text-white disabled:opacity-40" style={{ background: BRAND.accent }}>선택한 {finderSel.size}명 추가</button>
+          </div>
+        </Modal>
+      )}
 
       {savedPopup != null && (
         <Modal title="반영 완료" onClose={() => setSavedPopup(null)}>
