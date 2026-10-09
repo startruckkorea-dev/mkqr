@@ -45,9 +45,21 @@
   .login-page-footer{position:fixed;bottom:0;left:0;right:0;padding:10px 24px;display:flex;justify-content:space-between;align-items:center;font-size:11px;color:rgba(255,255,255,.55);background:rgba(0,0,0,.18)}
   /* ICS 와 같은 청록 체크박스 · 표 안 스크롤 막대(10-09 · mkqr-ui2) */
   input[type=checkbox]{accent-color:#2F7B7A}
-  .mk-scroll::-webkit-scrollbar{width:8px;height:8px}
-  .mk-scroll::-webkit-scrollbar-thumb{background:#cbd5e1;border-radius:8px}
-  .mk-scroll::-webkit-scrollbar-track{background:transparent}
+  /* 스크롤 막대 — ICS 와 같게(10-09 · mkqr-side). 사이드바에 브라우저 기본(굵은 회색 · 화살표) 막대가 남색 메뉴 옆에서 튀어 보였다.
+     사이드바는 6px 반투명 흰색(마우스를 올리면 진해짐), 본문 · 표 · 창은 얇은 회색. 트랙은 투명. Firefox 는 thin. */
+  nav.mk-side-nav { scrollbar-width: thin; scrollbar-color: rgba(255,255,255,.18) transparent; }
+  nav.mk-side-nav::-webkit-scrollbar { width: 6px; }
+  nav.mk-side-nav::-webkit-scrollbar-track { background: transparent; }
+  nav.mk-side-nav::-webkit-scrollbar-thumb { background: rgba(255,255,255,.18); border-radius: 6px; }
+  nav.mk-side-nav:hover::-webkit-scrollbar-thumb { background: rgba(255,255,255,.34); }
+  nav.mk-side-nav::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,.5); }
+  .mk-scroll, .mk-main-scroll, main .overflow-x-auto, main .overflow-auto, main .overflow-y-auto, .fixed .overflow-y-auto, .fixed .overflow-auto { scrollbar-width: thin; scrollbar-color: #CBD5E1 transparent; }
+  .mk-scroll::-webkit-scrollbar, .mk-main-scroll::-webkit-scrollbar { width: 8px; height: 8px; }
+  .mk-scroll::-webkit-scrollbar-track, .mk-main-scroll::-webkit-scrollbar-track { background: transparent; }
+  .mk-scroll::-webkit-scrollbar-thumb, .mk-main-scroll::-webkit-scrollbar-thumb { background: #CBD5E1; border-radius: 8px; border: 2px solid transparent; background-clip: padding-box; }
+  .mk-scroll::-webkit-scrollbar-thumb:hover, .mk-main-scroll::-webkit-scrollbar-thumb:hover { background: #94A3B8; background-clip: padding-box; }
+  /* 사이드바 접기(10-09) — 폭이 부드럽게 줄고 늘어난다. 아이콘 자리는 그대로라 움직이지 않는다 */
+  aside.mk-side { transition: width .28s cubic-bezier(.4,0,.2,1); }
 </style>
 </head>
 <body>
@@ -80,6 +92,7 @@ import {
   Download, RefreshCw, MapPin, Search, CheckCircle2, AlertTriangle,
   Upload, ExternalLink, Phone, Navigation, LayoutDashboard, ShieldCheck,
   ArrowUpRight, ImagePlus, KeyRound, Mail, XCircle, Settings, ChevronDown, ChevronUp, Store, Contact, History,
+  ArrowLeftToLine, ArrowRightFromLine,
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import QRCode from "qrcode";
@@ -3093,6 +3106,18 @@ function App({ userEmail, userName }) {
   const nav = [...allNav, ...marketingNav, ...hrgaNav, ...adminNav]; // 항상 전체 표시 — 권한 없는 항목은 숨기지 않고 흐릿하게 비활성화만 함
   const accessibleNav = nav.filter((n) => canAccess(n.cat));
 
+  // 사이드바 접기(10-09 · mkqr-side) — 상단 ←| 단추로 아이콘만 남은 좁은 막대(72px)로 접고 |→ 로 다시 편다.
+  // 선택은 이 브라우저에 기억한다. 기억된 값이 없으면 좁은 창(1100px 미만)에서만 접힌 채로 시작.
+  const [sideCollapsed, setSideCollapsed] = useState(() => {
+    try { const v = localStorage.getItem("mkqr.sideCollapsed"); if (v === "1" || v === "0") return v === "1"; } catch (e) {}
+    return typeof window !== "undefined" && window.innerWidth < 1100;
+  });
+  const toggleSide = () => setSideCollapsed((v) => { const nv = !v; try { localStorage.setItem("mkqr.sideCollapsed", nv ? "1" : "0"); } catch (e) {} return nv; });
+  // 접힌 상태에서 아이콘에 마우스를 올리면 오른쪽에 메뉴 이름 말풍선(메뉴 영역 스크롤에 잘리지 않게 화면 고정 위치)
+  const [sideTip, setSideTip] = useState(null);
+  const showSideTip = (e, label) => { if (!sideCollapsed) return; const r = e.currentTarget.getBoundingClientRect(); setSideTip({ label, y: r.top + r.height / 2 }); };
+  useEffect(() => { setSideTip(null); }, [sideCollapsed]);
+
   useEffect(() => {
     if (!loading && accessibleNav.length && !accessibleNav.some((n) => n.id === tab)) setTab(accessibleNav[0].id);
   }, [loading, myAccessRow]);
@@ -3106,53 +3131,88 @@ function App({ userEmail, userName }) {
   return (
     <div className="h-screen flex overflow-hidden" style={{ background: "#F5F6F8" }}>
       {/* 화면 틀은 ICS 와 같게(10-08 · mkqr-ics-hdr) — 사이드바 · 상단 흰 바 · 본문 스크롤 */}
-      <aside className="w-64 shrink-0 flex flex-col h-full" style={{ background: BRAND.navy }}>
-        <div className="px-4 pt-5 pb-4">
-          <div className="bg-white rounded-lg px-3 py-2 flex items-center justify-center">
-            <img src={LOGO_SRC} alt="Star Truck Korea" style={{ width: "100%", height: "auto", display: "block" }} />
+      <aside className="mk-side shrink-0 flex flex-col h-full overflow-hidden" style={{ background: BRAND.navy, width: sideCollapsed ? 72 : 256 }}>
+        {sideCollapsed ? (
+          <div className="pt-5 pb-4 flex justify-center">
+            <div className="w-10 h-10 bg-white rounded-lg flex items-center justify-center text-[11px] font-extrabold tracking-tight select-none" style={{ color: BRAND.navy }} title="Star Truck Korea · MKQR">STK</div>
           </div>
-          <p className="text-[13px] font-medium text-slate-300 tracking-tight mt-3 text-center">MKQR · 방문인증 QR</p>
-        </div>
-        <nav className="flex-1 px-3 py-4 overflow-y-auto">
-          {[["MKQR OVERVIEW", allNav], ["Marketing 전용", marketingNav], ["HR · GA 전용", hrgaNav], ["관리자 전용", adminNav]].map(([label, items]) => (
+        ) : (
+          <div className="px-4 pt-5 pb-4" style={{ width: 256 }}>
+            <div className="bg-white rounded-lg px-3 py-2 flex items-center justify-center">
+              <img src={LOGO_SRC} alt="Star Truck Korea" style={{ width: "100%", height: "auto", display: "block" }} />
+            </div>
+            <p className="text-[13px] font-medium text-slate-300 tracking-tight mt-3 text-center whitespace-nowrap">MKQR · 방문인증 QR</p>
+          </div>
+        )}
+        <nav className="mk-side-nav flex-1 px-3 py-4 overflow-y-auto overflow-x-hidden" onScroll={() => setSideTip(null)}>
+          {[["MKQR OVERVIEW", allNav], ["Marketing 전용", marketingNav], ["HR · GA 전용", hrgaNav], ["관리자 전용", adminNav]].map(([label, items], gi) => (
             <div key={label} className="mb-4">
-              <p className="text-[11px] tracking-wider text-slate-500 font-semibold px-3 mb-1.5">{label}</p>
+              {sideCollapsed
+                ? (gi > 0 && <div className="mx-2 mb-3 border-t border-white/10" />)
+                : <p className="text-[11px] tracking-wider text-slate-500 font-semibold px-3 mb-1.5 whitespace-nowrap">{label}</p>}
               {items.map((n) => {
                 const allowed = canAccess(n.cat);
                 const active = allowed && tab === n.id;
                 return (
-                  <button key={n.id} onClick={() => allowed ? setTab(n.id) : setPermDeniedPopup(true)}
-                    className="w-full flex items-center text-left gap-2.5 px-3 py-2.5 rounded-lg text-sm mb-0.5 transition-colors"
+                  <button key={n.id} onClick={() => { setSideTip(null); allowed ? setTab(n.id) : setPermDeniedPopup(true); }}
+                    aria-label={n.label}
+                    className="relative w-full flex items-center text-left gap-2.5 px-3 py-2.5 rounded-lg text-sm mb-0.5 transition-colors whitespace-nowrap min-h-[40px]"
                     style={{
                       backgroundColor: active ? BRAND.navySoft : "transparent",
                       color: active ? "#fff" : allowed ? "#B7C0D1" : "#5B6472",
                       borderLeft: active ? `3px solid ${BRAND.accent}` : "3px solid transparent",
                     }}
-                    onMouseEnter={(e) => { if (!active) e.currentTarget.style.backgroundColor = BRAND.navyHover; }}
-                    onMouseLeave={(e) => { if (!active) e.currentTarget.style.backgroundColor = "transparent"; }}>
+                    onMouseEnter={(e) => { if (!active) e.currentTarget.style.backgroundColor = BRAND.navyHover; showSideTip(e, n.label); }}
+                    onMouseLeave={(e) => { if (!active) e.currentTarget.style.backgroundColor = "transparent"; setSideTip(null); }}>
                     <n.icon size={17} className="shrink-0" />
-                    <span className="leading-snug flex-1">{n.label}</span>
-                    {!!n.badge && allowed && (
+                    {!sideCollapsed && <span className="leading-snug flex-1">{n.label}</span>}
+                    {!!n.badge && allowed && (sideCollapsed ? (
+                      <span className="absolute top-1 left-[26px] text-[9px] leading-none font-bold rounded-full px-1 min-w-[16px] h-[16px] flex items-center justify-center"
+                        style={{ backgroundColor: "#DC2626", color: "#fff", boxShadow: `0 0 0 2px ${BRAND.navy}` }}>
+                        {n.badge > 99 ? "99+" : n.badge}
+                      </span>
+                    ) : (
                       <span className="shrink-0 text-[11px] font-semibold rounded-full px-1.5 min-w-[18px] text-center" style={{ backgroundColor: "#DC2626", color: "#fff" }}>
                         {n.badge > 99 ? "99+" : n.badge}
                       </span>
-                    )}
+                    ))}
                   </button>
                 );
               })}
             </div>
           ))}
         </nav>
-        <div className="px-4 py-3 border-t border-white/10">
-          <p className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold mb-1">문의</p>
-          <a href="mailto:stk_it@hyosung.com" className="flex items-center gap-1.5 text-xs text-slate-400 hover:text-white transition-colors">
-            <Mail size={12} className="shrink-0" /><span className="truncate">stk_it@hyosung.com</span>
-          </a>
-        </div>
+        {sideCollapsed ? (
+          <div className="py-3 border-t border-white/10 flex justify-center">
+            <a href="mailto:stk_it@hyosung.com" title="문의 · stk_it@hyosung.com" aria-label="문의 stk_it@hyosung.com"
+              className="w-9 h-9 rounded-lg flex items-center justify-center text-slate-400 hover:text-white hover:bg-white/10 transition-colors">
+              <Mail size={15} />
+            </a>
+          </div>
+        ) : (
+          <div className="px-4 py-3 border-t border-white/10 whitespace-nowrap" style={{ width: 256 }}>
+            <p className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold mb-1">문의</p>
+            <a href="mailto:stk_it@hyosung.com" className="flex items-center gap-1.5 text-xs text-slate-400 hover:text-white transition-colors">
+              <Mail size={12} className="shrink-0" /><span className="truncate">stk_it@hyosung.com</span>
+            </a>
+          </div>
+        )}
       </aside>
+      {sideCollapsed && sideTip && (
+        <div className="fixed z-[70] pointer-events-none px-2.5 py-1.5 rounded-md text-xs font-medium text-white shadow-lg whitespace-nowrap"
+          style={{ left: 80, top: sideTip.y, transform: "translateY(-50%)", background: "#1E293B" }}>
+          <span className="absolute w-2 h-2 rotate-45" style={{ left: -4, top: "calc(50% - 4px)", background: "#1E293B" }} />
+          <span className="relative">{sideTip.label}</span>
+        </div>
+      )}
       <div className="flex-1 flex flex-col min-w-0">
         <div className="h-14 shrink-0 bg-white border-b border-slate-100 flex items-center justify-between px-6">
           <div className="flex items-center gap-2 text-sm text-slate-400 min-w-0">
+            <button onClick={toggleSide} title={sideCollapsed ? "메뉴 펼치기" : "메뉴 접기"} aria-label={sideCollapsed ? "메뉴 펼치기" : "메뉴 접기"} aria-expanded={!sideCollapsed}
+              className="shrink-0 -ml-2 w-8 h-8 rounded-lg flex items-center justify-center text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors">
+              {sideCollapsed ? <ArrowRightFromLine size={17} /> : <ArrowLeftToLine size={17} />}
+            </button>
+            <span className="shrink-0 w-px h-4 bg-slate-200 mr-1" />
             <span className="shrink-0">Star Truck Korea</span>
             <span>/</span>
             <span className="text-slate-700 font-medium truncate">{nav.find((n) => n.id === tab)?.label}</span>
@@ -3172,7 +3232,7 @@ function App({ userEmail, userName }) {
             </button>
           </div>
         </div>
-      <main className="flex-1 p-6 overflow-y-auto">
+      <main className="mk-main-scroll flex-1 p-6 overflow-y-auto">
         <div className="max-w-[1600px] mx-auto">
         {(() => {
           const meta = {
