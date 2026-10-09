@@ -101,7 +101,7 @@ import {
   Download, RefreshCw, MapPin, Search, CheckCircle2, AlertTriangle,
   Upload, ExternalLink, Phone, Navigation, LayoutDashboard, ShieldCheck,
   ArrowUpRight, ImagePlus, KeyRound, Mail, XCircle, Settings, ChevronDown, ChevronUp, Store, Contact, History,
-  ArrowLeftToLine, ArrowRightFromLine,
+  ArrowLeftToLine, ArrowRightFromLine, Menu,
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import QRCode from "qrcode";
@@ -1033,11 +1033,11 @@ function CentersTab({ centers, reload, onCreated }) {
       )}
 
       <div className="flex items-center justify-between mb-4 gap-2 flex-wrap">
-        <div className="relative">
+        <div className="relative w-full sm:w-auto">
           <Search size={15} className="absolute left-2.5 top-2.5 text-slate-400" />
-          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="센터명/지역/주소 검색" className="pl-8 pr-3 py-2 border border-slate-300 rounded-lg text-sm w-64" />
+          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="센터명/지역/주소 검색" className="pl-8 pr-3 py-2 border border-slate-300 rounded-lg text-sm w-full sm:w-64" />
         </div>
-        <div className="flex gap-2">
+        <div className="grid grid-cols-2 sm:flex gap-2 w-full sm:w-auto [&>button]:justify-center [&>button]:whitespace-nowrap">
           <button onClick={downloadTemplate} className="flex items-center gap-1.5 px-3 py-2 border border-slate-300 rounded-lg text-sm hover:bg-slate-50">
             <Download size={15} /> 템플릿 다운로드
           </button>
@@ -1366,9 +1366,9 @@ function QrTab({ items, kind = "center", highlightId }) {
         </div>
       )}
       <div className="mb-4 flex items-center justify-between flex-wrap gap-2">
-        <div className="relative">
+        <div className="relative w-full sm:w-auto">
           <Search size={15} className="absolute left-2.5 top-2.5 text-slate-400" />
-          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={isAgent ? "Agent 이름/법인명/주소로 QR 검색" : "센터명/지역/주소로 QR 검색"} className="pl-8 pr-3 py-2 border border-slate-300 rounded-lg text-sm w-64" />
+          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={isAgent ? "Agent 이름/법인명/주소로 QR 검색" : "센터명/지역/주소로 QR 검색"} className="pl-8 pr-3 py-2 border border-slate-300 rounded-lg text-sm w-full sm:w-64" />
         </div>
         <div className="flex items-center gap-3">
           <button onClick={downloadAll} disabled={downloadingAll || !filtered.length}
@@ -1522,8 +1522,8 @@ function AgentsTab({ agents, agentsError, reload, onCreated }) {
       {busy && <BlockingOverlay message="처리하고 있습니다..." />}
       <div className="grid grid-cols-3 gap-3 mb-5">
         {stats.map((s) => (
-          <div key={s.label} className="bg-white rounded-xl border p-4 flex items-center gap-3">
-            <div className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 ${s.bgCls || ""}`} style={s.bg ? { background: s.bg } : undefined}>
+          <div key={s.label} className="bg-white rounded-xl border p-3 sm:p-4 flex items-center gap-3">
+            <div className={`w-9 h-9 rounded-lg hidden sm:flex items-center justify-center shrink-0 ${s.bgCls || ""}`} style={s.bg ? { background: s.bg } : undefined}>
               <s.icon size={17} className={s.iconCls} style={s.color ? { color: s.color } : undefined} />
             </div>
             <div>
@@ -1535,11 +1535,11 @@ function AgentsTab({ agents, agentsError, reload, onCreated }) {
       </div>
 
       <div className="flex items-center justify-between mb-4 gap-2 flex-wrap">
-        <div className="relative">
+        <div className="relative w-full sm:w-auto">
           <Search size={15} className="absolute left-2.5 top-2.5 text-slate-400" />
-          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Agent 이름/법인명/주소 검색" className="pl-8 pr-3 py-2 border border-slate-300 rounded-lg text-sm w-64" />
+          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Agent 이름/법인명/주소 검색" className="pl-8 pr-3 py-2 border border-slate-300 rounded-lg text-sm w-full sm:w-64" />
         </div>
-        <div className="flex gap-2">
+        <div className="grid grid-cols-2 sm:flex gap-2 w-full sm:w-auto [&>button]:justify-center [&>button]:whitespace-nowrap">
           <button onClick={exportAgents} disabled={!filtered.length} className="flex items-center gap-1.5 px-3 py-2 border border-slate-300 rounded-lg text-sm hover:bg-slate-50 disabled:opacity-50">
             <Download size={15} /> 엑셀 내보내기
           </button>
@@ -1870,9 +1870,9 @@ function CheckInsTab({ kind = "center", checkins, reload, checkinRange, onRangeC
               <option value="전체">전체 판정</option><option>정상</option><option>검증필요</option><option>GPS거부</option><option>관리자승인</option><option>차단해제</option>
             </select>
           )}
-          <div className="relative">
+          <div className="relative w-full sm:w-auto">
             <Search size={15} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
-            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={isAgent ? "Agent 이름 검색" : "센터 검색"} className={`${ctrl} pl-8 pr-3 w-60`} />
+            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={isAgent ? "Agent 이름 검색" : "센터 검색"} className={`${ctrl} pl-8 pr-3 w-full sm:w-60`} />
           </div>
           <div className="ml-auto flex items-center gap-2">
             <button onClick={reload} className={btn}><RefreshCw size={14} /> 새로고침</button>
@@ -2091,20 +2091,20 @@ function ActivityLogTab() {
               );
             })}
           </div>
-          <div className="flex items-center gap-1">
-            <button onClick={() => shift(-1)} disabled={loading} className={`${btn} px-2`} title="앞 기간">‹</button>
-            <input type="date" value={from} max={to} onChange={(e) => setFrom(e.target.value)} className={`${ctrl} px-2`} />
+          <div className="flex items-center gap-1 w-full sm:w-auto">
+            <button onClick={() => shift(-1)} disabled={loading} className={`${btn} px-2 hidden sm:inline-flex`} title="앞 기간">‹</button>
+            <input type="date" value={from} max={to} onChange={(e) => setFrom(e.target.value)} className={`${ctrl} px-2 min-w-0 flex-1 sm:flex-none`} />
             <span className="text-slate-400 text-xs">~</span>
-            <input type="date" value={to} min={from} max={today} onChange={(e) => setTo(e.target.value)} className={`${ctrl} px-2`} />
-            <button onClick={() => shift(1)} disabled={loading || to >= today} className={`${btn} px-2`} title="다음 기간">›</button>
+            <input type="date" value={to} min={from} max={today} onChange={(e) => setTo(e.target.value)} className={`${ctrl} px-2 min-w-0 flex-1 sm:flex-none`} />
+            <button onClick={() => shift(1)} disabled={loading || to >= today} className={`${btn} px-2 hidden sm:inline-flex`} title="다음 기간">›</button>
             <button onClick={() => load()} disabled={loading} className="h-9 text-sm px-4 rounded-lg text-white disabled:opacity-50" style={{ background: BRAND.accent }}>조회</button>
           </div>
           <select value={cat} onChange={(e) => setCat(e.target.value)} className={`${ctrl} px-3 w-36`}>
             <option value="전체">전체 구분</option>{MK_LOG_CATS.map((c) => <option key={c}>{c}</option>)}
           </select>
-          <div className="relative">
+          <div className="relative w-full sm:w-auto">
             <Search size={15} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
-            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="사용자 · 대상 · 내용 검색" className={`${ctrl} pl-8 pr-3 w-56`} />
+            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="사용자 · 대상 · 내용 검색" className={`${ctrl} pl-8 pr-3 w-full sm:w-56`} />
           </div>
           <div className="ml-auto flex items-center gap-2">
             <button onClick={exportExcel} disabled={!view.length} className={btn}><Download size={14} /> Excel 내보내기</button>
@@ -2756,10 +2756,10 @@ function CategoryAccessTab({ admins, categoryAccess, reload }) {
       </div>
 
       <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-4 mb-4">
-        <div className="flex items-center gap-2 mb-3">
+        <div className="flex items-center gap-x-2 gap-y-1 mb-3 flex-wrap">
           <ShieldCheck size={15} style={{ color: BRAND.accent }} />
-          <span className="text-sm font-semibold text-slate-700">관리자 {admins.length}명</span>
-          <span className="text-xs text-slate-400">— 「카테고리 접근 권한」까지 가진 전체 권한자 · × 를 누르면 관리자 권한만 바로 해제</span>
+          <span className="text-sm font-semibold text-slate-700 whitespace-nowrap">관리자 {admins.length}명</span>
+          <span className="text-xs text-slate-400 basis-full sm:basis-auto">— 「카테고리 접근 권한」까지 가진 전체 권한자 · × 를 누르면 관리자 권한만 바로 해제</span>
         </div>
         {admins.length ? (
           <div className="flex flex-wrap gap-1.5 max-h-32 overflow-y-auto">
@@ -2778,9 +2778,9 @@ function CategoryAccessTab({ admins, categoryAccess, reload }) {
       </div>
 
       <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-4 mb-4">
-        <div className="flex items-center gap-2 mb-2.5">
+        <div className="flex items-center gap-2 mb-2.5 flex-wrap">
           <Plus size={15} style={{ color: BRAND.accent }} />
-          <span className="text-sm font-semibold text-slate-700">사용자 추가</span>
+          <span className="text-sm font-semibold text-slate-700 whitespace-nowrap">사용자 추가</span>
           {dirOk && (
             <button onClick={() => { setFinder(true); setFinderSel(new Set()); setFinderQ(""); }}
               className="ml-auto text-xs font-medium px-3 h-8 rounded-lg border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 flex items-center gap-1.5">
@@ -2813,7 +2813,7 @@ function CategoryAccessTab({ admins, categoryAccess, reload }) {
       </div>
 
       <div className="flex items-center gap-2 mb-3 flex-wrap">
-        <div className="relative">
+        <div className="relative w-full sm:w-auto">
           <Search size={15} className="absolute left-2.5 top-2.5 text-slate-400" />
           <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="이름 · 이메일 · 부서 검색" className="pl-8 pr-3 py-2 border border-slate-200 rounded-lg text-sm w-72 bg-white focus:outline-none focus:ring-2 focus:ring-[#2F7B7A]/30" />
         </div>
@@ -3122,9 +3122,25 @@ function App({ userEmail, userName }) {
     return typeof window !== "undefined" && window.innerWidth < 1100;
   });
   const toggleSide = () => setSideCollapsed((v) => { const nv = !v; try { localStorage.setItem("mkqr.sideCollapsed", nv ? "1" : "0"); } catch (e) {} return nv; });
+  // 휴대폰 폭(768px 미만 · 10-09 mkqr-mobile) — 사이드바는 화면 밖에 숨긴 서랍이 되고 상단 ☰ 로 연다. 메뉴를 고르거나 바깥을 누르면 닫힌다.
+  const MK_MOBILE_Q = "(max-width: 767px)";
+  const [isMobile, setIsMobile] = useState(() => { try { return window.matchMedia(MK_MOBILE_Q).matches; } catch (e) { return false; } });
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  useEffect(() => {
+    let mq; try { mq = window.matchMedia(MK_MOBILE_Q); } catch (e) { return; }
+    const on = () => { setIsMobile(mq.matches); if (!mq.matches) setDrawerOpen(false); };
+    mq.addEventListener ? mq.addEventListener("change", on) : mq.addListener(on);
+    return () => { mq.removeEventListener ? mq.removeEventListener("change", on) : mq.removeListener(on); };
+  }, []);
+  useEffect(() => {
+    if (!drawerOpen) return;
+    const k = (e) => { if (e.key === "Escape") setDrawerOpen(false); };
+    window.addEventListener("keydown", k); return () => window.removeEventListener("keydown", k);
+  }, [drawerOpen]);
+  const railCollapsed = sideCollapsed && !isMobile;   // 서랍일 때는 늘 펼친 모양
   // 접힌 상태에서 아이콘에 마우스를 올리면 오른쪽에 메뉴 이름 말풍선(메뉴 영역 스크롤에 잘리지 않게 화면 고정 위치)
   const [sideTip, setSideTip] = useState(null);
-  const showSideTip = (e, label) => { if (!sideCollapsed) return; const r = e.currentTarget.getBoundingClientRect(); setSideTip({ label, y: r.top + r.height / 2 }); };
+  const showSideTip = (e, label) => { if (!railCollapsed) return; const r = e.currentTarget.getBoundingClientRect(); setSideTip({ label, y: r.top + r.height / 2 }); };
   useEffect(() => { setSideTip(null); }, [sideCollapsed]);
 
   useEffect(() => {
@@ -3140,13 +3156,23 @@ function App({ userEmail, userName }) {
   return (
     <div className="h-screen flex overflow-hidden" style={{ background: "#F5F6F8" }}>
       {/* 화면 틀은 ICS 와 같게(10-08 · mkqr-ics-hdr) — 사이드바 · 상단 흰 바 · 본문 스크롤 */}
-      <aside className="mk-side shrink-0 flex flex-col h-full overflow-hidden" style={{ background: BRAND.navy, width: sideCollapsed ? 72 : 256 }}>
-        {sideCollapsed ? (
+      {isMobile && drawerOpen && <div className="fixed inset-0 z-[55]" style={{ background: "rgba(15,23,42,.45)" }} onClick={() => setDrawerOpen(false)} aria-hidden="true" />}
+      <aside className="mk-side shrink-0 flex flex-col h-full overflow-hidden" aria-hidden={isMobile && !drawerOpen ? true : undefined}
+        style={isMobile
+          ? { background: BRAND.navy, width: 256, position: "fixed", top: 0, bottom: 0, left: 0, zIndex: 60, transform: drawerOpen ? "translateX(0)" : "translateX(-100%)", visibility: drawerOpen ? "visible" : "hidden", boxShadow: drawerOpen ? "0 10px 40px rgba(0,0,0,.35)" : "none", transition: "transform .28s cubic-bezier(.4,0,.2,1), visibility .28s" }
+          : { background: BRAND.navy, width: railCollapsed ? 72 : 256 }}>
+        {railCollapsed ? (
           <div className="pt-5 pb-4 flex justify-center">
             <div className="w-10 h-10 bg-white rounded-lg flex items-center justify-center text-[11px] font-extrabold tracking-tight select-none" style={{ color: BRAND.navy }} title="Star Truck Korea · MKQR">STK</div>
           </div>
         ) : (
-          <div className="px-4 pt-5 pb-4" style={{ width: 256 }}>
+          <div className="px-4 pt-5 pb-4 relative" style={{ width: 256, paddingRight: isMobile ? 48 : undefined }}>
+            {isMobile && (
+              <button onClick={() => setDrawerOpen(false)} aria-label="메뉴 닫기" title="메뉴 닫기"
+                className="absolute top-6 right-2 w-8 h-8 rounded-lg flex items-center justify-center text-slate-400 hover:text-white hover:bg-white/10">
+                <X size={16} />
+              </button>
+            )}
             <div className="bg-white rounded-lg px-3 py-2 flex items-center justify-center">
               <img src={LOGO_SRC} alt="Star Truck Korea" style={{ width: "100%", height: "auto", display: "block" }} />
             </div>
@@ -3156,14 +3182,14 @@ function App({ userEmail, userName }) {
         <nav className="mk-side-nav flex-1 px-3 py-4 overflow-y-auto overflow-x-hidden" onScroll={() => setSideTip(null)}>
           {[["MKQR OVERVIEW", allNav], ["Marketing 전용", marketingNav], ["HR · GA 전용", hrgaNav], ["관리자 전용", adminNav]].map(([label, items], gi) => (
             <div key={label} className="mb-4">
-              {sideCollapsed
+              {railCollapsed
                 ? (gi > 0 && <div className="mx-2 mb-3 border-t border-white/10" />)
                 : <p className="text-[11px] tracking-wider text-slate-500 font-semibold px-3 mb-1.5 whitespace-nowrap">{label}</p>}
               {items.map((n) => {
                 const allowed = canAccess(n.cat);
                 const active = allowed && tab === n.id;
                 return (
-                  <button key={n.id} onClick={() => { setSideTip(null); allowed ? setTab(n.id) : setPermDeniedPopup(true); }}
+                  <button key={n.id} onClick={() => { setSideTip(null); if (allowed) { setTab(n.id); if (isMobile) setDrawerOpen(false); } else setPermDeniedPopup(true); }}
                     aria-label={n.label}
                     className="relative w-full flex items-center text-left gap-2.5 px-3 py-2.5 rounded-lg text-sm mb-0.5 transition-colors whitespace-nowrap min-h-[40px]"
                     style={{
@@ -3174,8 +3200,8 @@ function App({ userEmail, userName }) {
                     onMouseEnter={(e) => { if (!active) e.currentTarget.style.backgroundColor = BRAND.navyHover; showSideTip(e, n.label); }}
                     onMouseLeave={(e) => { if (!active) e.currentTarget.style.backgroundColor = "transparent"; setSideTip(null); }}>
                     <n.icon size={17} className="shrink-0" />
-                    {!sideCollapsed && <span className="leading-snug flex-1">{n.label}</span>}
-                    {!!n.badge && allowed && (sideCollapsed ? (
+                    {!railCollapsed && <span className="leading-snug flex-1">{n.label}</span>}
+                    {!!n.badge && allowed && (railCollapsed ? (
                       <span className="absolute top-1 left-[26px] text-[9px] leading-none font-bold rounded-full px-1 min-w-[16px] h-[16px] flex items-center justify-center"
                         style={{ backgroundColor: "#DC2626", color: "#fff", boxShadow: `0 0 0 2px ${BRAND.navy}` }}>
                         {n.badge > 99 ? "99+" : n.badge}
@@ -3191,7 +3217,7 @@ function App({ userEmail, userName }) {
             </div>
           ))}
         </nav>
-        {sideCollapsed ? (
+        {railCollapsed ? (
           <div className="py-3 border-t border-white/10 flex justify-center">
             <a href="mailto:stk_it@hyosung.com" title="문의 · stk_it@hyosung.com" aria-label="문의 stk_it@hyosung.com"
               className="w-9 h-9 rounded-lg flex items-center justify-center text-slate-400 hover:text-white hover:bg-white/10 transition-colors">
@@ -3200,6 +3226,18 @@ function App({ userEmail, userName }) {
           </div>
         ) : (
           <div className="px-4 py-3 border-t border-white/10 whitespace-nowrap" style={{ width: 256 }}>
+            {isMobile && (
+              <div className="flex items-center gap-2 mb-3 pb-3 border-b border-white/10">
+                <div className="min-w-0 flex-1 leading-tight">
+                  <div className="text-sm text-slate-200 truncate">{shortName}</div>
+                  <div className="text-[11px] text-slate-500 truncate">{roleLabel}</div>
+                </div>
+                <button onClick={() => msalApp.logoutRedirect()}
+                  className="shrink-0 flex items-center gap-1 text-xs font-medium text-slate-300 border border-white/15 rounded-lg px-2.5 py-1.5 hover:text-white hover:border-white/40">
+                  <LogOut size={13} /> 로그아웃
+                </button>
+              </div>
+            )}
             <p className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold mb-1">문의</p>
             <a href="mailto:stk_it@hyosung.com" className="flex items-center gap-1.5 text-xs text-slate-400 hover:text-white transition-colors">
               <Mail size={12} className="shrink-0" /><span className="truncate">stk_it@hyosung.com</span>
@@ -3207,7 +3245,7 @@ function App({ userEmail, userName }) {
           </div>
         )}
       </aside>
-      {sideCollapsed && sideTip && (
+      {railCollapsed && sideTip && (
         <div className="fixed z-[70] pointer-events-none px-2.5 py-1.5 rounded-md text-xs font-medium text-white shadow-lg whitespace-nowrap"
           style={{ left: 80, top: sideTip.y, transform: "translateY(-50%)", background: "#1E293B" }}>
           <span className="absolute w-2 h-2 rotate-45" style={{ left: -4, top: "calc(50% - 4px)", background: "#1E293B" }} />
@@ -3215,33 +3253,41 @@ function App({ userEmail, userName }) {
         </div>
       )}
       <div className="flex-1 flex flex-col min-w-0">
-        <div className="h-14 shrink-0 bg-white border-b border-slate-100 flex items-center justify-between px-6">
+        <div className="h-14 shrink-0 bg-white border-b border-slate-100 flex items-center justify-between gap-2 px-4 md:px-6">
           <div className="flex items-center gap-2 text-sm text-slate-400 min-w-0">
-            <button onClick={toggleSide} title={sideCollapsed ? "메뉴 펼치기" : "메뉴 접기"} aria-label={sideCollapsed ? "메뉴 펼치기" : "메뉴 접기"} aria-expanded={!sideCollapsed}
-              className="shrink-0 -ml-2 w-8 h-8 rounded-lg flex items-center justify-center text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors">
-              {sideCollapsed ? <ArrowRightFromLine size={17} /> : <ArrowLeftToLine size={17} />}
-            </button>
-            <span className="shrink-0 w-px h-4 bg-slate-200 mr-1" />
-            <span className="shrink-0">Star Truck Korea</span>
-            <span>/</span>
+            {isMobile ? (
+              <button onClick={() => setDrawerOpen(true)} title="메뉴 열기" aria-label="메뉴 열기" aria-expanded={drawerOpen}
+                className="shrink-0 -ml-1.5 w-9 h-9 rounded-lg flex items-center justify-center text-slate-500 hover:text-slate-800 hover:bg-slate-100 transition-colors">
+                <Menu size={20} />
+              </button>
+            ) : (
+              <button onClick={toggleSide} title={sideCollapsed ? "메뉴 펼치기" : "메뉴 접기"} aria-label={sideCollapsed ? "메뉴 펼치기" : "메뉴 접기"} aria-expanded={!sideCollapsed}
+                className="shrink-0 -ml-2 w-8 h-8 rounded-lg flex items-center justify-center text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors">
+                {sideCollapsed ? <ArrowRightFromLine size={17} /> : <ArrowLeftToLine size={17} />}
+              </button>
+            )}
+            <span className="shrink-0 w-px h-4 bg-slate-200 mr-1 hidden md:block" />
+            <span className="shrink-0 hidden md:inline">Star Truck Korea</span>
+            <span className="hidden md:inline">/</span>
             <span className="text-slate-700 font-medium truncate">{nav.find((n) => n.id === tab)?.label}</span>
           </div>
-          <div className="flex items-center gap-4 shrink-0">
-            <div className="leading-tight text-sm text-slate-500" title={[userName, userEmail].filter(Boolean).join("\n")}>
+          <div className="flex items-center gap-2 md:gap-4 shrink-0">
+            <div className="leading-tight text-sm text-slate-500 hidden md:block" title={[userName, userEmail].filter(Boolean).join("\n")}>
               <div>{shortName}</div>
               <div className="text-[11px] text-slate-400">{roleLabel}</div>
             </div>
             <a href="https://aps.startruckkorea.com/" target="_self"
-              className="flex items-center gap-1.5 text-xs font-medium text-slate-500 border border-slate-200 rounded-lg px-3 py-1.5 hover:border-teal-400 hover:text-teal-600 transition-colors">
+              title="APS 로 돌아가기"
+              className="flex items-center gap-1.5 text-xs font-medium text-slate-500 border border-slate-200 rounded-lg px-2.5 md:px-3 py-1.5 hover:border-teal-400 hover:text-teal-600 transition-colors whitespace-nowrap">
               📬 돌아가기
             </a>
             <button onClick={() => msalApp.logoutRedirect()}
-              className="text-xs font-medium text-slate-500 border border-slate-200 rounded-lg px-3 py-1.5 hover:border-red-300 hover:text-red-500 transition-colors">
+              className="hidden md:block text-xs font-medium text-slate-500 border border-slate-200 rounded-lg px-3 py-1.5 hover:border-red-300 hover:text-red-500 transition-colors">
               로그아웃
             </button>
           </div>
         </div>
-      <main className="mk-main-scroll flex-1 p-6 overflow-y-auto">
+      <main className="mk-main-scroll flex-1 p-4 md:p-6 overflow-y-auto">
         <div className="max-w-[1600px] mx-auto">
         {(() => {
           const meta = {
