@@ -98,7 +98,7 @@ async function getListId(env, listName, sitePath = SITE_PATH) {
 // 새 연도 사이트가 준비되면(목록 · 인덱스 3개 · 이 앱의 Sites.Selected 쓰기 권한) 아래 표와 index.html 의 MK_CK_SITES 에 한 줄씩 더하고 배포한다.
 //   형식: 2027: "startruckkorea.sharepoint.com:/sites/<사이트 주소 이름>:"
 // 센터 · Agent 목록은 계속 지금 사이트(인쇄된 QR 토큰 유지).
-const WORKER_VERSION = "2026-10-09.mkqr-site";   // /api/version — 배포 확인용
+const WORKER_VERSION = "2026-10-09.mkqr-fix";    // /api/version — 배포 확인용
 const CK_LIST = "mkqr_CheckIns";
 const CK_BASE_YEAR = 2026;
 const CK_SITES = { 2026: SITE_PATH };
@@ -128,8 +128,9 @@ async function ckListExists(env, sitePath) {
   }
 }
 
-// 올해까지 쓸 수 있는 보관 위치(오래된 것부터). 지금 사이트(2026)는 늘 있다고 본다(없으면 기존처럼 그 자리에서 오류).
-async function ckLocations(env) {
+// 읽기용 위치(오래된 것부터) — 올해까지 목록이 확인된 모든 위치. 지금 사이트(2026)는 늘 있다고 본다.
+// 쓰기 설정 문제(아래 _ckWriteFail)와 상관없이 읽는다 — 이어 쓰는 동안에도 차단 · 누적 판정이 올해 기록을 빠뜨리지 않게(10-09 재검토).
+async function ckReadLocations(env) {
   const locs = [SITE_PATH];
   for (let y = CK_BASE_YEAR + 1; y <= kstYear(); y++) {
     const site = CK_SITES[y];
@@ -137,18 +138,25 @@ async function ckLocations(env) {
   }
   return locs;
 }
-// 체크인 기록 쓰기 — 올해 위치에 쓰다 실패하면(쓰기 권한 없음 · 열 빠짐 등) 그 위치를 2분 동안 「준비 전」으로 두고 직전 위치에 다시 쓴다.
-// 목록 확인은 됐는데 쓰기가 안 되는 설정 실수가 있어도 체크인은 멈추지 않는다. 지금 사이트(2026)에서도 실패하면 기존처럼 오류.
+// 쓰기 설정 문제(권한 없음 · 목록 없음)가 확인된 위치 — 2분 동안 쓰기만 건너뛴다
+const _ckWriteFail = {};
+// 쓰기용 위치 — 읽기용 위치에서 최근 쓰기 설정 문제가 난 곳을 뺀 것
+async function ckLocations(env) {
+  const locs = await ckReadLocations(env);
+  return locs.filter((s, i) => i === 0 || !(_ckWriteFail[s] && Date.now() - _ckWriteFail[s] < 2 * 60 * 1000));
+}
+// 체크인 기록 쓰기 — 올해 위치에 쓰다 실패하면 직전 위치에 다시 쓴다(체크인은 멈추지 않음). 지금 사이트(2026)에서도 실패하면 기존처럼 오류.
+// 권한 없음(403) · 목록 없음(404) · 상태 모름처럼 설정 문제로 보이는 실패만 2분 동안 쓰기에서 빼고,
+// 그 요청만의 값 오류(400) · 일시 오류(429 · 5xx)는 이번 한 건만 이어 쓴다(10-09 재검토 — 오류 한 번에 2분간 올해 위치가 빠지던 것 수정).
 async function ckCreate(env, fields) {
   const locs = await ckLocations(env);
   for (let i = locs.length - 1; i >= 0; i--) {
     try { return await createItem(env, CK_LIST, fields, locs[i]); }
     catch (e) {
       if (i === 0) throw e;
-      console.log(`[year] 기록 실패 — 직전 위치로 다시 씀: ${e.message}`);
-      const k = `${locs[i]}|${CK_LIST}`;
-      delete _listIdCache[k];
-      _ckMissing[k] = { at: Date.now(), ttl: 2 * 60 * 1000 };
+      const cfg = !e.status || e.status === 403 || e.status === 404;
+      console.log(`[year] 기록 실패(${e.status || "?"}) — 직전 위치로 다시 씀${cfg ? " · 2분간 쓰기 제외" : ""}: ${e.message}`);
+      if (cfg) _ckWriteFail[locs[i]] = Date.now();
     }
   }
 }
@@ -183,12 +191,12 @@ async function listItems(env, listName, filterQuery = "", sitePath = SITE_PATH) 
 // 10-09(mkqr-site): 최근 기록은 지금 쓰는 위치 아니면 바로 앞 위치(해 넘김 · 이어 쓰기)에만 있으므로 마지막 두 위치만 본다.
 async function listRecentCheckins(env, sinceMs) {
   const sinceIso = new Date(sinceMs).toISOString();
-  // 지금 쓰는 위치는 실패하면 그대로 오류(기존과 같음), 바로 앞 위치는 해 넘김 직후에만 의미가 있어 실패해도 빈 값으로 넘어간다
-  const lists = (await ckLocations(env)).slice(-2);
-  const last = lists.length - 1;
-  const parts = await Promise.all(lists.map((site, i) => {
+  // 위치가 하나(지금 사이트)뿐이면 기존처럼 실패하면 오류. 연도 위치가 생긴 뒤에는 위치마다 실패를 빈 값으로 넘긴다 —
+  // 새 연도 목록의 열 · 일시 오류 때문에 센터 체크인이 500 으로 막히지 않게(10-09 재검토). 판정은 읽은 위치들로 한다.
+  const lists = (await ckReadLocations(env)).slice(-2);
+  const parts = await Promise.all(lists.map((site) => {
     const p = listItems(env, CK_LIST, `&$filter=fields/ServerTimestamp ge '${sinceIso}'`, site);
-    return i === last ? p : p.catch((e) => { console.log("[year] 직전 위치 조회 실패: " + e.message); return []; });
+    return lists.length === 1 ? p : p.catch((e) => { console.log("[year] 최근 기록 조회 실패 — 이 위치는 빼고 판정: " + e.message); return []; });
   }));
   return parts.flat();
 }
@@ -200,7 +208,7 @@ async function countDeviceCenterVisits(env, centerId, fingerprint) {
   if (!fingerprint || !centerId) return 0;
   // 10-09(mkqr-site): 연도 위치 전부를 센다(누적 규칙은 해가 바뀌어도 그대로). 위치 하나가 실패해도 나머지로 센다.
   try {
-    const locs = await ckLocations(env);
+    const locs = await ckReadLocations(env);
     const parts = await Promise.all(locs.map((site) => listItems(env, CK_LIST,
       `&$filter=fields/CenterId eq '${centerId}' and fields/DeviceFingerprint eq '${fingerprint}'`, site).catch(() => [])));
     return parts.flat().filter((it) => it.fields.VerifyStatus !== "차단해제").length;
@@ -219,7 +227,7 @@ async function createItem(env, listName, fields, sitePath = SITE_PATH) {
     body: JSON.stringify({ fields }),
   });
   const data = await res.json();
-  if (!res.ok) throw new Error(JSON.stringify(data));
+  if (!res.ok) { const err = new Error(JSON.stringify(data)); err.status = res.status; throw err; }   // 상태 코드 — 이어 쓰기 판단용
   return data;
 }
 

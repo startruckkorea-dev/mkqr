@@ -2604,13 +2604,14 @@ function CategoryAccessTab({ admins, categoryAccess, reload }) {
     .filter((d) => !registered.has(d.email) && (d.name.toLowerCase().includes(aq) || d.email.includes(aq) || (d.dept || "").toLowerCase().includes(aq)))
     .slice(0, 8);
   async function addUser(emailArg) {
+    if (window._mkAddingUser) return;   // Enter 연타 · 두 번 누름으로 같은 행이 둘 생기지 않게(10-09 재검토)
     let email = String(emailArg || addQ).trim().toLowerCase();
     if (!email.includes("@") && suggestions.length === 1) email = suggestions[0].email;
     if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) { alert("추가할 사용자의 이메일 주소를 입력하거나 목록에서 골라 주세요."); return; }
     if (registered.has(email)) { alert("이미 등록된 사용자입니다."); return; }
     const d = dirMap.get(email);
     if (dirOk && !d && !confirm(`${email} 은(는) 직원 명부에 없는 계정입니다. 그래도 추가할까요?`)) return;
-    setSaving(true);
+    setSaving(true); window._mkAddingUser = true;
     try {
       const fresh = await mkListAll(MK_LISTS.categoryAccess);   // 다른 관리자가 방금 추가했을 수 있어 저장 직전 다시 확인
       if (fresh.some((x) => String(x.fields.Email || "").trim().toLowerCase() === email)) { alert("이미 등록된 사용자입니다."); await reload(); return; }
@@ -2620,7 +2621,13 @@ function CategoryAccessTab({ admins, categoryAccess, reload }) {
       mkLog("권한", "사용자 추가", d && d.name && d.name !== email ? `${d.name} (${email})` : email, { info: { 부서: (d && d.dept) || "", "직원 명부": d ? "있음" : "없음", "처음 권한": "없음 — 표에서 체크 후 반영" } });
       setAddQ(""); setAddOpen(false); setJustAdded(new Set([email])); setSelected(new Set([email])); setQ(""); setOnlyMissing(false);
       await reload();
-    } catch (e) { alert(e.message); } finally { setSaving(false); }
+    } catch (e) { alert(e.message); } finally { setSaving(false); window._mkAddingUser = false; }
+  }
+  // 지우고 나면 권한 가진 사람이 아무도 안 남는지 — 그러면 처음 상태(부트스트랩)가 되어 누구나 들어올 수 있어 막는다(10-09 재검토)
+  function leavesNobody(emails) {
+    const gone = new Set(emails);
+    const any = categoryAccess.some((r) => MK_CATEGORIES.some((c) => mkCatValue(r, c) === true));
+    return any && !categoryAccess.some((r) => !gone.has(String(r.Email || "").trim().toLowerCase()) && MK_CATEGORIES.some((c) => mkCatValue(r, c) === true));
   }
   // 사용자 삭제(삭제 열) — 퇴사 · 이동 등. 같은 메일의 행이 여러 개면 모두 지운다. 지우기 전 권한을 이력에 남긴다
   async function removeUser(p) {
@@ -2632,7 +2639,8 @@ function CategoryAccessTab({ admins, categoryAccess, reload }) {
     let msg = `「${p.name}」 (${p.email}) 을(를) 목록에서 삭제할까요?\n삭제하면 MKQR 에 로그인할 수 없습니다.`;
     msg += `\n현재 권한: ${had.length ? had.join(", ") : "없음"}`;
     if (p.missing) msg += "\n(직원 명부에 없는 계정 — 퇴사 · 이동 의심)";
-    if (isAdmin && admins.length <= 1) msg += "\n\n⚠ 마지막 남은 관리자입니다 — 삭제하면 관리자가 0명이 됩니다.";
+    if (isAdmin && admins.length <= 1) { alert("마지막 남은 관리자는 삭제할 수 없습니다 — 다른 사람에게 「카테고리 접근 권한」을 먼저 반영해 주세요."); return; }
+    if (leavesNobody([p.email])) { alert("이 계정을 지우면 권한을 가진 사람이 아무도 남지 않아, 누구나 MKQR 에 들어올 수 있게 됩니다 — 삭제할 수 없습니다."); return; }
     if (isMe) msg += "\n\n⚠ 본인 계정입니다 — 삭제하면 바로 이 화면 권한을 잃습니다.";
     if (overrides[p.email]) msg += "\n\n이 사람의 반영 전 변경도 함께 취소됩니다.";
     if (!confirm(msg)) return;
@@ -2686,7 +2694,8 @@ function CategoryAccessTab({ admins, categoryAccess, reload }) {
     const adminsIn = list.filter((p) => (rowFor(p.email) || {}).Access_admins === true).length;
     let msg = `선택한 ${list.length}명을 목록에서 삭제할까요? 삭제하면 MKQR 에 로그인할 수 없습니다.\n\n` +
       list.slice(0, 12).map((p) => `· ${p.name} (${p.email})${p.missing ? " — 명부 없음" : ""}`).join("\n") + (list.length > 12 ? `\n… 외 ${list.length - 12}명` : "");
-    if (adminsIn && adminsIn >= admins.length) msg += "\n\n⚠ 관리자가 모두 포함되어 있습니다 — 삭제하면 관리자가 0명이 됩니다.";
+    if (adminsIn && adminsIn >= admins.length) { alert("관리자가 모두 포함되어 있어 삭제할 수 없습니다 — 관리자를 한 명 이상 남겨 주세요."); return; }
+    if (leavesNobody(list.map((p) => p.email))) { alert("선택한 계정을 모두 지우면 권한을 가진 사람이 아무도 남지 않아, 누구나 MKQR 에 들어올 수 있게 됩니다 — 삭제할 수 없습니다."); return; }
     if (list.some((p) => p.email === me)) msg += "\n\n⚠ 본인 계정이 포함되어 있습니다 — 삭제하면 바로 이 화면 권한을 잃습니다.";
     if (!confirm(msg)) return;
     setSaving(true);
@@ -2731,14 +2740,17 @@ function CategoryAccessTab({ admins, categoryAccess, reload }) {
   // 상단 "현재 관리자 목록" 패널에서 × 누르면 즉시 그 사람의 관리자 전용(Access_admins) 권한만 끈다.
   // (다른 카테고리 권한은 그대로 유지 — 완전히 접근을 없애려면 표에서 전체 체크 해제 후 반영)
   async function quickRevoke(a) {
+    const row0 = categoryAccess.find((r) => r.id === a.id);
+    const inheritsLogs = !!row0 && typeof row0.Access_logs !== "boolean";   // 활동 이력 칸이 비어 있으면 관리자 권한을 이어받고 있다
+    const logsNote = inheritsLogs ? " 이어받던 「활동 이력」 권한도 함께 꺼집니다." : "";
     if (admins.length <= 1) {
-      if (!confirm(`마지막 남은 관리자입니다. "${a.Title || a.Email}"을 해제하면 관리자가 0명이 됩니다. 계속할까요?`)) return;
-    } else if (!confirm(`"${a.Title || a.Email}"을 관리자에서 제외할까요? (다른 화면 권한은 유지됩니다)`)) return;
+      if (!confirm(`마지막 남은 관리자입니다. "${a.Title || a.Email}"을 해제하면 관리자가 0명이 됩니다.${logsNote} 계속할까요?`)) return;
+    } else if (!confirm(`"${a.Title || a.Email}"을 관리자에서 제외할까요? (다른 화면 권한은 유지됩니다.${logsNote})`)) return;
     try {
       const row = categoryAccess.find((r) => r.id === a.id);
       if (row) {
         await mkUpdateItem(MK_LISTS.categoryAccess, row.id, { Access_admins: false });
-        mkLog("권한", "관리자 해제", a.Title && a.Title !== a.Email ? `${a.Title} (${a.Email})` : a.Email, { changes: { "카테고리 접근 권한": [true, false] } });
+        mkLog("권한", "관리자 해제", a.Title && a.Title !== a.Email ? `${a.Title} (${a.Email})` : a.Email, { changes: { "카테고리 접근 권한": [true, false], ...(inheritsLogs ? { "활동 이력(이어받음)": [true, false] } : {}) } });
       }
       await reload();
     } catch (e) { alert(e.message); }
@@ -2815,7 +2827,7 @@ function CategoryAccessTab({ admins, categoryAccess, reload }) {
       <div className="flex items-center gap-2 mb-3 flex-wrap">
         <div className="relative w-full sm:w-auto">
           <Search size={15} className="absolute left-2.5 top-2.5 text-slate-400" />
-          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="이름 · 이메일 · 부서 검색" className="pl-8 pr-3 py-2 border border-slate-200 rounded-lg text-sm w-72 bg-white focus:outline-none focus:ring-2 focus:ring-[#2F7B7A]/30" />
+          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="이름 · 이메일 · 부서 검색" className="pl-8 pr-3 py-2 border border-slate-200 rounded-lg text-sm w-full sm:w-72 bg-white focus:outline-none focus:ring-2 focus:ring-[#2F7B7A]/30" />
         </div>
         <button onClick={applyChanges} disabled={saving || !dirtyCount}
           className="px-4 py-2 rounded-lg text-sm font-medium text-white disabled:opacity-40" style={{ background: BRAND.accent }}>
@@ -3012,6 +3024,7 @@ function App({ userEmail, userName }) {
   const [agentsError, setAgentsError] = useState(""); // 목록이 없거나 못 읽으면 Agent 화면에 안내 — 다른 화면은 그대로
   const [checkins, setCheckins] = useState([]);
   const [categoryAccess, setCategoryAccess] = useState([]);
+  const [accessLoaded, setAccessLoaded] = useState(false);   // 권한 목록을 제대로 읽었는지 — 못 읽었으면 Overview 만(10-09 재검토 · fail-closed)
   // "관리자"는 더 이상 별도 목록(mkqr_Admins)이 아니라, 카테고리 접근 권한에서 "카테고리 접근 권한(Access_admins)"이
   // 체크된 사람을 그때그때 계산한 값 — 진짜 전체 화면 접근 가능한 사람만 여기 들어간다.
   const admins = categoryAccess.filter((r) => r.Access_admins === true).map((r) => ({ id: r.id, Title: r.Title, Email: r.Email, Active: true }));
@@ -3039,18 +3052,24 @@ function App({ userEmail, userName }) {
         const since = new Date(Date.now() - (range.days || 7) * 24 * 3600 * 1000).toISOString();
         checkinQuery = `&$filter=fields/ServerTimestamp ge '${since}'`;
       }
-      const [c, k, ca, ag] = await Promise.all([
+      // 권한 · 체크인 기록은 따로 받는다(10-09 재검토) — 연도 보관 위치 하나를 못 읽어도 센터 · Agent · 권한은 열리고,
+      // 권한 목록을 못 읽으면 전부 여는 대신 Overview 만 연다.
+      const [c, kr, car, ag] = await Promise.all([
         mkListAll(MK_LISTS.centers),
-        mkLoadCheckins(range, checkinQuery),   // 연도별 목록을 합쳐서(10-09 · mkqr-year)
-        mkListAll(MK_LISTS.categoryAccess).catch(() => []),
+        mkLoadCheckins(range, checkinQuery).then((v) => ({ v }), (e) => ({ e })),   // 연도별 목록을 합쳐서(10-09 · mkqr-year)
+        mkListAll(MK_LISTS.categoryAccess).then((v) => ({ v }), (e) => ({ e })),
         mkListAll(MK_LISTS.agents).then((v) => ({ v }), (e) => ({ e })),   // Agent 목록이 없어도 나머지 화면은 열린다
       ]);
       if (ag.e) { setAgents([]); setAgentsError(ag.e.message || String(ag.e)); }
       else { setAgents(ag.v.map((x) => ({ id: x.id, ...x.fields }))); setAgentsError(""); }
       setCenters(c.map((x) => ({ id: x.id, ...x.fields })));
-      setCheckins(k);
-      setCategoryAccess(ca.map((x) => ({ id: x.id, ...x.fields })));
-    } catch (e) { console.error(e); alert("데이터 로딩 실패: " + e.message); }
+      if (car.e) { setAccessLoaded(false); console.error(car.e); }
+      else { setCategoryAccess(car.v.map((x) => ({ id: x.id, ...x.fields }))); setAccessLoaded(true); }
+      if (kr.e) { setCheckins([]); console.error(kr.e); }
+      else setCheckins(kr.v);
+      const errs = [car.e && "권한 목록을 읽지 못해 Overview 만 엽니다", kr.e && `체크인 기록을 읽지 못했습니다 (${kr.e.message})`].filter(Boolean);
+      if (errs.length) alert("데이터 로딩 일부 실패:\n· " + errs.join("\n· ") + "\n잠시 후 새로고침해 주세요.");
+    } catch (e) { setAccessLoaded(false); console.error(e); alert("데이터 로딩 실패: " + e.message); }
     setLoading(false);
     setHasLoadedOnce(true);
   }
@@ -3075,10 +3094,14 @@ function App({ userEmail, userName }) {
     setTimeout(() => setHighlightId(null), 5000);
   }
 
-  // 로그인한 사용자의 카테고리별 접근 권한 — 본인 행이 없거나 특정 컬럼이 비어있으면 "허용"으로 간주.
+  // 로그인한 사용자의 카테고리별 접근 권한 — 특정 칸이 비어 있으면 「허용」(기존 규칙).
+  // 10-09 재검토: 로그인 게이트와 같은 규칙 — 본인 행이 없으면 아무에게도 권한이 없는 처음 상태(부트스트랩)에서만 허용,
+  // 다른 사람에게 권한이 있는데 본인 행이 없으면(본인 삭제 직후 등) 막는다. 권한 목록을 못 읽었으면 Overview 만.
   const myAccessRow = categoryAccess.find((r) => (r.Email || "").toLowerCase() === (userEmail || "").toLowerCase());
+  const anyoneHasAccess = categoryAccess.some((r) => MK_CATEGORIES.some((c) => mkCatValue(r, c) === true));
   function canAccess(catKey) {
-    if (!myAccessRow) return true;
+    if (!accessLoaded) return catKey === "overview";
+    if (!myAccessRow) return !anyoneHasAccess;
     const cat = MK_CATEGORIES.find((c) => c.key === catKey);
     return mkCatValue(myAccessRow, cat) !== false;   // 비어 있으면 허용(기존 규칙) · 새 칸은 이어받을 열 값을 따른다
   }
@@ -3126,6 +3149,8 @@ function App({ userEmail, userName }) {
   const MK_MOBILE_Q = "(max-width: 767px)";
   const [isMobile, setIsMobile] = useState(() => { try { return window.matchMedia(MK_MOBILE_Q).matches; } catch (e) { return false; } });
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const drawerCloseRef = useRef(null);
+  useEffect(() => { if (!drawerOpen) return; const tm = setTimeout(() => { if (drawerCloseRef.current) drawerCloseRef.current.focus(); }, 60); return () => clearTimeout(tm); }, [drawerOpen]);   // 열면 ✕ 로 포커스
   useEffect(() => {
     let mq; try { mq = window.matchMedia(MK_MOBILE_Q); } catch (e) { return; }
     const on = () => { setIsMobile(mq.matches); if (!mq.matches) setDrawerOpen(false); };
@@ -3168,7 +3193,7 @@ function App({ userEmail, userName }) {
         ) : (
           <div className="px-4 pt-5 pb-4 relative" style={{ width: 256, paddingRight: isMobile ? 48 : undefined }}>
             {isMobile && (
-              <button onClick={() => setDrawerOpen(false)} aria-label="메뉴 닫기" title="메뉴 닫기"
+              <button ref={drawerCloseRef} onClick={() => setDrawerOpen(false)} aria-label="메뉴 닫기" title="메뉴 닫기"
                 className="absolute top-6 right-2 w-8 h-8 rounded-lg flex items-center justify-center text-slate-400 hover:text-white hover:bg-white/10">
                 <X size={16} />
               </button>
