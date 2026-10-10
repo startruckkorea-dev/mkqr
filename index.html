@@ -101,7 +101,7 @@ import {
   Download, RefreshCw, MapPin, Search, CheckCircle2, AlertTriangle,
   Upload, ExternalLink, Phone, Navigation, LayoutDashboard, ShieldCheck,
   ArrowUpRight, ImagePlus, KeyRound, Mail, XCircle, Settings, ChevronDown, ChevronUp, Store, Contact, History,
-  ArrowLeftToLine, ArrowRightFromLine, Menu,
+  ArrowLeftToLine, ArrowRightFromLine, Menu, LockKeyhole,
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import QRCode from "qrcode";
@@ -2226,17 +2226,18 @@ function OverviewTab({ centers, agents, agentsError, checkins, admins, setTab, i
   // 머리(이름 · 담당 · 바로가기) → 숫자 3칸 → 최근 기록 | 순위. 검증필요는 센터에만 있는 판정이라 센터 구역 안에 둔다.
   // 권한에 따라 보일 것만 — 센터/Agent 수(관리) · 체크인 수치와 목록(각 체크인 기록) · 관리자(카테고리 접근 권한)
   const can = (k) => canAccess(k);
-  const rows = checkins.filter((r) => r.VerifyStatus !== "차단해제");
-  const centerRows = rows.filter((r) => !isAgentCheckin(r));
-  const agentRows = rows.filter((r) => isAgentCheckin(r));
+  // 10-10(mkqr-noperm): 볼 수 없는 쪽 기록 · 수치는 걸러 내지도 세지도 않는다 — 아래 표시 조건(can)과 같은 권한으로 막음
+  const rows = (can("checkins") || can("agentCheckins")) ? checkins.filter((r) => r.VerifyStatus !== "차단해제") : [];
+  const centerRows = can("checkins") ? rows.filter((r) => !isAgentCheckin(r)) : [];
+  const agentRows = can("agentCheckins") ? rows.filter((r) => isAgentCheckin(r)) : [];
   const byTime = (a, b) => new Date(b.ServerTimestamp || 0) - new Date(a.ServerTimestamp || 0);
   const rankOf = (list) => Object.values(list.reduce((m, r) => {
     const k = r.CenterId || r.CenterName; (m[k] = m[k] || { name: r.CenterName, n: 0 }).n++; return m;
   }, {})).sort((a, b) => b.n - a.n).slice(0, 8);
   const devices = (list) => new Set(list.map((r) => r.DeviceFingerprint).filter(Boolean)).size;
   const needsVerify = centerRows.filter((r) => r.VerifyStatus === "검증필요").length;
-  const activeCenters = centers.filter((c) => c.Active !== false).length;
-  const activeAgents = agents.filter((a) => a.Active !== false).length;
+  const activeCenters = can("centers") ? centers.filter((c) => c.Active !== false).length : 0;
+  const activeAgents = can("agents") ? agents.filter((a) => a.Active !== false).length : 0;
   const AGENT = { main: "#3B5B8C", soft: "#E8EEF7" };   // Agent 구역 색(남청) — 센터는 BRAND.accent(청록)
 
   // 소개 띠 타일 — 한 줄 머리(아이콘 · 이름 · 꼬리표 · 특징) + 두 줄 설명. 예전보다 낮게(10-09)
@@ -2295,6 +2296,46 @@ function OverviewTab({ centers, agents, agentsError, checkins, admins, setTab, i
           <div className="min-w-0 border-t md:border-t-0 md:border-l border-slate-100">{right}</div>
         </div>
       )}
+    </section>
+  );
+  // 10-10(mkqr-noperm): 권한 없는 쪽 자리 카드 — 받는 것은 이름 · 아이콘 · 꼬리표 · 숫자 칸 이름뿐(값 · 목록 · 바로가기 없음).
+  // 2xl 두 칸에서는 제자리(센터 왼쪽 · Agent 오른쪽)에서 옆 카드 높이로 늘어나 자물쇠 안내가 가운데,
+  // 좁은 화면(한 줄로 쌓임)에서는 볼 수 있는 카드가 먼저 오도록 맨 아래(order-last)로 내리고 낮게.
+  // 휴대폰(640px 미만)에서는 머리 오른쪽 「권한 없음」 꼬리표를 숨겨 이름 · 꼬리표가 눌리지 않게(본문 안내는 그대로).
+  const Locked = ({ icon: Icon, title, group, desc, need, labels }) => (
+    <section aria-label={`${title} — 권한 없음`} className="order-last 2xl:order-none bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden flex flex-col">
+      <div className="h-1 bg-slate-300"></div>
+      <div className="px-5 pt-4 pb-3 flex items-start gap-3 flex-wrap">
+        <div className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0 bg-slate-100"><Icon size={19} className="text-slate-400" /></div>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2 flex-wrap">
+            <h3 className="font-semibold text-slate-500">{title}</h3>
+            <span className="text-[10.5px] font-semibold px-2 py-0.5 rounded-full bg-slate-100 text-slate-500">{group}</span>
+          </div>
+          <p className="text-xs text-slate-400 mt-0.5">{desc}</p>
+        </div>
+        <span className="hidden sm:inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-1 rounded-lg bg-slate-50 border border-slate-200 text-slate-500 whitespace-nowrap">
+          <LockKeyhole size={11} />권한 없음
+        </span>
+      </div>
+      <div className="grid grid-cols-3 border-y border-slate-100 bg-slate-50/40" aria-hidden="true">
+        {labels.map((label, i) => (
+          <div key={label} className={`px-5 py-3.5 ${i ? "border-l border-slate-100" : ""}`}>
+            <div className="text-[11.5px] text-slate-400">{label}</div>
+            <div className="h-8 mt-0.5 flex items-center"><div className="h-3.5 w-12 rounded-full bg-slate-100"></div></div>
+          </div>
+        ))}
+      </div>
+      <div className="flex-1 flex flex-col items-center justify-center text-center px-6 py-7 2xl:py-9">
+        <div className="w-11 h-11 rounded-full bg-slate-100 ring-8 ring-slate-50 flex items-center justify-center">
+          <LockKeyhole size={19} className="text-slate-400" />
+        </div>
+        <div className="mt-4 text-[14px] font-semibold text-slate-600">권한 없음</div>
+        <p className="mt-1 text-[12.5px] text-slate-400 leading-relaxed">
+          이 카테고리는 <span className="font-semibold text-slate-500">{need}</span> 권한이 필요합니다.<br />
+          필요하면 IT(stk_it@hyosung.com)에 요청해 주세요.
+        </p>
+      </div>
     </section>
   );
   const SubHead = ({ title, onAll }) => (
@@ -2364,8 +2405,8 @@ function OverviewTab({ centers, agents, agentsError, checkins, admins, setTab, i
       </div>
 
       {(showCenter || showAgent) ? (
-        <div className={`grid grid-cols-1 gap-5 ${showCenter && showAgent ? "2xl:grid-cols-2" : ""}`}>
-          {showCenter && (
+        <div className="grid grid-cols-1 gap-5 2xl:grid-cols-2">
+          {showCenter ? (
             <Section color={BRAND.accent} soft={BRAND.accentSoft} icon={QrCode} title="센터 방문 인증" group="Marketing 전용"
               desc="캠페인 센터 QR · GPS 반경 자동 판정"
               links={[["centers", "centers", "센터 관리"], ["qr", "qr", "센터 QR"], ["checkins", "checkins", "체크인 기록"]]}
@@ -2376,8 +2417,11 @@ function OverviewTab({ centers, agents, agentsError, checkins, admins, setTab, i
               ].filter(Boolean)}
               left={can("checkins") && <><SubHead title="최근 체크인" onAll={() => setTab("checkins")} /><Recent list={[...centerRows].sort(byTime).slice(0, 9)} /></>}
               right={can("checkins") && <><SubHead title={`센터별 체크인 · ${rangeLabel}`} /><Rank list={centerRows} color={BRAND.accent} unit="건" /></>} />
+          ) : (
+            <Locked icon={QrCode} title="센터 방문 인증" group="Marketing 전용" desc="캠페인 센터 QR · GPS 반경 자동 판정"
+              need="Marketing" labels={["활성 센터", `체크인 · ${rangeLabel}`, "검증필요 (확인 대기)"]} />
           )}
-          {showAgent && (
+          {showAgent ? (
             <Section color={AGENT.main} soft={AGENT.soft} icon={Contact} title="Agent 명함 QR" group="HR · GA 전용"
               desc="영업직원 명함 QR · 위치 확인 없이 바로 이동"
               links={[["agents", "agents", "Agent 관리"], ["agentQr", "agentQr", "Agent QR"], ["agentCheckins", "agentCheckins", "체크인 기록"]]}
@@ -2388,6 +2432,9 @@ function OverviewTab({ centers, agents, agentsError, checkins, admins, setTab, i
               ].filter(Boolean)}
               left={can("agentCheckins") && <><SubHead title="최근 스캔" onAll={() => setTab("agentCheckins")} /><Recent list={[...agentRows].sort(byTime).slice(0, 9)} agent /></>}
               right={can("agentCheckins") && <><SubHead title={`Agent별 스캔 · ${rangeLabel}`} /><Rank list={agentRows} color={AGENT.main} unit="건" /></>} />
+          ) : (
+            <Locked icon={Contact} title="Agent 명함 QR" group="HR · GA 전용" desc="영업직원 명함 QR · 위치 확인 없이 바로 이동"
+              need="HR · GA" labels={["활성 Agent", `스캔 · ${rangeLabel}`, "스캔한 기기"]} />
           )}
         </div>
       ) : (
