@@ -3206,7 +3206,7 @@ function CategoryAccessTab({ admins, categoryAccess, reload, readOnly }) {
                           </div>
                         </div>
                         {!readOnly && <button onClick={() => removeUser(p)} disabled={saving} title="목록에서 삭제(퇴사 · 이동 등) — 활동 이력에 남습니다" aria-label={`${p.name} 삭제`}
-                          className="shrink-0 -mr-1.5 w-7 h-7 inline-flex items-center justify-center rounded-lg text-slate-300 hover:text-red-600 hover:bg-red-50 group-hover/row:text-slate-400 disabled:opacity-40"><Trash2 size={14} /></button>}
+                          className="shrink-0 -mr-1.5 w-7 h-7 inline-flex items-center justify-center rounded-lg text-slate-500 hover:text-red-600 hover:bg-red-50 group-hover/row:text-slate-600 disabled:opacity-40"><Trash2 size={14} /></button>}
                       </div>
                     </td>
                     {MK_CATEGORIES.map((c) => {
