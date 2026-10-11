@@ -2938,8 +2938,11 @@ function CategoryAccessTab({ admins, categoryAccess, reload, readOnly }) {
     mq.addEventListener ? mq.addEventListener("change", on) : mq.addListener(on);
     return () => { mq.removeEventListener ? mq.removeEventListener("change", on) : mq.removeListener(on); };
   }, []);
-  const UW = narrow ? 150 : 240, SUB = narrow ? 44 : 46, DW = readOnly ? 0 : 52;
-  const tableMinW = UW + MK_CATEGORIES.length * 2 * SUB + DW;
+  // 삭제(휴지통)는 따로 떨어진 맨 끝 열 대신 사용자 칸 오른쪽 끝에(10-11 · mkqr-note) — 그만큼 사용자 칸을 넓힘
+  const UW = narrow ? 172 : 268, SUB = narrow ? 44 : 46;
+  const tableMinW = UW + MK_CATEGORIES.length * 2 * SUB;
+  const [noteOpen, setNoteOpen] = useState(() => { try { return localStorage.getItem("mkqr.accessNoteOpen") === "1"; } catch (e) { return false; } });
+  const toggleNote = () => setNoteOpen((v) => { const nv = !v; try { localStorage.setItem("mkqr.accessNoteOpen", nv ? "1" : "0"); } catch (e) {} return nv; });
   const toneOf = (c) => MK_GROUP_TONE[c.group] || MK_GROUP_TONE.overview;
   const groupFirst = (c) => MK_CATEGORIES.find((x) => x.group === c.group) === c;
   const divider = (c, body) => (groupFirst(c) ? `2px solid ${toneOf(c).line}` : `1px solid ${body ? "#EEF1F4" : "#E2E8F0"}`);
@@ -2947,14 +2950,24 @@ function CategoryAccessTab({ admins, categoryAccess, reload, readOnly }) {
 
   return (
     <div className="w-full">
-      <div className="bg-slate-50 text-slate-500 text-xs px-4 py-3 rounded-lg mb-4 flex items-start gap-2 leading-relaxed">
-        <KeyRound size={14} className="shrink-0 mt-0.5 text-slate-400" />
-        <div>
+      {/* 안내 — 한 줄 요약만 보이고 > 를 누르면 전체 설명(10-11 · mkqr-note). 펼침 상태는 이 브라우저에 기억 */}
+      <div className="bg-slate-50 text-slate-500 text-xs rounded-lg mb-4 leading-relaxed">
+        <button type="button" onClick={toggleNote} aria-expanded={noteOpen}
+          className="w-full flex items-start gap-2 px-4 py-2.5 text-left rounded-lg hover:bg-slate-100/70">
+          <ChevronDown size={14} className="shrink-0 mt-0.5 text-slate-400 transition-transform" style={{ transform: noteOpen ? "none" : "rotate(-90deg)" }} />
+          <KeyRound size={14} className="shrink-0 mt-0.5 text-slate-400" />
+          <span className="min-w-0 flex-1">
+            <b className="text-slate-600">사용 안내</b>
+            <span className="text-slate-400"> — 체크 후 <b className="text-slate-600">「반영」</b>해야 저장 · 화면마다 <b className="text-slate-600">보기 / 편집</b> 따로 · 한 칸이라도 있으면 로그인 가능 · 필요 없어진 계정은 휴지통으로 삭제</span>
+          </span>
+          <span className="shrink-0 text-[11px] text-slate-400 whitespace-nowrap">{noteOpen ? "접기" : "자세히"}</span>
+        </button>
+        {noteOpen && <div className="px-4 pb-3 pl-[42px]">
           표에는 <b className="text-slate-600">등록된 사용자만</b> 보입니다 — 「사용자 추가」 · 「명부에만 있는 직원」으로 등록하고 필요 없어진 계정(퇴사 · 이동)은 휴지통으로 삭제합니다. 이름 왼쪽 체크박스로 여러 명을 골라 <b className="text-slate-600">권한을 한 번에 부여 · 해제하거나 한 번에 삭제</b>할 수 있습니다. 직원 명부에 없는 등록 계정은 <b className="text-red-600">명부 없음</b>으로 표시됩니다.
           {" "}체크박스는 화면에서만 바뀌고 <b className="text-slate-600">「반영」을 눌러야 저장</b>됩니다. 한 칸이라도 체크된 사람은 로그인할 수 있고, 모든 칸을 해제하고 반영하면 로그인이 막힙니다.
           {" "}<b className="text-slate-600">카테고리 접근 권한(관리자 전용)</b>을 체크하면 개요 · Marketing 전용 · HR · GA 전용 · 활동 이력 권한이 함께 부여됩니다. 반영한 내용은 「활동 이력」에 남습니다. 각 열 맨 위 체크박스로 전체 선택 · 해제할 수 있습니다.
           {" "}화면마다 <b className="text-slate-600">보기</b>(메뉴가 보이고 조회만)와 <b className="text-slate-600">편집</b>(추가 · 수정 · 삭제 · 승인까지)을 따로 줍니다 — 편집을 켜면 보기도 켜지고, 보기를 끄면 편집도 꺼집니다. 보기가 없는 화면은 메뉴에 나타나지 않습니다.
-        </div>
+        </div>}
       </div>
       {readOnly && (
         <div className="mb-4 rounded-xl border px-4 py-3 flex items-start gap-2.5 text-xs leading-relaxed" style={{ borderColor: "#DCD3F1", background: "#F7F5FC", color: "#4A3C78" }}>
@@ -3104,7 +3117,6 @@ function CategoryAccessTab({ admins, categoryAccess, reload, readOnly }) {
             <colgroup>
               <col style={{ width: UW }} />
               {MK_CATEGORIES.map((c) => <React.Fragment key={c.key}><col /><col /></React.Fragment>)}
-              {!readOnly && <col style={{ width: DW }} />}
             </colgroup>
             <thead>
               <tr>
@@ -3127,7 +3139,6 @@ function CategoryAccessTab({ admins, categoryAccess, reload, readOnly }) {
                     </th>
                   );
                 })}
-                {!readOnly && <th rowSpan={3} className="sticky top-0 z-20 bg-white align-bottom pb-3 text-[11px] font-medium text-slate-500 border-b border-slate-200" style={{ borderLeft: "1px solid #E2E8F0" }}>삭제</th>}
               </tr>
               <tr>
                 {MK_CATEGORIES.map((c) => (
@@ -3194,6 +3205,8 @@ function CategoryAccessTab({ admins, categoryAccess, reload, readOnly }) {
                             {justAdded.has(p.email) && <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 leading-none font-medium">새로 추가</span>}
                           </div>
                         </div>
+                        {!readOnly && <button onClick={() => removeUser(p)} disabled={saving} title="목록에서 삭제(퇴사 · 이동 등) — 활동 이력에 남습니다" aria-label={`${p.name} 삭제`}
+                          className="shrink-0 -mr-1.5 w-7 h-7 inline-flex items-center justify-center rounded-lg text-slate-300 hover:text-red-600 hover:bg-red-50 group-hover/row:text-slate-400 disabled:opacity-40"><Trash2 size={14} /></button>}
                       </div>
                     </td>
                     {MK_CATEGORIES.map((c) => {
@@ -3218,17 +3231,11 @@ function CategoryAccessTab({ admins, categoryAccess, reload, readOnly }) {
                         </React.Fragment>
                       );
                     })}
-                    {!readOnly && (
-                      <td className="text-center px-2 py-1.5 border-t border-slate-100" style={{ borderLeft: "1px solid #EEF1F4" }}>
-                        <button onClick={() => removeUser(p)} disabled={saving} title="목록에서 삭제(퇴사 · 이동 등) — 활동 이력에 남습니다"
-                          className="w-7 h-7 inline-flex items-center justify-center rounded-lg text-slate-300 hover:text-red-600 hover:bg-red-50 disabled:opacity-40"><Trash2 size={14} /></button>
-                      </td>
-                    )}
                   </tr>
                 );
               })}
               {!filtered.length && (
-                <tr><td colSpan={MK_CATEGORIES.length * 2 + (readOnly ? 1 : 2)} className="text-center text-slate-400 py-10 border-t border-slate-100">{merged.length ? "조회 결과가 없습니다." : readOnly ? "등록된 사용자가 없습니다." : "등록된 사용자가 없습니다 — 위 「사용자 추가」로 등록해 주세요."}</td></tr>
+                <tr><td colSpan={MK_CATEGORIES.length * 2 + 1} className="text-center text-slate-400 py-10 border-t border-slate-100">{merged.length ? "조회 결과가 없습니다." : readOnly ? "등록된 사용자가 없습니다." : "등록된 사용자가 없습니다 — 위 「사용자 추가」로 등록해 주세요."}</td></tr>
               )}
             </tbody>
           </table>
