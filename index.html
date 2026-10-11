@@ -104,7 +104,7 @@ import {
   Download, RefreshCw, MapPin, Search, CheckCircle2, AlertTriangle,
   Upload, ExternalLink, Phone, Navigation, LayoutDashboard, ShieldCheck,
   ArrowUpRight, ImagePlus, KeyRound, Mail, XCircle, Settings, ChevronDown, ChevronUp, Store, Contact, History,
-  ArrowLeftToLine, ArrowRightFromLine, Menu, LockKeyhole,
+  ArrowLeftToLine, ArrowRightFromLine, Menu, LockKeyhole, Eye, Check,
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import QRCode from "qrcode";
@@ -180,6 +180,7 @@ const MK_CATEGORIES = [
   // 활동 이력(10-09 · mkqr-log) — 열이 비어 있으면 카테고리 접근 권한(관리자) 값을 따른다
   { key: "logs", label: "활동 이력", field: "Access_logs", group: "admin", inherit: "Access_admins" },
 ];
+// (보기 · 편집 두 단계는 아래 mkqr-viewedit 참고)
 // 저장된 권한 값 — true/false, 열이 비어 있으면 inherit 열 값, 그것도 없으면 undefined(=허용으로 보는 기존 규칙 유지)
 function mkCatValue(row, cat) {
   const v = row ? row[cat.field] : undefined;
@@ -187,6 +188,45 @@ function mkCatValue(row, cat) {
   if (cat.inherit && row && typeof row[cat.inherit] === "boolean") return row[cat.inherit];
   return undefined;
 }
+
+// ---- 보기 · 편집 두 단계(10-11 · mkqr-viewedit) -------------------------------------------------------
+// 화면마다 0 없음 · 1 보기(메뉴가 보이고 조회만 — 추가 · 수정 · 삭제 · 업로드 · 승인 · 권한 변경 단추 없음) · 2 편집(전부).
+// 편집은 보기를 포함한다. 저장은 열을 화면마다 늘리지 않고:
+//   · 보기 여부 = 기존 Access_* 열(예/아니요) 그대로
+//   · 「보기만」인 화면 키 = ViewOnly 열(한 줄 텍스트) 하나에 JSON 배열 — 예: ["centers","agentQr"]
+// ViewOnly 가 비어 있으면 지금처럼 보기 + 편집이라, 기존 사용자 권한은 관리자가 바꾸기 전까지 그대로다.
+// 화면이 모르는 키(앞으로 생길 화면)는 지우지 않고 그대로 둔다. 알아볼 수 없는 값이면 모든 화면을 보기만으로(fail-closed).
+const MK_VIEWONLY_FIELD = "ViewOnly";
+const MK_VIEW_NATURE = new Set(["overview", "logs"]);   // 조회만 하는 화면 — 편집 칸 없음(「—」)
+function mkViewOnlySet(row) {
+  const raw = row ? row[MK_VIEWONLY_FIELD] : undefined;
+  const s = raw == null ? "" : String(raw).trim();
+  if (!s) return new Set();
+  try { const a = JSON.parse(s); if (Array.isArray(a) && a.every((x) => typeof x === "string")) return new Set(a); } catch (e) {}
+  if (/^[A-Za-z]+(\s*,\s*[A-Za-z]+)*$/.test(s)) return new Set(s.split(",").map((x) => x.trim()));   // 쉼표 목록(SharePoint 에서 직접 고친 값)
+  return new Set(["*"]);
+}
+function mkIsViewOnly(set, key) { return set.has("*") || set.has(key); }
+function mkViewOnlyString(set) { const a = [...set].filter((k) => k !== "*").sort(); return a.length ? JSON.stringify(a) : ""; }
+// 저장된 수준 — 표에는 지금처럼 「예」 로 저장된 칸만 켜서 보여 준다(비어 있는 칸은 0)
+function mkCatLevel(row, cat) {
+  if (mkCatValue(row, cat) !== true) return 0;
+  if (MK_VIEW_NATURE.has(cat.key)) return 1;
+  return mkIsViewOnly(mkViewOnlySet(row), cat.key) ? 1 : 2;
+}
+// 쓰기 잠금 — 버튼을 숨기는 것과 별개로 마지막 안전장치. App 이 그릴 때마다 지금 화면 기준으로 바꾼다.
+// App 이 뜨기 전(null)이나 지금 화면에 편집 권한이 없으면 목록 · 파일 쓰기를 보내지 않는다(활동 이력 기록 mkLog 는 예외).
+let _mkEditGate = null;   // (대상) => boolean
+const MK_WRITE_KEYS = { mkqr_Centers: ["centers"], mkqr_Agents: ["agents"], mkqr_CheckIns: ["checkins", "agentCheckins"], mkqr_CategoryAccess: ["admins"], centerIcon: ["centers"] };
+function mkAssertWritable(target) {
+  if (!_mkEditGate || !_mkEditGate(target)) throw new Error("보기 권한만 있는 화면이라 저장할 수 없습니다 — 편집 권한이 필요하면 관리자에게 요청해 주세요.");
+}
+const MK_GROUP_TONE = {   // 권한 표 묶음 색 — 개요(회색) · Marketing(청록 · 센터) · HR·GA(남청 · Agent) · 관리자(보라 · 이력의 「권한」 색)
+  overview: { main: "#56657A", band: "#EDF0F4", soft: "#F6F7F9", line: "#C5CDD8", tint: "#FBFBFC" },
+  marketing: { main: "#2F7B7A", band: "#E1EFEE", soft: "#F2F8F8", line: "#9DCBC9", tint: "#F8FBFB" },
+  hrga: { main: "#3B5B8C", band: "#E5EBF5", soft: "#F3F6FB", line: "#A7B9D7", tint: "#F9FAFD" },
+  admin: { main: "#6A4BA6", band: "#ECE7F6", soft: "#F7F5FC", line: "#C2B3E0", tint: "#FBFAFD" },
+};
 const _mkListIds = {};
 
 // sitePath(연도별 체크인 보관 사이트)를 주면 그 사이트에서, 없으면 지금 사이트에서 찾는다(10-09 · mkqr-site)
@@ -235,6 +275,7 @@ async function mkListAll(listName, extraQuery = "", sitePath) {
 }
 
 async function mkCreateItem(listName, fields, sitePath) {
+  mkAssertWritable(listName);
   const token = await getGraphToken();
   const listId = await getMkListId(listName, sitePath);
   const res = await fetch(`${GRAPH}/sites/${await mkSiteId(sitePath)}/lists/${listId}/items`, {
@@ -356,6 +397,7 @@ async function mkCheckinStorageIssues() {
 }
 
 async function mkUpdateItem(listName, itemId, fields, sitePath) {
+  mkAssertWritable(listName);
   const token = await getGraphToken();
   const listId = await getMkListId(listName, sitePath);
   const res = await fetch(`${GRAPH}/sites/${await mkSiteId(sitePath)}/lists/${listId}/items/${itemId}/fields`, {
@@ -368,6 +410,7 @@ async function mkUpdateItem(listName, itemId, fields, sitePath) {
 }
 
 async function mkDeleteItem(listName, itemId) {
+  mkAssertWritable(listName);
   const token = await getGraphToken();
   const listId = await getMkListId(listName);
   const res = await fetch(`${GRAPH}/sites/${_siteId}/lists/${listId}/items/${itemId}`, {
@@ -404,6 +447,7 @@ const ICON_ALLOWED_EXT = ["jpg", "jpeg", "png", "gif", "webp"];
 
 // 업체 아이콘을 MKQR_Media_AttachedFiles/{YYYY-MM-DD}/ 아래에 날짜별로 쌓이게 업로드.
 async function uploadCenterIcon(file) {
+  mkAssertWritable("centerIcon");
   const ext = (file.name.split(".").pop() || "").toLowerCase();
   if (!ICON_ALLOWED_EXT.includes(ext)) {
     throw new Error(`이미지 파일만 업로드할 수 있습니다 (${ICON_ALLOWED_EXT.join("/")}).`);
@@ -767,6 +811,22 @@ function Modal({ title, onClose, children, wide }) {
   );
 }
 
+// 보기 전용 표시 — 체크박스 대신 정적 표식(흐린 비활성 체크박스보다 또렷하게, 10-11)
+function MkLvMark({ on, color }) {
+  return on
+    ? <span className="inline-flex w-4 h-4 rounded items-center justify-center align-middle" style={{ background: color }} aria-label="있음"><Check size={11} strokeWidth={3} color="#fff" /></span>
+    : <span className="inline-block w-4 h-4 rounded border border-slate-200 bg-white align-middle" aria-label="없음" />;
+}
+// 「보기 전용」 머리 꼬리표 — 지금 화면에 편집 권한이 없을 때 페이지 제목 옆
+function MkViewOnlyPill() {
+  return (
+    <span className="inline-flex items-center gap-1 text-[11px] font-medium px-2 py-0.5 rounded-full border" style={{ color: "#5B4A8B", background: "#F5F3FC", borderColor: "#DCD3F1" }}
+      title="이 화면은 볼 수만 있습니다 — 추가 · 수정 · 삭제가 필요하면 관리자에게 「편집」 권한을 요청해 주세요">
+      <Eye size={12} /> 보기 전용
+    </span>
+  );
+}
+
 function Field({ label, children, required }) {
   return (
     <div className="mb-3">
@@ -799,7 +859,7 @@ const inputCls = "w-full border border-slate-300 rounded-lg px-3 py-2 text-sm fo
 /* ------------------------------------------------------------------ */
 const MAX_CENTERS = 40; // QR은 센터당 1개씩 발급되므로 곧 QR 최대 개수와 동일
 
-function CentersTab({ centers, reload, onCreated }) {
+function CentersTab({ centers, reload, onCreated, readOnly }) {
   const [editing, setEditing] = useState(null); // null | {} (신규) | {...} (수정)
   const [busy, setBusy] = useState(false);
   const [q, setQ] = useState("");
@@ -829,6 +889,7 @@ function CentersTab({ centers, reload, onCreated }) {
   }, [centers]);
 
   async function save(form) {
+    if (readOnly) return;
     if (!editing?.id && centers.length >= MAX_CENTERS) {
       alert(`QR 코드(=센터)는 최대 ${MAX_CENTERS}개까지만 만들 수 있습니다.\n현재 ${centers.length}개가 등록되어 있어 더 이상 추가할 수 없습니다.`);
       return;
@@ -866,6 +927,7 @@ function CentersTab({ centers, reload, onCreated }) {
   }
 
   async function remove(c) {
+    if (readOnly) return;
     if (!confirm(`"${c.Title}" 센터를 삭제할까요? (관련 QR도 더 이상 사용할 수 없게 됩니다)`)) return;
     try {
       await mkDeleteItem(MK_LISTS.centers, c.id);
@@ -914,6 +976,7 @@ function CentersTab({ centers, reload, onCreated }) {
 
   // 엑셀 일괄 가져오기 — 위 템플릿(1행 헤더: 지역/센터명/센터명영문/법인명/주소/주소영문/전화번호)을 그대로 파싱
   async function importExcel(file) {
+    if (readOnly) return;
     if (centers.length >= MAX_CENTERS) {
       alert(`QR 코드(=센터)는 최대 ${MAX_CENTERS}개까지만 만들 수 있습니다.\n현재 ${centers.length}개가 등록되어 있어 더 이상 추가할 수 없습니다.`);
       if (fileRef.current) fileRef.current.value = "";
@@ -1041,6 +1104,7 @@ function CentersTab({ centers, reload, onCreated }) {
           <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="센터명/지역/주소 검색" className="pl-8 pr-3 py-2 border border-slate-300 rounded-lg text-sm w-full sm:w-64" />
         </div>
         <div className="grid grid-cols-2 sm:flex gap-2 w-full sm:w-auto [&>button]:justify-center [&>button]:whitespace-nowrap">
+          {!readOnly && (<>
           <button onClick={downloadTemplate} className="flex items-center gap-1.5 px-3 py-2 border border-slate-300 rounded-lg text-sm hover:bg-slate-50">
             <Download size={15} /> 템플릿 다운로드
           </button>
@@ -1048,17 +1112,18 @@ function CentersTab({ centers, reload, onCreated }) {
           <button onClick={() => fileRef.current.click()} disabled={busy} className="flex items-center gap-1.5 px-3 py-2 border border-slate-300 rounded-lg text-sm hover:bg-slate-50">
             <Upload size={15} /> 엑셀 일괄 등록하기
           </button>
+          </>)}
           <button onClick={exportCenters} disabled={!filtered.length} className="flex items-center gap-1.5 px-3 py-2 border border-slate-300 rounded-lg text-sm hover:bg-slate-50 disabled:opacity-50">
             <Download size={15} /> 엑셀 내보내기
           </button>
-          <button
+          {!readOnly && <button
             onClick={() => centers.length >= MAX_CENTERS
               ? alert(`QR 코드(=센터)는 최대 ${MAX_CENTERS}개까지만 만들 수 있습니다.\n현재 ${centers.length}개가 등록되어 있어 더 이상 추가할 수 없습니다.`)
               : setEditing({})}
             className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm text-white ${centers.length >= MAX_CENTERS ? "opacity-50 cursor-not-allowed" : ""}`}
             style={{ background: BRAND.accent }}>
             <Plus size={15} /> 센터 추가
-          </button>
+          </button>}
         </div>
       </div>
 
@@ -1070,10 +1135,12 @@ function CentersTab({ centers, reload, onCreated }) {
             return (
               <div key={c.id} onClick={() => setEditing(c)}
                 className="bg-white rounded-xl border p-4 hover:shadow-md hover:border-slate-300 transition-all cursor-pointer relative group">
+                {!readOnly && (
                 <div className="absolute top-3 right-3 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity" onClick={(e) => e.stopPropagation()}>
                   <button onClick={() => setEditing(c)} className="w-7 h-7 flex items-center justify-center rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100"><Pencil size={14} /></button>
                   <button onClick={() => remove(c)} className="w-7 h-7 flex items-center justify-center rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50"><Trash2 size={14} /></button>
                 </div>
+                )}
 
                 <div className="flex items-start gap-3 mb-3">
                   {iconUrls[c.id]
@@ -1146,18 +1213,18 @@ function CentersTab({ centers, reload, onCreated }) {
         <div className="bg-white rounded-xl border py-16 text-center">
           <Building2 size={28} className="mx-auto text-slate-300 mb-2" />
           <div className="text-slate-500 text-sm mb-1">{centers.length ? "검색 결과가 없습니다" : "등록된 센터가 없습니다"}</div>
-          {!centers.length && (
+          {!centers.length && !readOnly && (
             <div className="text-slate-400 text-xs">우측 상단 "센터 추가" 또는 "엑셀 일괄 등록하기"로 시작해보세요</div>
           )}
         </div>
       )}
 
-      {editing !== null && <CenterEditModal center={editing} onClose={() => setEditing(null)} onSave={save} onGeocode={geocode} busy={busy} />}
+      {editing !== null && <CenterEditModal center={editing} onClose={() => setEditing(null)} onSave={save} onGeocode={geocode} busy={busy} readOnly={readOnly} />}
     </div>
   );
 }
 
-function CenterEditModal({ center, onClose, onSave, onGeocode, busy }) {
+function CenterEditModal({ center, onClose, onSave, onGeocode, busy, readOnly }) {
   const [form, setForm] = useState({ Active: true, ...center });
   const [iconPreview, setIconPreview] = useState(null);
   const [existingIconUrl, setExistingIconUrl] = useState(null);
@@ -1205,24 +1272,26 @@ function CenterEditModal({ center, onClose, onSave, onGeocode, busy }) {
   const displayIcon = iconPreview || existingIconUrl;
 
   return (
-    <Modal title={center.id ? "센터 수정" : "센터 추가"} onClose={onClose}>
-      <p className="text-[11px] text-slate-400 -mt-1 mb-3 text-right"><span className="text-red-500">*</span> 필수 입력</p>
+    <Modal title={readOnly ? "센터 정보" : center.id ? "센터 수정" : "센터 추가"} onClose={onClose}>
+      {readOnly ? <div className="-mt-1 mb-3 flex justify-end"><MkViewOnlyPill /></div>
+        : <p className="text-[11px] text-slate-400 -mt-1 mb-3 text-right"><span className="text-red-500">*</span> 필수 입력</p>}
+      <fieldset disabled={!!readOnly} className="min-w-0">
       <Field label="업체 아이콘 (선택)">
         <div className="flex items-center gap-3">
           {displayIcon
             ? <img src={displayIcon} alt="아이콘" className="w-14 h-14 rounded-xl object-cover border" />
             : <div className="w-14 h-14 rounded-xl bg-slate-100 flex items-center justify-center text-slate-300"><ImagePlus size={20} /></div>}
-          <label className="flex items-center gap-1.5 px-3 py-2 border border-slate-300 rounded-lg text-sm hover:bg-slate-50 cursor-pointer">
+          {!readOnly && <label className="flex items-center gap-1.5 px-3 py-2 border border-slate-300 rounded-lg text-sm hover:bg-slate-50 cursor-pointer">
             <Upload size={14} /> 이미지 선택
             <input type="file" accept=".jpg,.jpeg,.png,.gif,.webp" className="hidden" onChange={onPickIcon} />
-          </label>
-          {displayIcon && (
+          </label>}
+          {displayIcon && !readOnly && (
             <button type="button" onClick={removeIcon} className="flex items-center gap-1.5 px-3 py-2 border border-slate-300 rounded-lg text-sm text-red-600 hover:bg-red-50">
               <Trash2 size={14} /> 제거
             </button>
           )}
         </div>
-        <p className="text-xs text-slate-400 mt-1.5">JPG/PNG/GIF/WEBP 이미지 파일만 가능하며, 용량은 50KB 이하여야 합니다.</p>
+        {!readOnly && <p className="text-xs text-slate-400 mt-1.5">JPG/PNG/GIF/WEBP 이미지 파일만 가능하며, 용량은 50KB 이하여야 합니다.</p>}
       </Field>
       <Field label="센터명 (국문)" required><input className={inputCls} value={form.Title || ""} onChange={set("Title")} placeholder="예: 곤지암센터" /></Field>
       <Field label="지역"><input className={inputCls} value={form.Region || ""} onChange={set("Region")} placeholder="예: Seoul/Gyeonggi" /></Field>
@@ -1231,9 +1300,9 @@ function CenterEditModal({ center, onClose, onSave, onGeocode, busy }) {
       <Field label="주소">
         <div className="flex gap-2">
           <input className={inputCls} value={form.AddressKr || ""} onChange={set("AddressKr")} placeholder="예: 경기도 광주시 곤지암읍 평촌길 100-9" />
-          <button type="button" onClick={handleGeocode} disabled={geoStatus === "loading"} className="shrink-0 px-3 rounded-lg border border-slate-300 text-sm hover:bg-slate-50 flex items-center gap-1 disabled:opacity-50">
+          {!readOnly && <button type="button" onClick={handleGeocode} disabled={geoStatus === "loading"} className="shrink-0 px-3 rounded-lg border border-slate-300 text-sm hover:bg-slate-50 flex items-center gap-1 disabled:opacity-50">
             <MapPin size={14} /> {geoStatus === "loading" ? "찾는 중..." : "좌표 찾기"}
-          </button>
+          </button>}
         </div>
         {geoStatus === "no-address" && <p className="text-xs text-amber-600 mt-1.5">주소를 먼저 입력해주세요.</p>}
         {(geoStatus === "not-found" || geoStatus === "error") && (
@@ -1276,11 +1345,12 @@ function CenterEditModal({ center, onClose, onSave, onGeocode, busy }) {
           <option value="false">비활성 (QR 비활성화)</option>
         </select>
       </Field>
+      </fieldset>
       <div className="flex justify-end gap-2 mt-4">
-        <button onClick={onClose} className="px-4 py-2 text-sm rounded-lg border border-slate-300">취소</button>
-        <button disabled={busy || !form.Title} onClick={() => onSave(form)} className="px-4 py-2 text-sm rounded-lg text-white disabled:opacity-50" style={{ background: BRAND.accent }}>
+        <button onClick={onClose} className="px-4 py-2 text-sm rounded-lg border border-slate-300">{readOnly ? "닫기" : "취소"}</button>
+        {!readOnly && <button disabled={busy || !form.Title} onClick={() => onSave(form)} className="px-4 py-2 text-sm rounded-lg text-white disabled:opacity-50" style={{ background: BRAND.accent }}>
           {busy ? "저장 중..." : "저장"}
-        </button>
+        </button>}
       </div>
     </Modal>
   );
@@ -1289,7 +1359,7 @@ function CenterEditModal({ center, onClose, onSave, onGeocode, busy }) {
 /* ------------------------------------------------------------------ */
 /* QR 코드 탭                                                          */
 /* ------------------------------------------------------------------ */
-function QrTab({ items, kind = "center", highlightId }) {
+function QrTab({ items, kind = "center", highlightId, readOnly }) {
   // kind: "center"(센터 QR, ?t=) | "agent"(Agent 명함 QR, ?a= — 체크인 페이지가 위치를 묻지 않고 기록 후 이동)
   const isAgent = kind === "agent";
   const canvasRefs = useRef({});
@@ -1378,12 +1448,12 @@ function QrTab({ items, kind = "center", highlightId }) {
             className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm text-white disabled:opacity-50" style={{ background: BRAND.accent }}>
             <Download size={14} /> 전체 다운로드 (ZIP, {filtered.length}개)
           </button>
-          <button onClick={() => setShowUrlSetting((v) => !v)} className="text-xs text-slate-400 hover:text-slate-600 flex items-center gap-1">
+          {!readOnly && <button onClick={() => setShowUrlSetting((v) => !v)} className="text-xs text-slate-400 hover:text-slate-600 flex items-center gap-1">
             <Settings size={13} /> 체크인 주소 설정 {showUrlSetting ? "숨기기" : "펼치기"}
-          </button>
+          </button>}
         </div>
       </div>
-      {showUrlSetting && (
+      {showUrlSetting && !readOnly && (
         <div className="mb-4 max-w-xl">
           <Field label="체크인 페이지 기본 주소 (checkin.html 배포 URL)">
             <input className={inputCls} value={checkinBaseUrl} onChange={(e) => setCheckinBaseUrl(e.target.value)} />
@@ -1448,7 +1518,7 @@ function AgentListMissing({ error }) {
   );
 }
 
-function AgentsTab({ agents, agentsError, reload, onCreated }) {
+function AgentsTab({ agents, agentsError, reload, onCreated, readOnly }) {
   const [editing, setEditing] = useState(null); // null | {} (신규) | {...} (수정)
   const [busy, setBusy] = useState(false);
   const [q, setQ] = useState("");
@@ -1465,6 +1535,7 @@ function AgentsTab({ agents, agentsError, reload, onCreated }) {
   if (agentsError) return <AgentListMissing error={agentsError} />;
 
   async function save(form) {
+    if (readOnly) return;
     const title = String(form.Title || "").trim();
     const url = String(form.RedirectUrl || "").trim();
     if (!title) { alert("Agent 이름을 입력해주세요."); return; }
@@ -1493,6 +1564,7 @@ function AgentsTab({ agents, agentsError, reload, onCreated }) {
   }
 
   async function remove(a) {
+    if (readOnly) return;
     if (!confirm(`"${a.Title}" Agent 를 삭제할까요? (이미 인쇄된 명함의 QR 도 더 이상 사용할 수 없게 됩니다)`)) return;
     try {
       await mkDeleteItem(MK_LISTS.agents, a.id);
@@ -1546,9 +1618,9 @@ function AgentsTab({ agents, agentsError, reload, onCreated }) {
           <button onClick={exportAgents} disabled={!filtered.length} className="flex items-center gap-1.5 px-3 py-2 border border-slate-300 rounded-lg text-sm hover:bg-slate-50 disabled:opacity-50">
             <Download size={15} /> 엑셀 내보내기
           </button>
-          <button onClick={() => setEditing({})} className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm text-white" style={{ background: BRAND.accent }}>
+          {!readOnly && <button onClick={() => setEditing({})} className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm text-white" style={{ background: BRAND.accent }}>
             <Plus size={15} /> Agent 추가
-          </button>
+          </button>}
         </div>
       </div>
 
@@ -1557,10 +1629,12 @@ function AgentsTab({ agents, agentsError, reload, onCreated }) {
           {pageAgents.map((a) => (
             <div key={a.id} onClick={() => setEditing(a)}
               className="bg-white rounded-xl border p-4 hover:shadow-md hover:border-slate-300 transition-all cursor-pointer relative group">
+              {!readOnly && (
               <div className="absolute top-3 right-3 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity" onClick={(e) => e.stopPropagation()}>
                 <button onClick={() => setEditing(a)} className="w-7 h-7 flex items-center justify-center rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100"><Pencil size={14} /></button>
                 <button onClick={() => remove(a)} className="w-7 h-7 flex items-center justify-center rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50"><Trash2 size={14} /></button>
               </div>
+              )}
               <div className="flex items-start gap-3 mb-3">
                 <div className="w-11 h-11 rounded-xl flex items-center justify-center shrink-0 text-white font-semibold text-lg" style={{ background: BRAND.navy }}>
                   {(a.Title || "?").trim().charAt(0)}
@@ -1617,16 +1691,16 @@ function AgentsTab({ agents, agentsError, reload, onCreated }) {
         <div className="bg-white rounded-xl border py-16 text-center">
           <Store size={28} className="mx-auto text-slate-300 mb-2" />
           <div className="text-slate-500 text-sm mb-1">{agents.length ? "검색 결과가 없습니다" : "등록된 Agent 가 없습니다"}</div>
-          {!agents.length && <div className="text-slate-400 text-xs">우측 상단 "Agent 추가"로 시작해보세요</div>}
+          {!agents.length && !readOnly && <div className="text-slate-400 text-xs">우측 상단 "Agent 추가"로 시작해보세요</div>}
         </div>
       )}
 
-      {editing !== null && <AgentEditModal agent={editing} onClose={() => setEditing(null)} onSave={save} busy={busy} />}
+      {editing !== null && <AgentEditModal agent={editing} onClose={() => setEditing(null)} onSave={save} busy={busy} readOnly={readOnly} />}
     </div>
   );
 }
 
-function AgentEditModal({ agent, onClose, onSave, busy }) {
+function AgentEditModal({ agent, onClose, onSave, busy, readOnly }) {
   const [form, setForm] = useState({ Active: true, ...agent });
   const [touched, setTouched] = useState(false);
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
@@ -1634,8 +1708,10 @@ function AgentEditModal({ agent, onClose, onSave, busy }) {
   const urlOk = MK_URL_RE.test(url);
   const titleOk = !!String(form.Title || "").trim();
   return (
-    <Modal title={agent.id ? "Agent 수정" : "Agent 추가"} onClose={onClose}>
-      <p className="text-[11px] text-slate-400 -mt-1 mb-3 text-right"><span className="text-red-500">*</span> 필수 입력</p>
+    <Modal title={readOnly ? "Agent 정보" : agent.id ? "Agent 수정" : "Agent 추가"} onClose={onClose}>
+      {readOnly ? <div className="-mt-1 mb-3 flex justify-end"><MkViewOnlyPill /></div>
+        : <p className="text-[11px] text-slate-400 -mt-1 mb-3 text-right"><span className="text-red-500">*</span> 필수 입력</p>}
+      <fieldset disabled={!!readOnly} className="min-w-0">
       <Field label="Agent 이름" required><input className={inputCls} value={form.Title || ""} onChange={set("Title")} placeholder="예: 홍길동" /></Field>
       <Field label="Agent 영문이름"><input className={inputCls} value={form.AgentNameEn || ""} onChange={set("AgentNameEn")} placeholder="예: Gildong Hong" /></Field>
       <Field label="딜러사 법인명"><input className={inputCls} value={form.CorpNameKr || ""} onChange={set("CorpNameKr")} placeholder="예: ㈜서울모터스" /></Field>
@@ -1653,11 +1729,12 @@ function AgentEditModal({ agent, onClose, onSave, busy }) {
           <option value="false">비활성 (QR 비활성화)</option>
         </select>
       </Field>
+      </fieldset>
       <div className="flex justify-end gap-2 mt-4">
-        <button onClick={onClose} className="px-4 py-2 text-sm rounded-lg border border-slate-300">취소</button>
-        <button disabled={busy || !titleOk || !urlOk} onClick={() => onSave(form)} className="px-4 py-2 text-sm rounded-lg text-white disabled:opacity-50" style={{ background: BRAND.accent }}>
+        <button onClick={onClose} className="px-4 py-2 text-sm rounded-lg border border-slate-300">{readOnly ? "닫기" : "취소"}</button>
+        {!readOnly && <button disabled={busy || !titleOk || !urlOk} onClick={() => onSave(form)} className="px-4 py-2 text-sm rounded-lg text-white disabled:opacity-50" style={{ background: BRAND.accent }}>
           {busy ? "저장 중..." : "저장"}
-        </button>
+        </button>}
       </div>
     </Modal>
   );
@@ -1670,7 +1747,7 @@ function AgentEditModal({ agent, onClose, onSave, busy }) {
 // 체크인 기록 — 센터(kind="center") · Agent(kind="agent") 화면을 나눠 쓴다(10-09 · mkqr-ui3).
 //  · 센터: 판정 · GPS · 거리 · 로봇확인 · 승인 처리 / Agent: 위치 확인이 없는 흐름이라 그 칸을 빼고 접속 기록만
 //  · 도구 막대(기간 · 판정 · 검색 · 새로고침 · Excel)를 표 카드 머리에 붙이고, 건수 · 쪽 넘김은 카드 바닥에 둔다
-function CheckInsTab({ kind = "center", checkins, reload, checkinRange, onRangeChange, verifyRules }) {
+function CheckInsTab({ kind = "center", checkins, reload, checkinRange, onRangeChange, verifyRules, readOnly }) {
   const isAgent = kind === "agent";
   const [filter, setFilter] = useState("전체");
   const [q, setQ] = useState("");
@@ -1707,6 +1784,7 @@ function CheckInsTab({ kind = "center", checkins, reload, checkinRange, onRangeC
   }
 
   async function approve(r) {
+    if (readOnly) return;
     try {
       await mkUpdateItem(MK_LISTS.checkins, r.id, { VerifyStatus: "관리자승인" }, r._site);
       mkLog(`${noun} 체크인`, "승인 처리", r.CenterName, { id: r.id, changes: { 판정: [r.VerifyStatus, "관리자승인"] }, info: { "체크인 시각": fmtDate(r.ServerTimestamp), 인증코드: (r.DeviceFingerprint || "").slice(0, 16).toUpperCase(), 보관연도: r._year } });
@@ -1718,6 +1796,7 @@ function CheckInsTab({ kind = "center", checkins, reload, checkinRange, onRangeC
   // Worker가 체크인마다 이 기기의 마지막 "차단해제" 기록 이후 접근만으로 차단 여부를 다시 계산하므로,
   // 이 마커 하나만 남겨도 즉시 해당 기기의 접근이 재개된다.
   async function unblockDevice(r) {
+    if (readOnly) return;
     if (!r.DeviceFingerprint) { alert("이 기록엔 기기 식별코드가 없습니다."); return; }
     if (!confirm(`"${r.CenterName}" ${noun}에서 인증코드 ${r.DeviceFingerprint.slice(0, 16).toUpperCase()} 기기의 차단을 즉시 해제할까요?`)) return;
     try {
@@ -1783,6 +1862,7 @@ function CheckInsTab({ kind = "center", checkins, reload, checkinRange, onRangeC
     : <span className={`text-[11px] leading-5 inline-block px-2 rounded-full ${s >= 0.5 ? "bg-emerald-100 text-emerald-700" : s >= 0.3 ? "bg-amber-100 text-amber-700" : "bg-red-100 text-red-700"}`}>
         {s >= 0.5 ? "정상" : s >= 0.3 ? "보통" : "의심"} ({s.toFixed(1)})</span>;
   const manage = (r) => {
+    if (readOnly) return dash;   // 보기 전용 — 승인 처리 · 차단 해제 없음(10-11)
     const canApprove = !isAgent && ["검증필요", "GPS거부"].includes(r.VerifyStatus);
     const blocked = unblockRowInfo[r._key || r.id] != null;
     if (!canApprove && !blocked) return dash;
@@ -2454,7 +2534,7 @@ function OverviewTab({ centers, agents, agentsError, checkins, admins, setTab, i
 /* 카테고리 접근 권한 탭/* ------------------------------------------------------------------ */
 /* 카테고리 접근 권한 탭 — 관리자별로 화면(탭) 단위 접근을 체크박스로 관리      */
 /* ------------------------------------------------------------------ */
-function CategoryAccessTab({ admins, categoryAccess, reload }) {
+function CategoryAccessTab({ admins, categoryAccess, reload, readOnly }) {
   const [q, setQ] = useState("");
   const [showInfo, setShowInfo] = useState(false); // 안내 배너 펼침 여부
   const [directory, setDirectory] = useState([]);
@@ -2528,78 +2608,96 @@ function CategoryAccessTab({ admins, categoryAccess, reload }) {
   function rowFor(email) {
     return categoryAccess.find((r) => (r.Email || "").toLowerCase() === email);
   }
-  // 서버에 실제 저장된 값 기준 (임시 변경 반영 전). 기록이 아예 없으면 기본은 전부 미허용(false).
-  function savedChecked(person, cat) {
-    const row = rowFor(person.email);
-    return mkCatValue(row, cat) === true;
-  }
+  // ---- 보기 · 편집 두 단계(10-11 · mkqr-viewedit) ----
+  // 수준 0 없음 · 1 보기 · 2 편집. 표의 변경(overrides)은 { email: { 화면 키: 수준 } } — 저장값으로 돌아오면 지운다.
+  // 저장된 값 기준(임시 변경 반영 전). 기록이 아예 없으면 기본은 전부 미허용(0).
+  function savedLevel(person, cat) { return mkCatLevel(rowFor(person.email), cat); }
+  function savedChecked(person, cat) { return savedLevel(person, cat) > 0; }
   // 목록에 아직 없는 열(새 카테고리)은 체크 · 저장하지 않는다 — 그 열에 값을 쓰면 반영 전체가 실패한다(10-08)
   const [catCols, setCatCols] = useState(null); // Set | null(확인 전 · 확인 실패 → 막지 않음)
   useEffect(() => { getMkListColumnNames(MK_LISTS.categoryAccess).then(setCatCols).catch(() => setCatCols(null)); }, []);
   // 열 목록을 아직 못 받았거나 못 읽으면 기존 5칸은 그대로 쓰고, 새 칸(inherit 있는 칸)만 잠근다(fail-closed)
   const catReady = (c) => (catCols ? catCols.has(c.field) : !c.inherit);
   const missingCats = catCols ? MK_CATEGORIES.filter((c) => !catCols.has(c.field)) : [];
+  // ViewOnly 열 — 없으면(아직 안 만듦 · 확인 못 함) 「편집」 칸은 「보기」 와 함께 움직이고(=지금처럼 전부 편집) 그 열에는 쓰지 않는다
+  const viewOnlyReady = catCols ? catCols.has(MK_VIEWONLY_FIELD) : categoryAccess.some((r) => String(r[MK_VIEWONLY_FIELD] || "").trim() !== "");
+  const hasEditCol = (c) => !MK_VIEW_NATURE.has(c.key);
+  const fixLevel = (c, lv) => (lv <= 0 ? 0 : !hasEditCol(c) ? 1 : !viewOnlyReady ? 2 : lv >= 2 ? 2 : 1);
   // 화면에 보여줄 값 — 아직 반영 안 한 로컬 변경이 있으면 그걸 우선 사용
-  function effectiveChecked(person, cat) {
+  function effectiveLevel(person, cat) {
     const o = overrides[person.email];
     if (o && cat.key in o) return o[cat.key];
-    return savedChecked(person, cat);
+    return savedLevel(person, cat);
   }
+  function effectiveChecked(person, cat) { return effectiveLevel(person, cat) > 0; }
 
   const dirtyCount = Object.keys(overrides).length;
-
-  // 체크박스 클릭 — 서버 호출 없이 화면(로컬 상태)만 즉시 바꾼다. "관리자 전용"을 켜면 나머지 4개도 같이 켠다.
-  function toggleLocal(person, cat) {
-    if (!catReady(cat)) return;
-    const newVal = !effectiveChecked(person, cat);
-    setOverrides((prev) => {
-      const next = { ...prev };
-      const catOverrides = { ...(next[person.email] || {}) };
-      if (cat.key === "admins" && newVal === true) {
-        MK_CATEGORIES.filter(catReady).forEach((c) => {
-          if (savedChecked(person, c) === true) delete catOverrides[c.key]; // 원래도 켜져있던 건 "변경사항"이 아니므로 기록 안 함
-          else catOverrides[c.key] = true;
-        });
-      } else if (newVal === savedChecked(person, cat)) {
-        delete catOverrides[cat.key]; // 원래 저장된 값으로 다시 되돌아왔으면 변경사항에서 빼준다
-      } else {
-        catOverrides[cat.key] = newVal;
-      }
-      if (Object.keys(catOverrides).length === 0) delete next[person.email];
-      else next[person.email] = catOverrides;
-      return next;
-    });
+  const adminCat = MK_CATEGORIES.find((c) => c.key === "admins");
+  const logsCat = MK_CATEGORIES.find((c) => c.key === "logs");
+  const meEmail = String(_mkLogUser.email || "").toLowerCase();
+  // 「카테고리 접근 권한」 편집을 가진 사람(=권한을 고칠 수 있는 관리자) — 반영 · 삭제 뒤에도 한 명은 남아야 한다
+  const editorsNow = merged.filter((p) => savedLevel(p, adminCat) === 2).length;
+  const editorsAfter = (over) => merged.filter((p) => { const o = over[p.email]; return (o && "admins" in o ? o.admins : savedLevel(p, adminCat)) === 2; }).length;
+  const SELF_LOCK_MSG = "본인 계정의 「카테고리 접근 권한」 편집은 스스로 해제할 수 없습니다.\n\n해제하면 이 화면에서 권한을 다시 고칠 수 없게 됩니다 — 다른 관리자에게 요청해 주세요.";
+  const LAST_EDITOR_MSG = "「카테고리 접근 권한」 편집 권한을 가진 사람이 한 명도 남지 않게 됩니다 — 누구도 권한을 고칠 수 없게 되므로 진행할 수 없습니다.\n\n다른 사람에게 편집 권한을 먼저 반영해 주세요.";
+  // 한 칸을 바꿀 때 함께 바뀌는 칸 — 「카테고리 접근 권한」 편집을 주면 모든 화면 편집(관리자 = 전체 권한, 기존과 같음),
+  // 보기만 주면 활동 이력도 보기로 연다(활동 이력은 원래 관리자 권한을 이어받는 칸)
+  function expand(person, cat, lv) {
+    const out = { [cat.key]: fixLevel(cat, lv) };
+    if (cat.key === "admins" && out.admins === 2) MK_CATEGORIES.filter(catReady).forEach((c) => { out[c.key] = fixLevel(c, 2); });
+    else if (cat.key === "admins" && out.admins === 1 && logsCat && catReady(logsCat) && effectiveLevel(person, logsCat) === 0) out.logs = 1;
+    return out;
   }
-
-  const allCheckedForCat = (cat) => filtered.length > 0 && filtered.every((p) => effectiveChecked(p, cat));
-  function toggleAllForCatLocal(cat) {
-    if (!catReady(cat)) return;
-    const target = !allCheckedForCat(cat);
-    setOverrides((prev) => {
-      const next = { ...prev };
-      filtered.forEach((p) => {
-        const catOverrides = { ...(next[p.email] || {}) };
-        if (cat.key === "admins" && target === true) {
-          MK_CATEGORIES.filter(catReady).forEach((c) => {
-            if (savedChecked(p, c) === true) delete catOverrides[c.key];
-            else catOverrides[c.key] = true;
-          });
-        } else if (target === savedChecked(p, cat)) {
-          delete catOverrides[cat.key];
-        } else {
-          catOverrides[cat.key] = target;
-        }
-        if (Object.keys(catOverrides).length === 0) delete next[p.email];
-        else next[p.email] = catOverrides;
-      });
-      return next;
+  // 본인의 「카테고리 접근 권한」 편집은 스스로 내려놓을 수 없다 — 되돌릴 화면을 잃는다(ICS 「관리자 전용」 과 같은 규칙)
+  const selfAdminLock = (person, levels) => person.email === meEmail && "admins" in levels && levels.admins < 2 && effectiveLevel(person, adminCat) === 2;
+  function applyLevels(prev, person, levels) {
+    const next = { ...prev };
+    const o = { ...(next[person.email] || {}) };
+    Object.entries(levels).forEach(([k, lv]) => {
+      const c = MK_CATEGORIES.find((x) => x.key === k);
+      if (!c || !catReady(c)) return;
+      if (lv === savedLevel(person, c)) delete o[k]; else o[k] = lv;   // 원래 저장된 값으로 돌아오면 변경사항에서 뺀다
     });
+    if (Object.keys(o).length) next[person.email] = o; else delete next[person.email];
+    return next;
+  }
+  // 체크박스 클릭 — 서버 호출 없이 화면(로컬 상태)만 즉시 바꾼다.
+  // 보기 칸: 켜면 보기(ViewOnly 열이 없으면 편집까지), 끄면 편집도 함께 없어진다
+  function toggleView(person, cat) {
+    if (readOnly || !catReady(cat)) return;
+    const levels = expand(person, cat, effectiveLevel(person, cat) > 0 ? 0 : 1);
+    if (selfAdminLock(person, levels)) { alert(SELF_LOCK_MSG); return; }
+    setOverrides((prev) => applyLevels(prev, person, levels));
+  }
+  // 편집 칸: 켜면 보기도 함께 켜지고, 끄면 보기만 남는다
+  function toggleEdit(person, cat) {
+    if (readOnly || !catReady(cat) || !hasEditCol(cat) || !viewOnlyReady) return;
+    const levels = expand(person, cat, effectiveLevel(person, cat) === 2 ? 1 : 2);
+    if (selfAdminLock(person, levels)) { alert(SELF_LOCK_MSG); return; }
+    setOverrides((prev) => applyLevels(prev, person, levels));
+  }
+  // 열 맨 위 체크박스 — 보이는 사용자 전체 선택 / 해제(mode "view" | "edit")
+  const allOnFor = (cat, mode) => filtered.length > 0 && filtered.every((p) => (mode === "edit" ? effectiveLevel(p, cat) === 2 : effectiveLevel(p, cat) > 0));
+  function toggleAllFor(cat, mode) {
+    if (readOnly || !catReady(cat) || (mode === "edit" && (!hasEditCol(cat) || !viewOnlyReady))) return;
+    const on = !allOnFor(cat, mode);
+    const plan = []; let skippedSelf = false;
+    filtered.forEach((p) => {
+      const cur = effectiveLevel(p, cat);
+      const levels = expand(p, cat, mode === "edit" ? (on ? 2 : Math.min(cur, 1)) : (on ? Math.max(cur, 1) : 0));
+      if (selfAdminLock(p, levels)) { skippedSelf = true; return; }
+      plan.push([p, levels]);
+    });
+    setOverrides((prev) => plan.reduce((acc, [p, lv]) => applyLevels(acc, p, lv), prev));
+    if (skippedSelf) alert("본인 계정의 「카테고리 접근 권한」 편집은 그대로 두었습니다.");
   }
 
   // "반영" 버튼 — 지금까지 로컬에서 체크/해제한 것들을 한 번에 서버에 저장하고, 끝나면 목록을 딱 한 번만 새로고침한다.
   async function applyChanges() {
     const emails = Object.keys(overrides);
-    if (!emails.length) return;
+    if (!emails.length || readOnly) return;
+    if (editorsNow > 0 && editorsAfter(overrides) === 0) { alert(LAST_EDITOR_MSG); return; }
+    { const mo = overrides[meEmail]; if (mo && "admins" in mo && mo.admins < 2 && savedLevel({ email: meEmail }, adminCat) === 2) { alert(SELF_LOCK_MSG); return; } }
     setSaving(true);
     try {
       // 화면에 있는(부모 state) categoryAccess는 마지막 새로고침 시점 기준이라 약간 오래됐을 수 있다.
@@ -2611,13 +2709,14 @@ function CategoryAccessTab({ admins, categoryAccess, reload }) {
       for (const email of emails) {
         const person = filtered.find((p) => p.email === email) || merged.find((p) => p.email === email);
         if (!person) continue;
-        const changes = overrides[email];
+        const changes = overrides[email];   // { 화면 키: 수준 }
         const existing = freshRowFor(email);
         const fields = existing ? {} : { Title: person.name || email, Email: email };
-        if (!existing) MK_CATEGORIES.filter(catReady).forEach((c) => { fields[c.field] = c.key in changes ? changes[c.key] : false; });
+        const lvOf = (c) => (c.key in changes ? changes[c.key] : existing ? mkCatLevel(existing, c) : 0);
+        if (!existing) MK_CATEGORIES.filter(catReady).forEach((c) => { fields[c.field] = lvOf(c) > 0; });
         else Object.keys(changes).forEach((catKey) => {
           const cat = MK_CATEGORIES.find((c) => c.key === catKey);
-          if (cat && catReady(cat)) fields[cat.field] = changes[catKey];
+          if (cat && catReady(cat)) fields[cat.field] = changes[catKey] > 0;
         });
         // 비어 있어 원본 칸(센터 관리 · 센터 QR 코드)을 따라가던 새 칸은, 원본을 바꿀 때 화면에 보이던 값을 함께 저장해 따로 떼어 낸다
         // (안 그러면 「센터 관리」만 끄고 반영해도 「Agent 관리」 가 말없이 같이 꺼진다)
@@ -2625,18 +2724,31 @@ function CategoryAccessTab({ admins, categoryAccess, reload }) {
           const src = MK_CATEGORIES.find((x) => x.field === c.inherit);
           if (src && src.key in changes) fields[c.field] = mkCatValue(existing, c) === true;
         });
+        // 「보기만」인 화면 — ViewOnly 열(JSON 배열). 열이 없으면 쓰지 않는다(없는 열에 쓰면 반영 전체가 400 으로 실패)
+        const voBefore = mkViewOnlySet(existing);
+        let voAfter = voBefore;
+        if (viewOnlyReady) {
+          voAfter = new Set([...voBefore].filter((k) => k !== "*" && !MK_CATEGORIES.some((c) => c.key === k)));   // 이 화면이 모르는 키는 그대로 둔다
+          MK_CATEGORIES.forEach((c) => { if (hasEditCol(c) && lvOf(c) === 1) voAfter.add(c.key); });
+          const vs = mkViewOnlyString(voAfter);
+          if (vs !== String((existing && existing[MK_VIEWONLY_FIELD]) || "").trim()) fields[MK_VIEWONLY_FIELD] = vs;
+        }
         if (existing) await mkUpdateItem(MK_LISTS.categoryAccess, existing.id, fields);
         else await mkCreateItem(MK_LISTS.categoryAccess, fields);
-        // 이력 — 화면에서 보이던 값(이어받기 포함) → 반영한 값, 바뀐 칸만
-        const logChanges = {};
+        // 이력 — 화면별 「없음 · 보기 · 편집」 이전(이어받기 포함) → 반영한 값, 바뀐 칸만
+        const LV = ["없음", "보기", "편집"];
+        const afterLv = (c) => {
+          const on = c.field in fields ? fields[c.field] === true : mkCatValue(existing, c) === true;
+          return !on ? 0 : !hasEditCol(c) ? 1 : mkIsViewOnly(voAfter, c.key) ? 1 : 2;
+        };
+        const logChanges = {}; let up = 0, down = 0;
         MK_CATEGORIES.forEach((c) => {
-          if (!(c.field in fields)) return;
-          const before = existing ? mkCatValue(existing, c) === true : false;
-          if (before !== (fields[c.field] === true)) logChanges[c.label] = [before, fields[c.field] === true];
+          const b = existing ? mkCatLevel(existing, c) : 0, a = afterLv(c);
+          if (a !== b) { logChanges[c.label] = [LV[b], LV[a]]; if (a > b) up++; else down++; }
         });
         if (Object.keys(logChanges).length) {
-          const on = Object.values(logChanges).filter(([, b]) => b).length, off = Object.values(logChanges).length - on;
-          mkLog("권한", !existing ? "신규 부여" : on && !off ? "권한 추가" : off && !on ? "권한 해제" : "권한 변경", person.name && person.name !== email ? `${person.name} (${email})` : email, { changes: logChanges, info: person.dept ? { 부서: person.dept } : undefined });
+          const info = { ...(person.dept ? { 부서: person.dept } : {}), ...(!viewOnlyReady ? { "보기 · 편집": "ViewOnly 열 없음 — 보기 = 편집으로 저장" } : {}) };
+          mkLog("권한", !existing ? "신규 부여" : up && !down ? "권한 추가" : down && !up ? "권한 해제" : "권한 변경", person.name && person.name !== email ? `${person.name} (${email})` : email, { changes: logChanges, info: Object.keys(info).length ? info : undefined });
         }
       }
       setOverrides({});
@@ -2654,7 +2766,7 @@ function CategoryAccessTab({ admins, categoryAccess, reload }) {
     .filter((d) => !registered.has(d.email) && (d.name.toLowerCase().includes(aq) || d.email.includes(aq) || (d.dept || "").toLowerCase().includes(aq)))
     .slice(0, 8);
   async function addUser(emailArg) {
-    if (window._mkAddingUser) return;   // Enter 연타 · 두 번 누름으로 같은 행이 둘 생기지 않게(10-09 재검토)
+    if (readOnly || window._mkAddingUser) return;   // Enter 연타 · 두 번 누름으로 같은 행이 둘 생기지 않게(10-09 재검토)
     let email = String(emailArg || addQ).trim().toLowerCase();
     if (!email.includes("@") && suggestions.length === 1) email = suggestions[0].email;
     if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) { alert("추가할 사용자의 이메일 주소를 입력하거나 목록에서 골라 주세요."); return; }
@@ -2683,13 +2795,15 @@ function CategoryAccessTab({ admins, categoryAccess, reload }) {
   async function removeUser(p) {
     const rows = categoryAccess.filter((r) => String(r.Email || "").trim().toLowerCase() === p.email);
     if (!rows.length) return;
+    if (readOnly) return;
     const had = MK_CATEGORIES.filter((c) => mkCatValue(rows[0], c) === true).map((c) => c.label);
-    const isAdmin = rows[0].Access_admins === true;
+    const isAdmin = mkCatLevel(rows[0], adminCat) === 2;   // 권한을 고칠 수 있는 관리자(편집)
     const isMe = p.email === String(_mkLogUser.email || "").toLowerCase();
     let msg = `「${p.name}」 (${p.email}) 을(를) 목록에서 삭제할까요?\n삭제하면 MKQR 에 로그인할 수 없습니다.`;
     msg += `\n현재 권한: ${had.length ? had.join(", ") : "없음"}`;
     if (p.missing) msg += "\n(직원 명부에 없는 계정 — 퇴사 · 이동 의심)";
-    if (isAdmin && admins.length <= 1) { alert("마지막 남은 관리자는 삭제할 수 없습니다 — 다른 사람에게 「카테고리 접근 권한」을 먼저 반영해 주세요."); return; }
+    if (isMe && isAdmin) { alert(SELF_LOCK_MSG); return; }
+    if (isAdmin && editorsNow <= 1) { alert("마지막 남은 관리자는 삭제할 수 없습니다 — 다른 사람에게 「카테고리 접근 권한」 편집을 먼저 반영해 주세요."); return; }
     if (leavesNobody([p.email])) { alert("이 계정을 지우면 권한을 가진 사람이 아무도 남지 않아, 누구나 MKQR 에 들어올 수 있게 됩니다 — 삭제할 수 없습니다."); return; }
     if (isMe) msg += "\n\n⚠ 본인 계정입니다 — 삭제하면 바로 이 화면 권한을 잃습니다.";
     if (overrides[p.email]) msg += "\n\n이 사람의 반영 전 변경도 함께 취소됩니다.";
@@ -2701,7 +2815,7 @@ function CategoryAccessTab({ admins, categoryAccess, reload }) {
   async function deleteUserRows(p, bulkInfo) {
     const rows = categoryAccess.filter((r) => String(r.Email || "").trim().toLowerCase() === p.email);
     if (!rows.length) return;
-    const had = MK_CATEGORIES.filter((c) => mkCatValue(rows[0], c) === true).map((c) => c.label);
+    const had = MK_CATEGORIES.filter((c) => mkCatLevel(rows[0], c) > 0).map((c) => `${c.label}(${mkCatLevel(rows[0], c) === 2 ? "편집" : "보기"})`);
     {
       for (const r of rows) await mkDeleteItem(MK_LISTS.categoryAccess, r.id);
       mkLog("권한", "사용자 삭제", p.name && p.name !== p.email ? `${p.name} (${p.email})` : p.email,
@@ -2719,32 +2833,38 @@ function CategoryAccessTab({ admins, categoryAccess, reload }) {
   function toggleSelVisible() {
     setSelected((prev) => { const n = new Set(prev); filtered.forEach((p) => (allVisibleSelected ? n.delete(p.email) : n.add(p.email))); return n; });
   }
-  // 선택한 사람들에게 고른 카테고리를 부여(true) / 해제(false) — 표에만 반영(노란색), 저장은 「반영」. 「카테고리 접근 권한」 부여는 모든 칸을 함께 부여
+  // 선택한 사람들에게 고른 카테고리를 부여 / 해제 — 표에만 반영(노란색), 저장은 「반영」.
+  // 수준(보기 · 편집): 부여는 그 수준까지 올리고(이미 더 높으면 그대로), 해제는 「편집」 이면 보기로 · 「보기」 면 없음으로.
+  // 「카테고리 접근 권한」 편집 부여는 모든 칸을 편집으로 함께 부여(기존과 같음). 본인 「카테고리 접근 권한」 편집은 내리지 않는다.
+  const [bulkLevel, setBulkLevel] = useState("edit");
+  const bulkMode = viewOnlyReady ? bulkLevel : "view";
   function bulkSet(val) {
-    const keys = MK_CATEGORIES.filter((c) => catReady(c) && bulkCats.has(c.key)).map((c) => c.key);
-    if (!keys.length || !selectedList.length) return;
-    const target = val && keys.includes("admins") ? MK_CATEGORIES.filter(catReady).map((c) => c.key) : keys;
-    setOverrides((prev) => {
-      const next = { ...prev };
-      selectedList.forEach((p) => {
-        const o = { ...(next[p.email] || {}) };
-        target.forEach((k) => {
-          const cat = MK_CATEGORIES.find((c) => c.key === k);
-          if (val === savedChecked(p, cat)) delete o[k]; else o[k] = val;
-        });
-        if (Object.keys(o).length) next[p.email] = o; else delete next[p.email];
+    if (readOnly) return;
+    const cats = MK_CATEGORIES.filter((c) => catReady(c) && bulkCats.has(c.key));
+    if (!cats.length || !selectedList.length) return;
+    const plan = []; let skippedSelf = false;
+    selectedList.forEach((p) => {
+      const levels = {};
+      cats.forEach((c) => {
+        const cur = effectiveLevel(p, c);
+        const lv = val ? Math.max(cur, bulkMode === "edit" ? 2 : 1) : bulkMode === "edit" ? Math.min(cur, 1) : 0;
+        Object.entries(expand(p, c, lv)).forEach(([k, v]) => { levels[k] = k in levels ? (val ? Math.max(levels[k], v) : Math.min(levels[k], v)) : v; });
       });
-      return next;
+      if (selfAdminLock(p, levels)) { skippedSelf = true; delete levels.admins; }
+      plan.push([p, levels]);
     });
+    setOverrides((prev) => plan.reduce((acc, [p, lv]) => applyLevels(acc, p, lv), prev));
+    if (skippedSelf) alert("본인 계정의 「카테고리 접근 권한」 편집은 그대로 두었습니다.");
   }
   async function bulkRemove() {
     const list = selectedList;
-    if (!list.length) return;
+    if (!list.length || readOnly) return;
     const me = String(_mkLogUser.email || "").toLowerCase();
-    const adminsIn = list.filter((p) => (rowFor(p.email) || {}).Access_admins === true).length;
+    const adminsIn = list.filter((p) => mkCatLevel(rowFor(p.email), adminCat) === 2).length;   // 편집 관리자
+    if (list.some((p) => p.email === me && mkCatLevel(rowFor(p.email), adminCat) === 2)) { alert(SELF_LOCK_MSG + "\n\n본인을 선택에서 빼고 다시 삭제해 주세요."); return; }
     let msg = `선택한 ${list.length}명을 목록에서 삭제할까요? 삭제하면 MKQR 에 로그인할 수 없습니다.\n\n` +
       list.slice(0, 12).map((p) => `· ${p.name} (${p.email})${p.missing ? " — 명부 없음" : ""}`).join("\n") + (list.length > 12 ? `\n… 외 ${list.length - 12}명` : "");
-    if (adminsIn && adminsIn >= admins.length) { alert("관리자가 모두 포함되어 있어 삭제할 수 없습니다 — 관리자를 한 명 이상 남겨 주세요."); return; }
+    if (adminsIn && adminsIn >= editorsNow) { alert("「카테고리 접근 권한」 편집 관리자가 모두 포함되어 있어 삭제할 수 없습니다 — 편집 관리자를 한 명 이상 남겨 주세요."); return; }
     if (leavesNobody(list.map((p) => p.email))) { alert("선택한 계정을 모두 지우면 권한을 가진 사람이 아무도 남지 않아, 누구나 MKQR 에 들어올 수 있게 됩니다 — 삭제할 수 없습니다."); return; }
     if (list.some((p) => p.email === me)) msg += "\n\n⚠ 본인 계정이 포함되어 있습니다 — 삭제하면 바로 이 화면 권한을 잃습니다.";
     if (!confirm(msg)) return;
@@ -2765,7 +2885,7 @@ function CategoryAccessTab({ admins, categoryAccess, reload }) {
   const finderAllOn = finderList.length > 0 && finderList.every((d) => finderSel.has(d.email));
   async function bulkAdd() {
     const list = notRegistered.filter((d) => finderSel.has(d.email));
-    if (!list.length) return;
+    if (!list.length || readOnly) return;
     setSaving(true);
     const added = [];
     try {
@@ -2790,21 +2910,40 @@ function CategoryAccessTab({ admins, categoryAccess, reload }) {
   // 상단 "현재 관리자 목록" 패널에서 × 누르면 즉시 그 사람의 관리자 전용(Access_admins) 권한만 끈다.
   // (다른 카테고리 권한은 그대로 유지 — 완전히 접근을 없애려면 표에서 전체 체크 해제 후 반영)
   async function quickRevoke(a) {
+    if (readOnly) return;
     const row0 = categoryAccess.find((r) => r.id === a.id);
     const inheritsLogs = !!row0 && typeof row0.Access_logs !== "boolean";   // 활동 이력 칸이 비어 있으면 관리자 권한을 이어받고 있다
     const logsNote = inheritsLogs ? " 이어받던 「활동 이력」 권한도 함께 꺼집니다." : "";
-    if (admins.length <= 1) {
-      if (!confirm(`마지막 남은 관리자입니다. "${a.Title || a.Email}"을 해제하면 관리자가 0명이 됩니다.${logsNote} 계속할까요?`)) return;
-    } else if (!confirm(`"${a.Title || a.Email}"을 관리자에서 제외할까요? (다른 화면 권한은 유지됩니다.${logsNote})`)) return;
+    const lv = mkCatLevel(row0, adminCat);
+    if (String(a.Email || "").trim().toLowerCase() === meEmail && lv === 2) { alert(SELF_LOCK_MSG); return; }
+    if (lv === 2 && editorsNow <= 1) { alert("마지막 남은 「카테고리 접근 권한」 편집 관리자는 해제할 수 없습니다 — 다른 사람에게 편집 권한을 먼저 반영해 주세요."); return; }
+    if (!confirm(`"${a.Title || a.Email}"을 관리자에서 제외할까요? (다른 화면 권한은 유지됩니다.${logsNote})`)) return;
     try {
       const row = categoryAccess.find((r) => r.id === a.id);
       if (row) {
-        await mkUpdateItem(MK_LISTS.categoryAccess, row.id, { Access_admins: false });
-        mkLog("권한", "관리자 해제", a.Title && a.Title !== a.Email ? `${a.Title} (${a.Email})` : a.Email, { changes: { "카테고리 접근 권한": [true, false], ...(inheritsLogs ? { "활동 이력(이어받음)": [true, false] } : {}) } });
+        const fields = { Access_admins: false };
+        const vo = mkViewOnlySet(row);
+        if (viewOnlyReady && vo.has("admins")) { vo.delete("admins"); fields[MK_VIEWONLY_FIELD] = mkViewOnlyString(vo); }
+        await mkUpdateItem(MK_LISTS.categoryAccess, row.id, fields);
+        mkLog("권한", "관리자 해제", a.Title && a.Title !== a.Email ? `${a.Title} (${a.Email})` : a.Email, { changes: { "카테고리 접근 권한": [lv === 2 ? "편집" : "보기", "없음"], ...(inheritsLogs ? { "활동 이력(이어받음)": ["보기", "없음"] } : {}) } });
       }
       await reload();
     } catch (e) { alert(e.message); }
   }
+  // 사용자 칸 — 이름 · 꼬리표 한 줄, 메일 · 부서 한 줄
+  const [narrow, setNarrow] = useState(() => { try { return window.matchMedia("(max-width: 767px)").matches; } catch (e) { return false; } });
+  useEffect(() => {
+    let mq; try { mq = window.matchMedia("(max-width: 767px)"); } catch (e) { return; }
+    const on = () => setNarrow(mq.matches);
+    mq.addEventListener ? mq.addEventListener("change", on) : mq.addListener(on);
+    return () => { mq.removeEventListener ? mq.removeEventListener("change", on) : mq.removeListener(on); };
+  }, []);
+  const UW = narrow ? 150 : 240, SUB = narrow ? 44 : 46, DW = readOnly ? 0 : 52;
+  const tableMinW = UW + MK_CATEGORIES.length * 2 * SUB + DW;
+  const toneOf = (c) => MK_GROUP_TONE[c.group] || MK_GROUP_TONE.overview;
+  const groupFirst = (c) => MK_CATEGORIES.find((x) => x.group === c.group) === c;
+  const divider = (c, body) => (groupFirst(c) ? `2px solid ${toneOf(c).line}` : `1px solid ${body ? "#EEF1F4" : "#E2E8F0"}`);
+  const R1 = 30, R2 = 40;   // 머리 줄 높이 — 묶음 · 화면 이름(두 줄까지) · 보기 / 편집
 
   return (
     <div className="w-full">
@@ -2814,23 +2953,31 @@ function CategoryAccessTab({ admins, categoryAccess, reload }) {
           표에는 <b className="text-slate-600">등록된 사용자만</b> 보입니다 — 「사용자 추가」 · 「명부에만 있는 직원」으로 등록하고 필요 없어진 계정(퇴사 · 이동)은 휴지통으로 삭제합니다. 이름 왼쪽 체크박스로 여러 명을 골라 <b className="text-slate-600">권한을 한 번에 부여 · 해제하거나 한 번에 삭제</b>할 수 있습니다. 직원 명부에 없는 등록 계정은 <b className="text-red-600">명부 없음</b>으로 표시됩니다.
           {" "}체크박스는 화면에서만 바뀌고 <b className="text-slate-600">「반영」을 눌러야 저장</b>됩니다. 한 칸이라도 체크된 사람은 로그인할 수 있고, 모든 칸을 해제하고 반영하면 로그인이 막힙니다.
           {" "}<b className="text-slate-600">카테고리 접근 권한(관리자 전용)</b>을 체크하면 개요 · Marketing 전용 · HR · GA 전용 · 활동 이력 권한이 함께 부여됩니다. 반영한 내용은 「활동 이력」에 남습니다. 각 열 맨 위 체크박스로 전체 선택 · 해제할 수 있습니다.
+          {" "}화면마다 <b className="text-slate-600">보기</b>(메뉴가 보이고 조회만)와 <b className="text-slate-600">편집</b>(추가 · 수정 · 삭제 · 승인까지)을 따로 줍니다 — 편집을 켜면 보기도 켜지고, 보기를 끄면 편집도 꺼집니다. 보기가 없는 화면은 메뉴에 나타나지 않습니다.
         </div>
       </div>
+      {readOnly && (
+        <div className="mb-4 rounded-xl border px-4 py-3 flex items-start gap-2.5 text-xs leading-relaxed" style={{ borderColor: "#DCD3F1", background: "#F7F5FC", color: "#4A3C78" }}>
+          <Eye size={15} className="shrink-0 mt-0.5" />
+          <div><b>보기 전용</b> — 권한 현황과 등록된 사용자를 볼 수만 있습니다. 권한을 바꾸려면 「카테고리 접근 권한」 <b>편집</b> 권한이 필요합니다.</div>
+        </div>
+      )}
 
       <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-4 mb-4">
         <div className="flex items-center gap-x-2 gap-y-1 mb-3 flex-wrap">
           <ShieldCheck size={15} style={{ color: BRAND.accent }} />
           <span className="text-sm font-semibold text-slate-700 whitespace-nowrap">관리자 {admins.length}명</span>
-          <span className="text-xs text-slate-400 basis-full sm:basis-auto">— 「카테고리 접근 권한」까지 가진 전체 권한자 · × 를 누르면 관리자 권한만 바로 해제</span>
+          <span className="text-xs text-slate-400 basis-full sm:basis-auto">— 「카테고리 접근 권한」까지 가진 전체 권한자{admins.length > editorsNow && ` · 그중 보기 전용 ${admins.length - editorsNow}명`}{!readOnly && " · × 를 누르면 관리자 권한만 바로 해제"}</span>
         </div>
         {admins.length ? (
           <div className="flex flex-wrap gap-1.5 max-h-32 overflow-y-auto">
             {admins.map((a) => (
               <span key={a.id} className="inline-flex items-center gap-1.5 pl-2.5 pr-1.5 py-1 rounded-full text-xs font-medium" style={{ background: BRAND.accentSoft, color: BRAND.accent }}>
                 {((dirMap.get(String(a.Email || "").toLowerCase()) || {}).name) || a.Title || a.Email}
-                <button onClick={() => quickRevoke(a)} title="관리자에서 제외" className="w-4 h-4 rounded-full hover:bg-white/70 flex items-center justify-center">
+                {mkCatLevel(categoryAccess.find((r) => r.id === a.id), adminCat) === 1 && <span className="text-[10px] px-1.5 rounded-full bg-white/80 leading-4" title="「카테고리 접근 권한」 보기만 — 권한을 바꿀 수는 없음">보기</span>}
+                {!readOnly && <button onClick={() => quickRevoke(a)} title="관리자에서 제외" className="w-4 h-4 rounded-full hover:bg-white/70 flex items-center justify-center">
                   <X size={10} />
-                </button>
+                </button>}
               </span>
             ))}
           </div>
@@ -2839,6 +2986,7 @@ function CategoryAccessTab({ admins, categoryAccess, reload }) {
         )}
       </div>
 
+      {!readOnly && (
       <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-4 mb-4">
         <div className="flex items-center gap-2 mb-2.5 flex-wrap">
           <Plus size={15} style={{ color: BRAND.accent }} />
@@ -2873,17 +3021,18 @@ function CategoryAccessTab({ admins, categoryAccess, reload }) {
         </div>
         <p className="text-[11.5px] text-slate-400 mt-2">직원 명부에서 이름 · 이메일 · 부서로 찾아 고르거나 이메일을 직접 입력하세요. 추가한 사용자는 권한 없이 등록되며 「활동 이력」에 남습니다 — 아래 표에서 필요한 카테고리를 체크하고 「반영」을 눌러 주세요.</p>
       </div>
+      )}
 
       <div className="flex items-center gap-2 mb-3 flex-wrap">
         <div className="relative w-full sm:w-auto">
           <Search size={15} className="absolute left-2.5 top-2.5 text-slate-400" />
           <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="이름 · 이메일 · 부서 검색" className="pl-8 pr-3 py-2 border border-slate-200 rounded-lg text-sm w-full sm:w-72 bg-white focus:outline-none focus:ring-2 focus:ring-[#2F7B7A]/30" />
         </div>
-        <button onClick={applyChanges} disabled={saving || !dirtyCount}
+        {!readOnly && <button onClick={applyChanges} disabled={saving || !dirtyCount}
           className="px-4 py-2 rounded-lg text-sm font-medium text-white disabled:opacity-40" style={{ background: BRAND.accent }}>
           {saving ? "반영 중..." : dirtyCount ? `반영 (${dirtyCount}명)` : "반영"}
-        </button>
-        {dirtyCount > 0 && (
+        </button>}
+        {dirtyCount > 0 && !readOnly && (
           <button onClick={discardChanges} disabled={saving} className="text-xs px-3 py-2 rounded-lg border border-slate-200 text-slate-500 hover:bg-slate-50 bg-white">변경 취소</button>
         )}
         {(missingCount > 0 || altCount > 0) && (
@@ -2897,7 +3046,7 @@ function CategoryAccessTab({ admins, categoryAccess, reload }) {
         </span>
       </div>
       {dirError && <p className="text-xs text-amber-600 mb-3">직원 명부를 불러오지 못해 이름 · 부서 · 「명부 없음」 표시와 사용자 검색이 제한됩니다(이메일 직접 입력은 가능).</p>}
-      {selectedList.length > 0 && (
+      {selectedList.length > 0 && !readOnly && (
         <div className="mb-3 rounded-xl border px-4 py-2.5 shadow-sm" style={{ borderColor: "rgba(47,123,122,.35)", background: "#F2F8F8" }}>
           <div className="flex items-center gap-x-3 gap-y-2 flex-wrap">
             <span className="text-sm font-semibold" style={{ color: BRAND.accent }}>{selectedList.length}명 선택</span>
@@ -2914,11 +3063,20 @@ function CategoryAccessTab({ admins, categoryAccess, reload }) {
                 );
               })}
             </div>
+            {viewOnlyReady && (
+              <div className="inline-flex rounded-lg border border-slate-300 overflow-hidden bg-white" role="group" aria-label="부여 · 해제 수준">
+                {[["view", "보기"], ["edit", "편집"]].map(([k, l]) => (
+                  <button key={k} onClick={() => setBulkLevel(k)} aria-pressed={bulkLevel === k}
+                    className={`h-7 px-2.5 text-[11.5px] ${k === "edit" ? "border-l border-slate-300" : ""} ${bulkLevel === k ? "text-white font-medium" : "text-slate-600 hover:bg-slate-50"}`}
+                    style={bulkLevel === k ? { background: BRAND.accent } : undefined}>{l}</button>
+                ))}
+              </div>
+            )}
             <button onClick={() => bulkSet(true)} disabled={!bulkCats.size} className="h-7 px-3 rounded-lg text-xs font-medium text-white disabled:opacity-40" style={{ background: BRAND.accent }}>부여</button>
             <button onClick={() => bulkSet(false)} disabled={!bulkCats.size} className="h-7 px-3 rounded-lg text-xs font-medium border border-slate-300 bg-white text-slate-600 hover:bg-slate-50 disabled:opacity-40">해제</button>
             <button onClick={bulkRemove} disabled={saving} className="ml-auto h-7 px-3 rounded-lg text-xs font-medium border border-red-200 bg-red-50 text-red-600 hover:bg-red-100 flex items-center gap-1"><Trash2 size={12} /> 선택 {selectedList.length}명 삭제</button>
           </div>
-          <p className="text-[11px] text-slate-500 mt-1.5">카테고리를 고르고 「부여」 · 「해제」를 누르면 선택한 사람들의 표에 노란색으로 표시되고, 「반영」을 눌러야 저장됩니다. 검색어를 바꿔 가며 한 명씩 체크해도 선택은 유지됩니다.</p>
+          <p className="text-[11px] text-slate-500 mt-1.5">카테고리와 수준(보기 · 편집)을 고르고 「부여」 · 「해제」를 누르면 선택한 사람들의 표에 노란색으로 표시되고, 「반영」을 눌러야 저장됩니다 — 「편집」 해제는 보기를 남기고, 「보기」 해제는 그 화면을 모두 닫습니다. 검색어를 바꿔 가며 한 명씩 체크해도 선택은 유지됩니다.</p>
         </div>
       )}
       {missingCats.length > 0 && (
@@ -2927,88 +3085,150 @@ function CategoryAccessTab({ admins, categoryAccess, reload }) {
           {" "}그동안 권한은 {missingCats.filter((c) => c.inherit).map((c) => `${c.label} ← ${(MK_CATEGORIES.find((x) => x.field === c.inherit) || {}).label}`).join(" · ")} 값을 그대로 따릅니다.
         </div>
       )}
+      {!viewOnlyReady && (
+        <div className="mb-3 text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 leading-relaxed flex items-start gap-2">
+          <AlertTriangle size={14} className="shrink-0 mt-0.5 text-amber-500" />
+          <div>
+            {catCols ? <>SharePoint 목록 mkqr_CategoryAccess 에 <b>ViewOnly</b> 열(한 줄 텍스트)이 아직 없습니다.</> : <>목록 열을 확인하지 못해 「보기만」 설정을 저장하지 않습니다.</>}
+            {" "}그동안 「편집」 칸은 「보기」 와 함께 움직이고(= 지금처럼 보기 + 편집) 보기만 주는 설정은 저장되지 않습니다. 관리자(IT)가 열을 만들면 바로 나눠 줄 수 있습니다.
+          </div>
+        </div>
+      )}
 
       {dirLoading ? (
         <div className="bg-white rounded-xl border border-slate-200 shadow-sm py-16 text-center text-slate-400 text-sm">직원 명부를 불러오는 중입니다...</div>
       ) : (
-        <div className="mk-scroll bg-white rounded-xl border border-slate-200 shadow-sm overflow-auto" style={{ maxHeight: 620 }}>
-          <table className="w-full text-sm table-fixed" style={{ minWidth: 1080 }}>
+        <div className="mk-scroll mk-perm bg-white rounded-xl border border-slate-200 shadow-sm overflow-auto" style={{ maxHeight: 640 }}>
+          {/* 권한 표(10-11 · mkqr-viewedit) — 머리 3단: 묶음 띠 · 화면 이름 · 보기 / 편집(열 전체 선택). 사용자 칸 · 머리는 스크롤해도 고정 */}
+          <table className="text-sm table-fixed border-separate" style={{ borderSpacing: 0, width: "100%", minWidth: tableMinW }}>
             <colgroup>
-              <col style={{ width: "27%" }} />
-              {MK_CATEGORIES.map((c) => <col key={c.key} style={{ width: `${68 / MK_CATEGORIES.length}%` }} />)}
-              <col style={{ width: "5%" }} />
+              <col style={{ width: UW }} />
+              {MK_CATEGORIES.map((c) => <React.Fragment key={c.key}><col /><col /></React.Fragment>)}
+              {!readOnly && <col style={{ width: DW }} />}
             </colgroup>
-            <thead className="text-slate-500 text-xs">
+            <thead>
               <tr>
-                <th className="h-7 px-4 sticky top-0 left-0 z-30 bg-slate-50"></th>
-                {MK_GROUPS.map(([g, label]) => (
-                  <th key={g} colSpan={MK_CATEGORIES.filter((c) => c.group === g).length}
-                    className="h-7 px-2 text-center text-[10px] font-semibold tracking-wide text-slate-400 sticky top-0 z-20 bg-slate-50 border-b border-slate-200">
-                    <span className={g === "marketing" || g === "hrga" ? "inline-block px-2 rounded-full bg-white border border-slate-200" : ""}>{label}</span>
-                  </th>
-                ))}
-                <th className="h-7 sticky top-0 z-20 bg-slate-50 border-b border-slate-200"></th>
-              </tr>
-              <tr>
-                <th className="text-left font-medium px-4 py-2.5 sticky top-7 left-0 z-30 bg-slate-50 border-b border-slate-200">
-                  <label className="inline-flex items-center gap-2.5 cursor-pointer select-none">
-                    <input type="checkbox" checked={allVisibleSelected} onChange={toggleSelVisible} className="w-4 h-4 cursor-pointer" title="보이는 사용자 전체 선택 / 해제" />
-                    사용자
+                <th rowSpan={3} className="sticky left-0 top-0 z-40 bg-white text-left align-bottom px-3 md:px-4 pb-2.5 border-b border-slate-200 font-normal" style={{ boxShadow: "inset -1px 0 0 #E2E8F0" }}>
+                  <div className="text-[10.5px] text-slate-400 leading-snug mb-2 hidden md:block">
+                    <b className="font-semibold text-slate-500">보기</b> 메뉴가 보이고 조회만<br /><b className="font-semibold text-slate-500">편집</b> 추가 · 수정 · 삭제 · 승인까지
+                  </div>
+                  <label className="inline-flex items-center gap-2.5 cursor-pointer select-none text-xs font-medium text-slate-600">
+                    {!readOnly && <input type="checkbox" checked={allVisibleSelected} onChange={toggleSelVisible} className="w-4 h-4 cursor-pointer" style={{ accentColor: BRAND.accent }} title="보이는 사용자 전체 선택 / 해제" />}
+                    사용자 <span className="text-slate-400 font-normal tabular-nums">{filtered.length}</span>
                   </label>
                 </th>
+                {MK_GROUPS.map(([g, label]) => {
+                  const t = MK_GROUP_TONE[g]; const n = MK_CATEGORIES.filter((c) => c.group === g).length;
+                  return (
+                    <th key={g} colSpan={n * 2} className={`sticky top-0 z-20 px-2 text-[11px] font-semibold tracking-wide whitespace-nowrap ${narrow ? "text-left" : "text-center"}`}
+                      style={{ height: R1, background: t.band, color: t.main, boxShadow: `inset 0 3px 0 ${t.main}`, borderLeft: `2px solid ${t.line}` }}>
+                      {/* 휴대폰: 묶음 이름이 가로로 밀려 사라지지 않게 사용자 칸 바로 옆에 붙어 따라온다 */}
+                      <span className="inline-flex items-center gap-1.5" style={narrow ? { position: "sticky", left: UW + 8 } : undefined}><span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: t.main }} />{label}</span>
+                    </th>
+                  );
+                })}
+                {!readOnly && <th rowSpan={3} className="sticky top-0 z-20 bg-white align-bottom pb-3 text-[11px] font-medium text-slate-500 border-b border-slate-200" style={{ borderLeft: "1px solid #E2E8F0" }}>삭제</th>}
+              </tr>
+              <tr>
                 {MK_CATEGORIES.map((c) => (
-                  <th key={c.key} className="text-center font-medium px-2 py-2.5 sticky top-7 z-20 bg-slate-50 border-b border-slate-200 align-top">
-                    <div className="flex flex-col items-center gap-1.5">
-                      <input type="checkbox" checked={allCheckedForCat(c)} disabled={!catReady(c)}
-                        onChange={() => toggleAllForCatLocal(c)} className="w-4 h-4 cursor-pointer disabled:cursor-not-allowed disabled:opacity-40" title={catReady(c) ? "전체 선택/해제" : `SharePoint 열 ${c.field} 이(가) 아직 없습니다`} />
-                      <span className="leading-tight">{c.label}</span>
-                    </div>
+                  <th key={c.key} colSpan={2} className="sticky z-20 px-1.5 text-center text-[11.5px] font-medium text-slate-700 leading-[1.25]"
+                    style={{ top: R1, height: R2, background: toneOf(c).soft, borderLeft: divider(c) }} title={catReady(c) ? c.label : `${c.label} — SharePoint 열 ${c.field} 이(가) 아직 없습니다`}>
+                    <span className={catReady(c) ? "" : "text-slate-400"} style={{ display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden", wordBreak: "keep-all" }}>{c.label}</span>
                   </th>
                 ))}
-                <th className="text-center font-medium px-2 py-2.5 sticky top-7 z-20 bg-slate-50 border-b border-slate-200 align-bottom">삭제</th>
+              </tr>
+              <tr>
+                {MK_CATEGORIES.map((c) => {
+                  const t = toneOf(c); const ok = catReady(c);
+                  const head = (mode) => {
+                    const isEdit = mode === "edit";
+                    const lab = <span className="text-[10px] font-semibold tracking-wide leading-none" style={{ color: isEdit ? t.main : "#64748B" }}>{isEdit ? "편집" : "보기"}</span>;
+                    if (isEdit && !hasEditCol(c)) return <div className="flex flex-col items-center gap-1.5"><span className="text-[10px] leading-none text-slate-300">편집</span><span className="text-slate-300 text-xs leading-none" title="조회만 하는 화면 — 편집 칸 없음">—</span></div>;
+                    if (readOnly) return <div className="flex flex-col items-center gap-1.5">{lab}<span className="h-3.5" /></div>;
+                    const dis = !ok || (isEdit && !viewOnlyReady);
+                    return (
+                      <label className={`flex flex-col items-center gap-1.5 ${dis ? "" : "cursor-pointer"}`}>
+                        {lab}
+                        <input type="checkbox" checked={allOnFor(c, mode)} disabled={dis} onChange={() => toggleAllFor(c, mode)}
+                          className="w-3.5 h-3.5 cursor-pointer disabled:cursor-not-allowed disabled:opacity-40" style={{ accentColor: t.main }}
+                          title={!ok ? `SharePoint 열 ${c.field} 이(가) 아직 없습니다` : isEdit && !viewOnlyReady ? "ViewOnly 열이 없어 편집은 보기와 함께 움직입니다" : `${c.label} ${isEdit ? "편집" : "보기"} — 보이는 사용자 전체 선택 / 해제`} />
+                      </label>
+                    );
+                  };
+                  return (
+                    <React.Fragment key={c.key}>
+                      <th className="sticky z-20 px-0 pt-2 pb-2 border-b border-slate-200 font-normal" style={{ top: R1 + R2, background: t.soft, borderLeft: divider(c) }}>{head("view")}</th>
+                      <th className="sticky z-20 px-0 pt-2 pb-2 border-b border-slate-200 font-normal" style={{ top: R1 + R2, background: t.soft }}>{head("edit")}</th>
+                    </React.Fragment>
+                  );
+                })}
               </tr>
             </thead>
             <tbody>
               {ordered.map((p) => {
-                const adminCat = MK_CATEGORIES.find((c) => c.key === "admins");
-                const hasFullAdminAccess = effectiveChecked(p, adminCat);
-                const hasAnyAccess = MK_CATEGORIES.some((c) => effectiveChecked(p, c));
+                const adminLv = effectiveLevel(p, adminCat);
+                const hasAnyAccess = MK_CATEGORIES.some((c) => effectiveLevel(p, c) > 0);
                 const rowDirty = !!overrides[p.email];
-                const bg = rowDirty ? "bg-amber-50" : "bg-white";
+                const isSel = selected.has(p.email) && !readOnly;
+                const rowBg = rowDirty ? "#FFFBEB" : isSel ? "#F2F8F8" : "#FFFFFF";
                 return (
-                  <tr key={p.email} className={`border-t border-slate-100 hover:bg-slate-50 ${rowDirty ? "bg-amber-50/60" : ""} ${selected.has(p.email) ? "outline outline-1 -outline-offset-1 outline-[#2F7B7A]/30" : ""}`}>
-                    <td className={`px-4 py-1.5 sticky left-0 z-10 ${selected.has(p.email) && !rowDirty ? "bg-[#F2F8F8]" : bg}`}>
+                  <tr key={p.email} className={`group/row ${isSel ? "outline outline-1 -outline-offset-1 outline-[#2F7B7A]/30" : ""}`} style={{ background: rowBg }}>
+                    <td className="px-3 md:px-4 py-1.5 sticky left-0 z-10 border-t border-slate-100" style={{ background: rowBg, boxShadow: "inset -1px 0 0 #E2E8F0" }}>
                       <div className="flex items-center gap-2 min-w-0">
-                        <input type="checkbox" checked={selected.has(p.email)} onChange={() => toggleSel(p.email)} className="w-4 h-4 cursor-pointer shrink-0 mr-0.5" title="선택(일괄 권한 · 일괄 삭제)" />
-                        <div className="min-w-0 truncate text-[13px] leading-6" title={`${p.name} (${p.email}${p.dept ? ` · ${p.dept}` : ""})`}>
-                          <span className={`font-medium ${hasAnyAccess ? "text-slate-800" : "text-slate-500"}`}>{p.name}</span>{" "}
-                          <span className="text-xs text-slate-400">{p.email}{p.dept ? ` · ${p.dept}` : ""}</span>
+                        {!readOnly && <input type="checkbox" checked={selected.has(p.email)} onChange={() => toggleSel(p.email)} className="w-4 h-4 cursor-pointer shrink-0" style={{ accentColor: BRAND.accent }} title="선택(일괄 권한 · 일괄 삭제)" />}
+                        <div className="min-w-0 flex-1" title={`${p.name} (${p.email}${p.dept ? ` · ${p.dept}` : ""})`}>
+                          <div className="flex items-center gap-1.5 min-w-0">
+                            <span className={`truncate text-[13px] font-medium leading-5 ${hasAnyAccess ? "text-slate-800" : "text-slate-500"}`} style={{ minWidth: "3.5em" }}>{p.name}</span>
+                            {adminLv === 2
+                              ? <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded-full leading-none font-medium" style={{ background: "#ECE7F6", color: "#6A4BA6" }}>관리자</span>
+                              : adminLv === 1 ? <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded-full leading-none font-medium" style={{ background: "#F5F3FC", color: "#7C6AA8" }} title="「카테고리 접근 권한」 보기만">{narrow ? "관리자·보기" : "관리자 · 보기"}</span>
+                              : hasAnyAccess && !narrow && <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-500 leading-none">로그인 가능</span>}
+                            {rowDirty && (narrow
+                              ? <span className="shrink-0 w-2 h-2 rounded-full bg-amber-400" title="반영 전 변경" aria-label="변경" />
+                              : <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 leading-none">변경</span>)}
+                          </div>
+                          <div className="flex items-center gap-1.5 min-w-0">
+                            <span className="truncate text-[11.5px] text-slate-400 leading-4">{p.email}{p.dept ? ` · ${p.dept}` : ""}</span>
+                            {p.missing && <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded-full bg-red-50 text-red-600 leading-none font-medium" title="직원 명부(employee_search.xlsx)에 없는 계정 — 퇴사 · 이동 여부 확인 후 삭제">명부 없음</span>}
+                            {p.altEmail && <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded-full bg-amber-50 text-amber-700 leading-none font-medium" title={`직원 명부에는 ${p.altEmail} 로 있음 — 같은 사람이면 이 메일로 다시 추가하고 지금 행은 삭제`}>메일 다름 · {p.altEmail}</span>}
+                            {justAdded.has(p.email) && <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 leading-none font-medium">새로 추가</span>}
+                          </div>
                         </div>
-                        {hasFullAdminAccess
-                          ? <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded-full leading-none font-medium" style={{ background: BRAND.accentSoft, color: BRAND.accent }}>관리자</span>
-                          : hasAnyAccess && <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-500 leading-none">로그인 가능</span>}
-                        {p.missing && <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded-full bg-red-50 text-red-600 leading-none font-medium" title="직원 명부(employee_search.xlsx)에 없는 계정 — 퇴사 · 이동 여부 확인 후 삭제">명부 없음</span>}
-                        {p.altEmail && <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded-full bg-amber-50 text-amber-700 leading-none font-medium" title={`직원 명부에는 ${p.altEmail} 로 있음 — 같은 사람이면 이 메일로 다시 추가하고 지금 행은 삭제`}>메일 다름 · {p.altEmail}</span>}
-                        {justAdded.has(p.email) && <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 leading-none font-medium">새로 추가</span>}
-                        {rowDirty && <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 leading-none">변경</span>}
                       </div>
                     </td>
-                    {MK_CATEGORIES.map((c) => (
-                      <td key={c.key} className="text-center px-2 py-1.5">
-                        <input type="checkbox" checked={effectiveChecked(p, c)} disabled={!catReady(c)}
-                          onChange={() => toggleLocal(p, c)} className="w-4 h-4 cursor-pointer disabled:cursor-not-allowed disabled:opacity-40"
-                          title={catReady(c) ? undefined : `SharePoint 열 ${c.field} 이(가) 아직 없습니다 — ${(MK_CATEGORIES.find((x) => x.field === c.inherit) || {}).label || ""} 권한을 따름`} />
+                    {MK_CATEGORIES.map((c) => {
+                      const t = toneOf(c); const lv = effectiveLevel(p, c); const ok = catReady(c);
+                      const changed = !!(overrides[p.email] && c.key in overrides[p.email]);
+                      const bg = changed ? "#FEF3C7" : rowDirty || isSel ? undefined : t.tint;
+                      const tip = ok ? undefined : `SharePoint 열 ${c.field} 이(가) 아직 없습니다 — ${(MK_CATEGORIES.find((x) => x.field === c.inherit) || {}).label || ""} 권한을 따름`;
+                      return (
+                        <React.Fragment key={c.key}>
+                          <td className="text-center py-1.5 border-t border-slate-100" style={{ borderLeft: divider(c, true), background: bg }}>
+                            {readOnly ? <MkLvMark on={lv > 0} color={t.main} />
+                              : <input type="checkbox" checked={lv > 0} disabled={!ok} onChange={() => toggleView(p, c)} aria-label={`${p.name} ${c.label} 보기`}
+                                  className="w-4 h-4 align-middle cursor-pointer disabled:cursor-not-allowed disabled:opacity-40" style={{ accentColor: t.main }} title={tip} />}
+                          </td>
+                          <td className="text-center py-1.5 border-t border-slate-100" style={{ background: bg }}>
+                            {!hasEditCol(c) ? <span className="text-slate-300 text-xs select-none" title="조회만 하는 화면 — 편집 칸 없음">—</span>
+                              : readOnly ? <MkLvMark on={lv === 2} color={t.main} />
+                              : <input type="checkbox" checked={lv === 2} disabled={!ok || !viewOnlyReady} onChange={() => toggleEdit(p, c)} aria-label={`${p.name} ${c.label} 편집`}
+                                  className="w-4 h-4 align-middle cursor-pointer disabled:cursor-not-allowed disabled:opacity-40" style={{ accentColor: t.main }}
+                                  title={tip || (!viewOnlyReady ? "ViewOnly 열이 없어 편집은 보기와 함께 움직입니다" : undefined)} />}
+                          </td>
+                        </React.Fragment>
+                      );
+                    })}
+                    {!readOnly && (
+                      <td className="text-center px-2 py-1.5 border-t border-slate-100" style={{ borderLeft: "1px solid #EEF1F4" }}>
+                        <button onClick={() => removeUser(p)} disabled={saving} title="목록에서 삭제(퇴사 · 이동 등) — 활동 이력에 남습니다"
+                          className="w-7 h-7 inline-flex items-center justify-center rounded-lg text-slate-300 hover:text-red-600 hover:bg-red-50 disabled:opacity-40"><Trash2 size={14} /></button>
                       </td>
-                    ))}
-                    <td className="text-center px-2 py-1.5">
-                      <button onClick={() => removeUser(p)} disabled={saving} title="목록에서 삭제(퇴사 · 이동 등) — 활동 이력에 남습니다"
-                        className="w-7 h-7 inline-flex items-center justify-center rounded-lg text-slate-300 hover:text-red-600 hover:bg-red-50 disabled:opacity-40"><Trash2 size={14} /></button>
-                    </td>
+                    )}
                   </tr>
                 );
               })}
               {!filtered.length && (
-                <tr><td colSpan={MK_CATEGORIES.length + 2} className="text-center text-slate-400 py-10">{merged.length ? "조회 결과가 없습니다." : "등록된 사용자가 없습니다 — 위 「사용자 추가」로 등록해 주세요."}</td></tr>
+                <tr><td colSpan={MK_CATEGORIES.length * 2 + (readOnly ? 1 : 2)} className="text-center text-slate-400 py-10 border-t border-slate-100">{merged.length ? "조회 결과가 없습니다." : readOnly ? "등록된 사용자가 없습니다." : "등록된 사용자가 없습니다 — 위 「사용자 추가」로 등록해 주세요."}</td></tr>
               )}
             </tbody>
           </table>
@@ -3017,7 +3237,7 @@ function CategoryAccessTab({ admins, categoryAccess, reload }) {
 
       {saving && <BlockingOverlay message="저장하고 있습니다..." />}
 
-      {finder && (
+      {finder && !readOnly && (
         <Modal title="명부에만 있는 직원 — 찾아서 추가" onClose={() => setFinder(false)} wide>
           <p className="text-xs text-slate-500 -mt-1 mb-3">직원 명부(employee_search.xlsx)에는 있지만 아직 등록되지 않은 {notRegistered.length}명입니다. 체크해서 한 번에 추가하면 권한 없이 등록되고, 표 맨 위에 선택된 상태로 나타나 바로 「권한 부여」를 할 수 있습니다.</p>
           <div className="flex items-center gap-2 mb-2">
@@ -3155,6 +3375,14 @@ function App({ userEmail, userName }) {
     const cat = MK_CATEGORIES.find((c) => c.key === catKey);
     return mkCatValue(myAccessRow, cat) !== false;   // 비어 있으면 허용(기존 규칙) · 새 칸은 이어받을 열 값을 따른다
   }
+  // 편집 권한(10-11 · mkqr-viewedit) — 보기가 있고 ViewOnly 에 그 화면이 없을 때. 권한 목록을 못 읽었으면 아무것도 편집할 수 없다(fail-closed).
+  // 조회만 하는 화면(Overview · 활동 이력)은 편집이 없다. 처음 상태(아무에게도 권한 없음)는 첫 관리자 지정을 위해 지금처럼 허용.
+  function canEdit(catKey) {
+    if (!accessLoaded || !catKey || MK_VIEW_NATURE.has(catKey)) return false;
+    if (!myAccessRow) return !anyoneHasAccess;
+    if (!canAccess(catKey)) return false;
+    return !mkIsViewOnly(mkViewOnlySet(myAccessRow), catKey);
+  }
 
   // 상단 바 표시(ICS 와 같은 2줄) — 이름은 「이준순 스타트럭코리아 IT(Jimmy Lee)」 꼴이면 괄호 안 영문만, 없으면 이름 · 메일 순
   const shortName = (() => { const m = /\(([^()]+)\)\s*$/.exec(userName || ""); return (m ? m[1] : userName || userEmail || "").trim(); })();
@@ -3185,8 +3413,14 @@ function App({ userEmail, userName }) {
     { id: "categoryAccess", label: "카테고리 접근 권한", icon: KeyRound, cat: "admins" },
     { id: "activityLog", label: "활동 이력", icon: History, cat: "logs" },
   ];
-  const nav = [...allNav, ...marketingNav, ...hrgaNav, ...adminNav]; // 항상 전체 표시 — 권한 없는 항목은 숨기지 않고 흐릿하게 비활성화만 함
+  const nav = [...allNav, ...marketingNav, ...hrgaNav, ...adminNav];
   const accessibleNav = nav.filter((n) => canAccess(n.cat));
+  // 사이드바에는 「보기」 권한이 있는 메뉴만(10-11 · mkqr-viewedit — 예전엔 권한 없는 항목도 흐릿하게 보였다). 빈 묶음은 이름째 숨긴다.
+  const navGroups = [["MKQR OVERVIEW", allNav], ["Marketing 전용", marketingNav], ["HR · GA 전용", hrgaNav], ["관리자 전용", adminNav]]
+    .map(([label, items]) => [label, items.filter((n) => canAccess(n.cat))]).filter(([, items]) => items.length);
+  // 쓰기 잠금 — 지금 화면에 편집 권한이 있고, 그 화면이 쓰는 목록일 때만 저장 요청을 보낸다
+  const tabCat = (nav.find((n) => n.id === tab) || {}).cat;
+  _mkEditGate = (target) => (MK_WRITE_KEYS[target] || []).includes(tabCat) && canEdit(tabCat);
 
   // 사이드바 접기(10-09 · mkqr-side) — 상단 ←| 단추로 아이콘만 남은 좁은 막대(72px)로 접고 |→ 로 다시 편다.
   // 선택은 이 브라우저에 기억한다. 기억된 값이 없으면 좁은 창(1100px 미만)에서만 접힌 채로 시작.
@@ -3255,7 +3489,7 @@ function App({ userEmail, userName }) {
           </div>
         )}
         <nav className="mk-side-nav flex-1 px-3 py-4 overflow-y-auto overflow-x-hidden" onScroll={() => setSideTip(null)}>
-          {[["MKQR OVERVIEW", allNav], ["Marketing 전용", marketingNav], ["HR · GA 전용", hrgaNav], ["관리자 전용", adminNav]].map(([label, items], gi) => (
+          {navGroups.map(([label, items], gi) => (
             <div key={label} className="mb-4">
               {railCollapsed
                 ? (gi > 0 && <div className="mx-2 mb-3 border-t border-white/10" />)
@@ -3374,9 +3608,10 @@ function App({ userEmail, userName }) {
             checkins: [ListChecks, "캠페인 센터 방문 인증 기록을 조회하고, 확인이 필요한 건을 승인 처리합니다"],
             agentCheckins: [ListChecks, "영업직원 명함(Agent) QR 스캔 기록을 조회합니다"],
             activityLog: [History, "권한 부여 · 센터 · Agent · 체크인 처리 이력을 날짜별로 조회합니다 (기본 최근 3일)"],
-            categoryAccess: [KeyRound, "등록된 사용자별 화면 접근 권한을 체크박스로 부여 · 변경합니다. 사용자 추가 · 삭제와 「반영」 내용은 활동 이력에 남습니다."],
+            categoryAccess: [KeyRound, "등록된 사용자별로 화면마다 「보기」 · 「편집」 권한을 부여 · 변경합니다. 사용자 추가 · 삭제와 「반영」 내용은 활동 이력에 남습니다."],
           }[tab] || [LayoutDashboard, ""];
-          return <PageHeader icon={meta[0]} title={nav.find((n) => n.id === tab)?.label} subtitle={meta[1]} />;
+          const viewOnlyHere = hasLoadedOnce && tabCat && !MK_VIEW_NATURE.has(tabCat) && canAccess(tabCat) && !canEdit(tabCat);
+          return <PageHeader icon={meta[0]} title={nav.find((n) => n.id === tab)?.label} subtitle={meta[1]} inline={viewOnlyHere ? <MkViewOnlyPill /> : null} />;
         })()}
         {!hasLoadedOnce ? <div className="text-slate-400 text-sm">불러오는 중...</div> : !canAccess(nav.find((n) => n.id === tab)?.cat) ? (
           <div className="bg-white rounded-xl border p-10 text-center">
@@ -3388,14 +3623,14 @@ function App({ userEmail, userName }) {
             {canAccess("admins") && ["overview", "checkins", "agentCheckins"].includes(tab) && <CheckinStorageNotice />}
             {tab === "overview" && <OverviewTab centers={centers} agents={agents} agentsError={agentsError} checkins={checkins} admins={admins} setTab={setTab} introText={uiContent.overviewIntro} canAccess={canAccess}
               rangeLabel={checkinRange.mode === "custom" && checkinRange.from && checkinRange.to ? `${checkinRange.from.slice(5)}~${checkinRange.to.slice(5)}` : `최근 ${checkinRange.days || 7}일`} />}
-            {tab === "centers" && <CentersTab centers={centers} reload={reload} onCreated={handleCenterCreated} />}
-            {tab === "qr" && <QrTab items={centers} kind="center" highlightId={highlightId} />}
-            {tab === "agents" && <AgentsTab agents={agents} agentsError={agentsError} reload={reload} onCreated={handleAgentCreated} />}
-            {tab === "agentQr" && (agentsError ? <AgentListMissing error={agentsError} /> : <QrTab items={agents} kind="agent" highlightId={agentHighlightId} />)}
-            {tab === "checkins" && <CheckInsTab key="center" kind="center" checkins={checkins} reload={reload} checkinRange={checkinRange} onRangeChange={changeCheckinRange} verifyRules={uiContent.verifyRules} />}
-            {tab === "agentCheckins" && <CheckInsTab key="agent" kind="agent" checkins={checkins} reload={reload} checkinRange={checkinRange} onRangeChange={changeCheckinRange} />}
+            {tab === "centers" && <CentersTab centers={centers} reload={reload} onCreated={handleCenterCreated} readOnly={!canEdit("centers")} />}
+            {tab === "qr" && <QrTab items={centers} kind="center" highlightId={highlightId} readOnly={!canEdit("qr")} />}
+            {tab === "agents" && <AgentsTab agents={agents} agentsError={agentsError} reload={reload} onCreated={handleAgentCreated} readOnly={!canEdit("agents")} />}
+            {tab === "agentQr" && (agentsError ? <AgentListMissing error={agentsError} /> : <QrTab items={agents} kind="agent" highlightId={agentHighlightId} readOnly={!canEdit("agentQr")} />)}
+            {tab === "checkins" && <CheckInsTab key="center" kind="center" checkins={checkins} reload={reload} checkinRange={checkinRange} onRangeChange={changeCheckinRange} verifyRules={uiContent.verifyRules} readOnly={!canEdit("checkins")} />}
+            {tab === "agentCheckins" && <CheckInsTab key="agent" kind="agent" checkins={checkins} reload={reload} checkinRange={checkinRange} onRangeChange={changeCheckinRange} readOnly={!canEdit("agentCheckins")} />}
             {tab === "activityLog" && <ActivityLogTab />}
-            {tab === "categoryAccess" && <CategoryAccessTab admins={admins} categoryAccess={categoryAccess} reload={reload} />}
+            {tab === "categoryAccess" && <CategoryAccessTab admins={admins} categoryAccess={categoryAccess} reload={reload} readOnly={!canEdit("admins")} />}
           </>
         )}
         <div className="text-center mt-10 pt-5 border-t border-slate-200 text-[11px] text-slate-400 leading-relaxed">
