@@ -27,6 +27,9 @@
   html, body { margin: 0; padding: 0; height: 100%; background: #F5F6F8; font-family: 'Segoe UI', sans-serif; }
   body .font-mono { font-family: 'Segoe UI', sans-serif; font-variant-numeric: tabular-nums; letter-spacing: .01em; }
   #root { height: 100%; }
+  /* QR 카드의 화면용 캔버스(10-11 · mkqr-qrfit) — qrcode 가 넣는 고정 180px 대신 카드 내용 폭에 맞춘 정사각형, 가운데 정렬.
+     카드 테두리에서 좌우 여백 = p-4(16px) + 테두리 1px 로 같다. 인쇄용 PNG(600px)와는 무관. */
+  canvas.mk-qr-canvas { display: block; width: 100% !important; height: auto !important; max-width: 240px; aspect-ratio: 1 / 1; margin: 0 auto; }
   #loading { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
     font-family: 'Segoe UI', sans-serif; color: #64748B; font-size: 14px; }
   #login-screen{display:flex;align-items:center;justify-content:center;min-height:100vh;background:linear-gradient(145deg,#0f2744 0%,#101B34 100%);font-family:'Segoe UI',sans-serif}
@@ -1315,7 +1318,7 @@ function QrTab({ items, kind = "center", highlightId }) {
     pageItems.forEach((c) => {
       const el = canvasRefs.current[c.id];
       if (!el || !c.QrToken) return;
-      QRCode.toCanvas(el, qrUrl(c), { width: 180, margin: 1, color: { dark: BRAND.navy, light: "#ffffff" } });
+      QRCode.toCanvas(el, qrUrl(c), { width: 360, margin: 1, color: { dark: BRAND.navy, light: "#ffffff" } });
     });
   }, [items, checkinBaseUrl, pageItems]);
 
@@ -1325,7 +1328,7 @@ function QrTab({ items, kind = "center", highlightId }) {
     }
   }, [highlightId, items]);
 
-  // PNG 한 장 — 화면의 180px 캔버스 대신 인쇄용 크기(600px)로 새로 만든다(명함 · 현수막 인쇄 시 흐려지지 않게, 10-08)
+  // PNG 한 장 — 화면 표시용 캔버스 대신 인쇄용 크기(600px)로 새로 만든다(명함 · 현수막 인쇄 시 흐려지지 않게, 10-08)
   async function download(c) {
     if (!c.QrToken) return;
     try {
@@ -1395,7 +1398,7 @@ function QrTab({ items, kind = "center", highlightId }) {
             style={c.id === highlightId ? { borderColor: BRAND.accent, boxShadow: `0 0 0 2px ${BRAND.accent}` } : {}}>
             {c.id === highlightId && <div className="text-[10px] font-semibold mb-1" style={{ color: BRAND.accent }}>방금 등록됨</div>}
             <div className="font-medium text-sm text-slate-800 mb-2 truncate" title={c.Title}>{c.Title}</div>
-            <canvas ref={(el) => (canvasRefs.current[c.id] = el)} className="mx-auto" />
+            <canvas ref={(el) => (canvasRefs.current[c.id] = el)} className="mk-qr-canvas" />
             <div className="text-xs text-slate-400 mt-2 break-all">토큰: {c.QrToken}</div>
             <button onClick={() => download(c)} className="mt-2 w-full flex items-center justify-center gap-1 text-xs px-2 py-1.5 border border-slate-300 rounded-lg hover:bg-slate-50">
               <Download size={13} /> PNG 다운로드
