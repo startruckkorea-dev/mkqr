@@ -542,6 +542,9 @@ function mkLog(category, verb, target, detail) {
     } catch (e) { console.warn("[MKQR 이력] 기록 실패(원래 기능에는 영향 없음):", e.message); }
   })();
 }
+// 10-15 기록에 남기는 QR 토큰은 앞 6자리 + 길이만
+function mkMaskToken(t) { const s = String(t || ""); return s ? `${s.slice(0, 6)}…(${s.length}자)` : ""; }
+function mkErrText(e) { return String((e && e.message) || e || "").replace(/\s+/g, " ").slice(0, 80); }
 // 바뀐 칸만 { 화면 이름: [이전, 이후] } — labels: { 열: 화면 이름 }
 function mkDiff(before, after, labels) {
   const out = {};
@@ -931,7 +934,7 @@ function CentersTab({ centers, reload, onCreated, readOnly }) {
     if (!confirm(`"${c.Title}" 센터를 삭제할까요? (관련 QR도 더 이상 사용할 수 없게 됩니다)`)) return;
     try {
       await mkDeleteItem(MK_LISTS.centers, c.id);
-      mkLog("센터", "삭제", c.Title, { id: c.id, info: { 지역: c.Region, 주소: c.AddressKr, "QR 토큰": c.QrToken } });
+      mkLog("센터", "삭제", c.Title, { id: c.id, info: { 지역: c.Region, 주소: c.AddressKr, "QR 토큰": mkMaskToken(c.QrToken) } });
       await reload();
     } catch (e) { alert(e.message); }
   }
@@ -971,7 +974,9 @@ function CentersTab({ centers, reload, onCreated, readOnly }) {
     ws["!cols"] = [{ wch: 16 }, { wch: 16 }, { wch: 18 }, { wch: 20 }, { wch: 36 }, { wch: 24 }, { wch: 16 }, { wch: 16 }];
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "센터목록");
-    XLSX.writeFile(wb, "MKQR_센터등록_양식.xlsx");
+    try { XLSX.writeFile(wb, "MKQR_센터등록_양식.xlsx"); }
+    catch (e) { mkLog("센터", "양식 다운로드 실패", "센터 등록 양식", { info: { 오류: mkErrText(e) } }); throw e; }
+    mkLog("센터", "양식 다운로드", "센터 등록 양식", {});   // 10-15
   }
 
   // 엑셀 일괄 가져오기 — 위 템플릿(1행 헤더: 지역/센터명/센터명영문/법인명/주소/주소영문/전화번호)을 그대로 파싱
@@ -1407,7 +1412,11 @@ function QrTab({ items, kind = "center", highlightId, readOnly }) {
       link.download = `${filePrefix}${c.Title}.png`;
       link.href = dataUrl;
       link.click();
-    } catch (e) { alert("다운로드 실패: " + e.message); }
+      mkLog(isAgent ? "Agent" : "센터", "QR PNG 다운로드", c.Title, { id: c.id, info: { 크기: "600px" } });   // 10-15
+    } catch (e) {
+      mkLog(isAgent ? "Agent" : "센터", "QR PNG 다운로드 실패", c.Title, { id: c.id, info: { 오류: mkErrText(e) } });
+      alert("다운로드 실패: " + e.message);
+    }
   }
 
   // 화면에 안 보이는(다른 페이지) 항목도 포함해서 검색 결과 전체를 zip으로 묶어 한 번에 다운로드.
@@ -1415,10 +1424,13 @@ function QrTab({ items, kind = "center", highlightId, readOnly }) {
   async function downloadAll() {
     if (!filtered.length) return;
     setDownloadingAll(true);
+    const zipNames = [];
+    const zipInfo = () => ({ 건수: zipNames.length, 검색어: q.trim(), 대상: zipNames.slice(0, 20).join(", ") + (zipNames.length > 20 ? ` 외 ${zipNames.length - 20}개` : "") });
     try {
       const zip = new JSZip();
       for (const c of filtered) {
         if (!c.QrToken) continue;
+        zipNames.push(c.Title);   // 10-15 기록용
         const dataUrl = await QRCode.toDataURL(qrUrl(c), { width: 600, margin: 1, color: { dark: BRAND.navy, light: "#ffffff" } });
         zip.file(`${filePrefix}${c.Title}.png`, dataUrl.split(",")[1], { base64: true });
       }
@@ -1427,7 +1439,11 @@ function QrTab({ items, kind = "center", highlightId, readOnly }) {
       link.href = URL.createObjectURL(blob);
       link.download = `${isAgent ? "MKQR_Agent_QR코드_전체_" : "MKQR_QR코드_전체_"}${new Date(new Date().getTime()+9*3600*1000).toISOString().slice(0, 10)}.zip`;
       link.click();
-    } catch (e) { alert("전체 다운로드 실패: " + e.message); } finally { setDownloadingAll(false); }
+      mkLog(isAgent ? "Agent" : "센터", "QR ZIP 다운로드", `QR ${zipNames.length}개`, { info: zipInfo() });   // 10-15
+    } catch (e) {
+      mkLog(isAgent ? "Agent" : "센터", "QR ZIP 다운로드 실패", `QR ${zipNames.length}개`, { info: { ...zipInfo(), 오류: mkErrText(e) } });
+      alert("전체 다운로드 실패: " + e.message);
+    } finally { setDownloadingAll(false); }
   }
 
   return (
@@ -1568,7 +1584,7 @@ function AgentsTab({ agents, agentsError, reload, onCreated, readOnly }) {
     if (!confirm(`"${a.Title}" Agent 를 삭제할까요? (이미 인쇄된 명함의 QR 도 더 이상 사용할 수 없게 됩니다)`)) return;
     try {
       await mkDeleteItem(MK_LISTS.agents, a.id);
-      mkLog("Agent", "삭제", a.Title, { id: a.id, info: { "딜러사 법인명": a.CorpNameKr, "이동 링크": a.RedirectUrl, "QR 토큰": a.QrToken } });
+      mkLog("Agent", "삭제", a.Title, { id: a.id, info: { "딜러사 법인명": a.CorpNameKr, "이동 링크": a.RedirectUrl, "QR 토큰": mkMaskToken(a.QrToken) } });
       await reload();
     } catch (e) { alert(e.message); }
   }
@@ -2028,7 +2044,7 @@ function CheckInsTab({ kind = "center", checkins, reload, checkinRange, onRangeC
 /* ------------------------------------------------------------------ */
 /* 활동 이력 탭(관리자 전용, 10-09 · mkqr-log) — Logging_data/MKQR/날짜/*.json 을 기간으로 읽어 표로   */
 /* ------------------------------------------------------------------ */
-const MK_LOG_CATS = ["권한", "센터", "Agent", "센터 체크인", "Agent 체크인"];
+const MK_LOG_CATS = ["권한", "센터", "Agent", "센터 체크인", "Agent 체크인", "활동 이력"];   // 10-15 활동 이력 Excel 내보내기
 const MK_LOG_MAX_DAYS = 31;
 function mkDayStr(d) { return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}`; }
 function mkDayAdd(s, n) { const d = new Date(s + "T00:00:00Z"); d.setUTCDate(d.getUTCDate() + n); return mkDayStr(d); }
@@ -2145,7 +2161,10 @@ function ActivityLogTab() {
     const ws = XLSX.utils.json_to_sheet(data);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "활동이력");
-    XLSX.writeFile(wb, `MKQR_활동이력_${from}_${to}.xlsx`);
+    const info = { 건수: data.length, 구분: cat, 검색어: q.trim() };
+    try { XLSX.writeFile(wb, `MKQR_활동이력_${from}_${to}.xlsx`); }
+    catch (e) { mkLog("활동 이력", "Excel 내보내기 실패", `${from} ~ ${to}`, { info: { ...info, 오류: mkErrText(e) } }); throw e; }
+    mkLog("활동 이력", "Excel 내보내기", `${from} ~ ${to}`, { info });   // 10-15
   }
 
   const ctrl = "h-9 border border-slate-300 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-[#2F7B7A]/40";
