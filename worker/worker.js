@@ -6,7 +6,7 @@
  * Graph API에 접근한다. client secret은 반드시 이 Worker(서버)에만 보관하고
  * 절대 GitHub Pages(정적 HTML)에 넣지 않는다.
  *
- * 필요한 사전 준비 (Jimmy 작업):
+ * 필요한 사전 준비 (IT 담당자 작업):
  * 1) Entra ID(Azure AD) 새 App 등록 (기존 APS-MasterData-App과 별도로 만드는 걸 권장 —
  *    이 앱은 "앱 자격증명"으로 SharePoint에 쓰기 때문에 사용자 위임 앱과 분리하는 게 안전함)
  * 2) API 권한 → Application permissions → Sites.Selected 추가 → 관리자 동의
