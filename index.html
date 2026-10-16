@@ -129,7 +129,7 @@ const GRAPH = "https://graph.microsoft.com/v1.0";
 // 공개 체크인 페이지(checkin.html)가 데이터를 쓸 때 거치는 Worker 주소.
 // mkqr 은 로그인 없는 외부 방문자가 스캔하므로, 관리자 화면(이 파일, MSAL 로그인)과
 // 달리 체크인 기록 저장은 Cloudflare Worker가 앱 자격증명으로 대신 처리한다.
-// (Jimmy 개인 RCD 프로젝트와 동일한 패턴 — worker/ 폴더의 README 참고, 배포 후 이 값을 실제 Worker URL로 교체)
+// (IT 담당자 개인 RCD 프로젝트와 동일한 패턴 — worker/ 폴더의 README 참고, 배포 후 이 값을 실제 Worker URL로 교체)
 const CHECKIN_API_BASE = "https://mkqr-worker.mkqr.workers.dev";
 
 const msalApp = new msal.PublicClientApplication(MSAL_CONFIG);
@@ -157,7 +157,7 @@ async function apiGet(path, token) {
  * ------------------------------------------------------------------ */
 const MK_LISTS = { centers: "mkqr_Centers", agents: "mkqr_Agents", staff: "mkqr_Staff", checkins: "mkqr_CheckIns", categoryAccess: "mkqr_CategoryAccess" };   // mkqr_Agents: Agent(딜러사) 명함 QR(10-08 · mkqr-agent)
 // mkqr_Admins 목록은 더 이상 안 씁니다 — 로그인 허용 여부는 mkqr_CategoryAccess 하나로 통제합니다 (카테고리가 하나라도
-// true면 로그인 가능). Jimmy님이 SharePoint에서 mkqr_Admins 목록 자체는 이제 지우셔도 됩니다.
+// true면 로그인 가능). IT 담당자가 SharePoint에서 mkqr_Admins 목록 자체는 이제 지우셔도 됩니다.
 
 // 화면 탭(=ICS의 "카테고리")과 그 접근 권한을 저장할 때 쓰는 SharePoint 컬럼명 매핑.
 // mkqr_CategoryAccess 목록: Email(한 줄 텍스트) + Access_* 8개(예/아니요 — Agent 2칸은 10-08, Agent 체크인 기록은 10-09 추가). 특정 사용자의 행 자체가 없거나
@@ -3410,7 +3410,7 @@ function App({ userEmail, userName }) {
     return !mkIsViewOnly(mkViewOnlySet(myAccessRow), catKey);
   }
 
-  // 상단 바 표시(ICS 와 같은 2줄) — 이름은 「이준순 스타트럭코리아 IT(Jimmy Lee)」 꼴이면 괄호 안 영문만, 없으면 이름 · 메일 순
+  // 상단 바 표시(ICS 와 같은 2줄) — 이름은 「홍길동 스타트럭코리아 IT(Gildong Hong)」 꼴이면 괄호 안 영문만, 없으면 이름 · 메일 순
   const shortName = (() => { const m = /\(([^()]+)\)\s*$/.exec(userName || ""); return (m ? m[1] : userName || userEmail || "").trim(); })();
   // 권한 — 볼 수 있는 화면 묶음으로 Viewer(개요만) · Operator(센터 · QR · 체크인 중 하나라도) · Admin(카테고리 접근 권한)
   // 10-09: 메뉴 묶음과 같게 Marketing · HR·GA · Admin, 아무것도 없으면 Viewer(개요만)
