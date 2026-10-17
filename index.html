@@ -104,7 +104,7 @@ import {
   Download, RefreshCw, MapPin, Search, CheckCircle2, AlertTriangle,
   Upload, ExternalLink, Phone, Navigation, LayoutDashboard, ShieldCheck,
   ArrowUpRight, ImagePlus, KeyRound, Mail, XCircle, Settings, ChevronDown, ChevronUp, Store, Contact, History,
-  ArrowLeftToLine, ArrowRightFromLine, Menu, LockKeyhole, Eye, Check,
+  ArrowLeftToLine, ArrowRightFromLine, Menu, LockKeyhole, Eye, Check, LogIn,
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import QRCode from "qrcode";
@@ -561,6 +561,128 @@ function mkLog(category, verb, target, detail) {
     } catch (e) { console.warn("[MKQR 이력] 기록 실패(원래 기능에는 영향 없음):", e.message); }
   })();
 }
+/* ---- 접속 기록(10-17 · mkqr-access) — Training365 접속 기록과 같은 방식 ---------------------------------------
+ * SharePoint 목록 mkqr_AccessLog 에 로그인(권한 확인 통과 · 차단)마다 한 행. 같은 탭에서 새로고침하면 같은 행을 이어 쓴다(sessionStorage).
+ * 활동 신호: 화면이 보이고 사용자가 움직였을 때만 heartbeatMs 마다 LastActivityAt 갱신, 탭을 닫거나 숨길 때도 한 번(keepalive).
+ * 로그아웃: 「로그아웃」 단추에서 LogoutAt · EndType=로그아웃. 로그아웃 없이 idleEndMs 동안 활동이 없으면 화면에서 「세션 종료(추정)」.
+ * 기록은 화면 권한(보기 · 편집 잠금)과 무관하게 남긴다(활동 이력 mkLog 와 같은 예외). 기록 실패는 화면을 막지 않는다(콘솔 경고).
+ * 목록 열(내부 이름): Title(세션 번호) · UserEmail · UserName · Role · Company · LoginAt(날짜 및 시간) · LastActivityAt(날짜 및 시간)
+ *   · LogoutAt(날짜 및 시간) · EndType · Device · UserAgent(여러 줄 텍스트). LoginAt 인덱스를 권장(없어도 전체를 읽어 화면에서 거른다). */
+const MK_ACCESS_LIST = "mkqr_AccessLog";
+const MK_ACCESS_COLUMNS = [["Title", "한 줄 텍스트", "세션 번호"], ["UserEmail", "한 줄 텍스트", "메일"], ["UserName", "한 줄 텍스트", "이름"], ["Role", "한 줄 텍스트", "관리자 · 운영자 · 권한 없음"],
+  ["Company", "한 줄 텍스트", "부서(비워 둠 — 화면에서 직원 명부로 채움)"], ["LoginAt", "날짜 및 시간", "로그인 시각 · 인덱스 권장"], ["LastActivityAt", "날짜 및 시간", "마지막 활동 시각"],
+  ["LogoutAt", "날짜 및 시간", "로그아웃 시각"], ["EndType", "한 줄 텍스트", "로그아웃 · 접근 차단"], ["Device", "한 줄 텍스트", "기기 · 브라우저"], ["UserAgent", "여러 줄 텍스트", "브라우저 원문"]];
+const MK_ACC_TIMING = Object.assign({ heartbeatMs: 5 * 60e3, idleEndMs: 30 * 60e3, tickMs: 30e3 }, (typeof window !== "undefined" && window.MK_ACC_TIMING) || {});
+async function mkAccWrite(method, itemId, fields, opts = {}) {
+  const token = opts.token || await getGraphToken();
+  const listId = await getMkListId(MK_ACCESS_LIST);
+  const url = `${GRAPH}/sites/${_siteId}/lists/${listId}/items` + (itemId ? `/${encodeURIComponent(itemId)}/fields` : "");
+  const res = await fetch(url, { method, keepalive: !!opts.keepalive, headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" }, body: JSON.stringify(itemId ? fields : { fields }) });
+  if (!res.ok) { const d = await res.text().catch(() => ""); throw new Error(`${MK_ACCESS_LIST} ${itemId ? "수정" : "생성"} 실패 (${res.status}): ${d.slice(0, 200)}`); }
+  return res.json().catch(() => ({}));
+}
+const MkSession = {
+  itemId: null, sid: "", lastActivity: 0, lastBeat: 0, timer: null, info: null, token: "", listId: "", starting: null,
+  async start(info) {
+    this.info = info;
+    const now = Date.now();
+    this.lastActivity = now;
+    let sid = "", itemId = "", prevAct = 0, prevUser = "";
+    try { sid = sessionStorage.getItem("mkqr.sid") || ""; itemId = sessionStorage.getItem("mkqr.sessItem") || ""; prevAct = Number(sessionStorage.getItem("mkqr.lastAct") || 0); prevUser = sessionStorage.getItem("mkqr.sessUser") || ""; } catch (e) {}
+    // 같은 탭의 새로고침 — 같은 사람 · 같은 결과(통과/차단)이고 아직 세션이 살아 있으면(idleEndMs 이내) 그 행을 이어 쓴다
+    let resumed = false;
+    try {
+      if (info.role && sid && itemId && prevUser === info.email && prevAct && now - prevAct < MK_ACC_TIMING.idleEndMs) {
+        await mkAccWrite("PATCH", itemId, { LastActivityAt: new Date(now).toISOString() });
+        resumed = true;
+      }
+    } catch (e) { resumed = false; }
+    if (!resumed) {
+      sid = `${new Date(now + 9 * 36e5).toISOString().slice(0, 10).replace(/-/g, "")}-${Math.random().toString(36).slice(2, 10)}`;
+      const iso = new Date(now).toISOString();
+      const fields = { Title: sid, UserEmail: info.email, UserName: info.name, Role: info.role || "권한 없음", LoginAt: iso, LastActivityAt: iso,
+        Device: parseDeviceLabel(navigator.userAgent), UserAgent: String(navigator.userAgent || "").slice(0, 500) };
+      if (!info.role) { fields.EndType = "접근 차단"; fields.LogoutAt = iso; }
+      const row = await mkAccWrite("POST", null, fields);
+      itemId = row.id;
+    }
+    this.sid = sid; this.itemId = info.role ? itemId : null; this.lastBeat = now;   // 차단된 접속은 활동 신호를 보내지 않는다
+    if (info.role) this.persist(); else this.clear();
+    return { resumed, itemId };
+  },
+  // 로그인 기록을 기다리지 않고 시작 — 기록이 늦거나 실패해도 첫 화면은 바로 뜬다(실패는 콘솔 경고만)
+  begin(info) {
+    const p = Promise.resolve().then(() => this.start(info)).catch((e) => { console.warn("[MKQR] 접속 기록 실패:", e && e.message); });
+    this.starting = p;
+    p.then(() => { if (this.starting === p) this.starting = null; });
+    return p;
+  },
+  persist() {
+    try {
+      sessionStorage.setItem("mkqr.sid", this.sid); sessionStorage.setItem("mkqr.sessItem", this.itemId || "");
+      sessionStorage.setItem("mkqr.sessUser", (this.info && this.info.email) || ""); sessionStorage.setItem("mkqr.lastAct", String(this.lastActivity));
+    } catch (e) {}
+  },
+  clear() { try { ["mkqr.sid", "mkqr.sessItem", "mkqr.sessUser", "mkqr.lastAct"].forEach((k) => sessionStorage.removeItem(k)); } catch (e) {} },
+  touch() { this.lastActivity = Date.now(); try { sessionStorage.setItem("mkqr.lastAct", String(this.lastActivity)); } catch (e) {} },
+  async beat(force) {
+    if (!this.itemId) return false;
+    if (!force && (this.lastActivity <= this.lastBeat || Date.now() - this.lastBeat < MK_ACC_TIMING.heartbeatMs)) return false;
+    const at = this.lastActivity;
+    try { await mkAccWrite("PATCH", this.itemId, { LastActivityAt: new Date(at).toISOString() }); this.lastBeat = at; return true; }
+    catch (e) { console.warn("[MKQR] 활동 신호 기록 실패:", e.message); return false; }
+  },
+  // 탭을 닫거나 숨길 때 — 마지막 활동 시각만(로그아웃으로 적지 않는다: 새로고침 · 탭 전환과 구분할 수 없어서)
+  flush() {
+    if (!this.itemId || !this.token || !this.listId || this.lastActivity <= this.lastBeat) return;
+    const at = this.lastActivity;
+    try {
+      fetch(`${GRAPH}/sites/${_siteId}/lists/${this.listId}/items/${encodeURIComponent(this.itemId)}/fields`, {
+        method: "PATCH", keepalive: true, headers: { Authorization: "Bearer " + this.token, "Content-Type": "application/json" }, body: JSON.stringify({ LastActivityAt: new Date(at).toISOString() }),
+      }).catch(() => {});
+      this.lastBeat = at;
+    } catch (e) {}
+  },
+  startTimers() {
+    if (this.timer) return;
+    const act = () => this.touch();
+    ["pointerdown", "keydown", "scroll", "touchstart", "mousemove"].forEach((ev) => window.addEventListener(ev, act, { passive: true, capture: true }));
+    const refresh = () => { getGraphToken().then((t) => { this.token = t; }).catch(() => {}); getMkListId(MK_ACCESS_LIST).then((id) => { this.listId = id; }).catch(() => {}); };
+    refresh();
+    this.timer = setInterval(() => { if (document.visibilityState === "visible") this.beat(false); refresh(); }, MK_ACC_TIMING.tickMs);
+    document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") this.flush(); });
+    window.addEventListener("pagehide", () => this.flush());
+  },
+  async logout() {
+    // 로그인 기록이 아직 진행 중이면 잠깐(3초까지) 기다린다 — 그 행에 로그아웃을 적기 위해
+    if (this.starting) { try { await Promise.race([this.starting, new Promise((ok) => setTimeout(ok, 3000))]); } catch (e) {} }
+    if (this.itemId) {
+      const now = new Date().toISOString();
+      try { await Promise.race([mkAccWrite("PATCH", this.itemId, { LogoutAt: now, LastActivityAt: now, EndType: "로그아웃" }), new Promise((ok) => setTimeout(ok, 3000))]); }
+      catch (e) { console.warn("[MKQR] 로그아웃 기록 실패:", e.message); }
+    }
+    this.clear();
+    if (this.timer) { clearInterval(this.timer); this.timer = null; }
+    this.itemId = null;
+  },
+};
+async function mkLogout() {
+  try { await MkSession.logout(); } catch (e) {}
+  msalApp.logoutRedirect();
+}
+// 접속 상태 — 로그아웃 · 접근 차단 · 세션 종료(추정) · 접속 중
+function mkSessionStatus(r, now = Date.now()) {
+  if (r.EndType === "접근 차단") return { label: "접근 차단", end: r.LogoutAt || r.LoginAt, cls: "bg-red-50 text-red-700" };
+  if (r.LogoutAt) return { label: "로그아웃", end: r.LogoutAt, cls: "bg-emerald-50 text-emerald-700" };
+  const last = Date.parse(r.LastActivityAt || r.LoginAt || 0) || 0;
+  if (now - last > MK_ACC_TIMING.idleEndMs) return { label: "세션 종료(추정)", end: r.LastActivityAt || r.LoginAt, cls: "bg-amber-50 text-amber-700", inferred: true };
+  return { label: "접속 중", end: "", cls: "bg-blue-50 text-blue-700" };
+}
+function mkFmtDuration(ms) { if (!(ms >= 0)) return "-"; if (ms < 60e3) return "1분 미만"; const m = Math.round(ms / 60e3); return m < 60 ? `${m}분` : `${Math.floor(m / 60)}시간 ${m % 60}분`; }
+function mkRoleCls(role) { return role === "관리자" ? "bg-violet-50 text-violet-700" : role === "운영자" ? "bg-teal-50 text-teal-700" : "bg-red-50 text-red-600"; }
+function mkKstDayStartIso(day) { return new Date(Date.parse(day + "T00:00:00Z") - 9 * 36e5).toISOString(); }
+function mkIsMissingList(e) { return /목록을 찾을 수 없습니다/.test(String((e && e.message) || "")); }
+
 // 10-15 기록에 남기는 QR 토큰은 앞 6자리 + 길이만
 function mkMaskToken(t) { const s = String(t || ""); return s ? `${s.slice(0, 6)}…(${s.length}자)` : ""; }
 function mkErrText(e) { return String((e && e.message) || e || "").replace(/\s+/g, " ").slice(0, 80); }
@@ -2063,7 +2185,7 @@ function CheckInsTab({ kind = "center", checkins, reload, checkinRange, onRangeC
 /* ------------------------------------------------------------------ */
 /* 활동 이력 탭(관리자 전용, 10-09 · mkqr-log) — Logging_data/MKQR/날짜/*.json 을 기간으로 읽어 표로   */
 /* ------------------------------------------------------------------ */
-const MK_LOG_CATS = ["권한", "센터", "Agent", "센터 체크인", "Agent 체크인", "활동 이력"];   // 10-15 활동 이력 Excel 내보내기
+const MK_LOG_CATS = ["권한", "센터", "Agent", "센터 체크인", "Agent 체크인", "활동 이력", "접속 기록"];   // 10-15 활동 이력 Excel 내보내기
 const MK_LOG_MAX_DAYS = 31;
 function mkDayStr(d) { return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}`; }
 function mkDayAdd(s, n) { const d = new Date(s + "T00:00:00Z"); d.setUTCDate(d.getUTCDate() + n); return mkDayStr(d); }
@@ -2123,6 +2245,196 @@ async function mkLoadLogs(from, to, onProgress) {
   };
   await Promise.all(Array.from({ length: 6 }, worker));
   return out.sort((a, b) => String(b.timestampKST).localeCompare(String(a.timestampKST)));
+}
+
+// ---- 접속 기록 화면(10-17 · mkqr-access) — Training365 「접속 기록」과 같은 구성 ----------------------------------------
+function AccessLogTab() {
+  const today = mkTodayKst();
+  const [from, setFrom] = useState(mkDayAdd(today, -6));
+  const [to, setTo] = useState(today);
+  const [rows, setRows] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [missing, setMissing] = useState(false);
+  const [roleF, setRoleF] = useState("");
+  const [statusF, setStatusF] = useState("");
+  const [q, setQ] = useState("");
+  const [mode, setMode] = useState("session");
+  const [page, setPage] = useState(1);
+  const [detail, setDetail] = useState(null);
+  const [loaded, setLoaded] = useState("");
+  const [dir, setDir] = useState(null);   // 직원 명부(부서 표시용) — 못 읽으면 부서 칸만 비운다
+  const PAGE_SIZE = 20;
+  useEffect(() => { loadEmployeeDirectory().then((l) => setDir(new Map(l.map((p) => [p.email, p])))).catch(() => setDir(new Map())); }, []);
+  async function load(f = from, t = to) {
+    if (!f || !t || f > t) { alert("조회 기간을 확인해 주세요."); return; }
+    if (mkDayAdd(f, 92) < t) { alert("한 번에 93일까지 조회할 수 있습니다. 기간을 줄여 주세요."); return; }
+    setLoading(true); setError(""); setMissing(false);
+    const fi = mkKstDayStartIso(f), ti = mkKstDayStartIso(mkDayAdd(t, 1));
+    try {
+      let list;
+      try { list = await mkListAll(MK_ACCESS_LIST, `&$filter=${encodeURIComponent(`fields/LoginAt ge '${fi}' and fields/LoginAt lt '${ti}'`)}`); }
+      catch (e) { if (mkIsMissingList(e)) throw e; list = await mkListAll(MK_ACCESS_LIST); }   // LoginAt 인덱스가 없을 때 — 전체를 읽어 화면에서 거른다
+      setRows(list.map((x) => ({ id: x.id, ...x.fields })).filter((r) => r.LoginAt && r.LoginAt >= fi && r.LoginAt < ti).sort((a, b) => String(b.LoginAt).localeCompare(String(a.LoginAt))));
+      setLoaded(`${f} ~ ${t}`); setPage(1);
+    } catch (e) { setMissing(mkIsMissingList(e)); setError(e.message); setRows([]); }
+    setLoading(false);
+  }
+  useEffect(() => { load(); }, []);
+  useEffect(() => { setPage(1); }, [roleF, statusF, q, mode]);
+  const now = Date.now();
+  const deptOf = (email) => { const p = dir && dir.get(String(email || "").toLowerCase()); return (p && p.dept) || ""; };
+  const enrich = (r) => { const st = mkSessionStatus(r, now); const end = st.end ? Date.parse(st.end) : now; return { ...r, Dept: r.Company || deptOf(r.UserEmail), st, dur: (end || now) - (Date.parse(r.LoginAt) || now) }; };
+  const qq = q.trim().toLowerCase();
+  const view = (rows || []).map(enrich)
+    .filter((r) => !roleF || r.Role === roleF).filter((r) => !statusF || r.st.label === statusF)
+    .filter((r) => !qq || [r.UserEmail, r.UserName, r.Dept, r.Device].some((v) => String(v || "").toLowerCase().includes(qq)));
+  const byUser = [...view.reduce((m, r) => {
+    const k = String(r.UserEmail || "").toLowerCase();
+    let o = m.get(k); if (!o) { o = { email: k, name: r.UserName || k, dept: r.Dept, role: r.Role, n: 0, last: null, logouts: 0, inferred: 0, blocked: 0, total: 0 }; m.set(k, o); }
+    o.n++; if (r.st.label !== "접근 차단") o.total += Math.max(0, r.dur);
+    if (r.st.label === "로그아웃") o.logouts++; if (r.st.inferred) o.inferred++; if (r.st.label === "접근 차단") o.blocked++;
+    if (!o.last || r.LoginAt > o.last.LoginAt) { o.last = r; o.role = r.Role; }
+    return m;
+  }, new Map()).values()].sort((a, b) => String(b.last.LoginAt).localeCompare(String(a.last.LoginAt)));
+  const list = mode === "user" ? byUser : view;
+  const totalPages = Math.max(1, Math.ceil(list.length / PAGE_SIZE));
+  const pageSafe = Math.min(page, totalPages);
+  const pageRows = list.slice((pageSafe - 1) * PAGE_SIZE, pageSafe * PAGE_SIZE);
+  const cnt = (l) => view.filter((r) => r.st.label === l).length;
+  function exportExcel() {
+    const data = view.map((r, i) => ({ 번호: view.length - i, "로그인(KST)": fmtDate(r.LoginAt), 이름: r.UserName || "", 메일: r.UserEmail || "", 부서: r.Dept || "", 구분: r.Role || "", 상태: r.st.label,
+      "로그아웃/종료(KST)": r.st.end ? fmtDate(r.st.end) + (r.st.inferred ? " (추정)" : "") : "", "접속 시간": r.st.label === "접근 차단" ? "" : mkFmtDuration(r.dur), "마지막 활동(KST)": fmtDate(r.LastActivityAt), 기기: r.Device || "", 세션: r.Title || "" }));
+    const users = byUser.map((u) => ({ 이름: u.name, 메일: u.email, 부서: u.dept || "", 구분: u.role || "", 접속: u.n, 로그아웃: u.logouts, "세션 종료(추정)": u.inferred, "접근 차단": u.blocked, "마지막 로그인(KST)": fmtDate(u.last.LoginAt), "접속 시간 합": u.n === u.blocked ? "" : mkFmtDuration(u.total) }));
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(data.length ? data : [{ 안내: "조회 결과가 없습니다." }]), "접속기록");
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(users.length ? users : [{ 안내: "조회 결과가 없습니다." }]), "사용자별");
+    const info = { 건수: data.length, 구분: roleF || "전체", 상태: statusF || "전체", 검색어: q.trim() };
+    try { XLSX.writeFile(wb, `MKQR_접속기록_${from}_${to}.xlsx`); }
+    catch (e) { mkLog("접속 기록", "Excel 내보내기 실패", `${from} ~ ${to}`, { info: { ...info, 오류: mkErrText(e) } }); throw e; }
+    mkLog("접속 기록", "Excel 내보내기", `${from} ~ ${to}`, { info });
+  }
+  function preset(days) { const f = days === 1 ? today : mkDayAdd(today, -(days - 1)); setFrom(f); setTo(today); load(f, today); }
+  const ctrl = "h-9 border border-slate-300 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-[#2F7B7A]/40";
+  const btn = "h-9 flex items-center gap-1.5 px-3 border border-slate-300 rounded-lg text-sm text-slate-600 bg-white hover:bg-slate-50 disabled:opacity-50";
+  const td = "px-3 h-8 align-middle overflow-hidden whitespace-nowrap text-ellipsis";
+  const dtShort = (v) => { const t = fmtDate(v); return t && t.length > 5 && t.slice(0, 4) === today.slice(0, 4) ? t.slice(5) : t; };   // 올해면 연도 생략(말풍선에 전체)
+  const curLen = Math.round((new Date(to + "T00:00:00Z") - new Date(from + "T00:00:00Z")) / 864e5) + 1;
+  const Role = ({ role }) => <span className={`text-[11px] px-2 rounded-full font-medium leading-5 inline-block whitespace-nowrap ${mkRoleCls(role)}`}>{role || "-"}</span>;
+  return (
+    <div className="w-full">
+      <div className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 mb-4 text-xs text-slate-500 flex items-start gap-2.5 leading-relaxed">
+        <LogIn size={15} className="text-slate-400 shrink-0 mt-0.5" />
+        <div>로그인(권한 확인 통과 시점)마다 한 줄이 생기고, 「로그아웃」 단추를 누르면 로그아웃 시각이 남습니다. 로그아웃 없이 창을 닫거나 {Math.round(MK_ACC_TIMING.idleEndMs / 60e3)}분 넘게 활동이 없으면 <b className="text-amber-700">세션 종료(추정)</b>로 보고 <b className="text-slate-600">마지막 활동 시각</b>을 종료 시각으로 씁니다(활동 신호 {Math.round(MK_ACC_TIMING.heartbeatMs / 60e3)}분 간격). 권한이 없는 계정의 시도는 <b className="text-red-600">접근 차단</b>으로 남습니다.</div>
+      </div>
+      {missing ? (
+        <div className="bg-white rounded-xl border border-amber-200 shadow-sm p-5" data-testid="access-missing">
+          <div className="text-sm font-semibold text-amber-800 mb-1">접속 기록 목록(SharePoint)이 아직 없습니다</div>
+          <div className="text-xs text-slate-500 mb-3 leading-relaxed">MKQR 사이트에 목록 <b className="text-slate-700">{MK_ACCESS_LIST}</b> 을 만들고 아래 열을 추가하면 그때부터 접속이 기록됩니다(내부 이름 그대로). 목록이 생기기 전 접속은 남지 않습니다.</div>
+          <table className="w-full text-[12.5px] border border-slate-200 rounded-lg overflow-hidden">
+            <thead className="bg-slate-50 text-slate-500 text-[11.5px]"><tr><th className="text-left px-3 py-1.5 font-medium w-44">열 이름(내부 이름)</th><th className="text-left px-3 py-1.5 font-medium w-36">종류</th><th className="text-left px-3 py-1.5 font-medium">설명</th></tr></thead>
+            <tbody>{MK_ACCESS_COLUMNS.map(([n, t, d]) => <tr key={n} className="border-t border-slate-100"><td className="px-3 py-1.5 font-mono text-slate-700">{n}</td><td className="px-3 py-1.5 text-slate-600">{t}</td><td className="px-3 py-1.5 text-slate-500">{d}</td></tr>)}</tbody>
+          </table>
+        </div>
+      ) : (<>
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 mb-4" data-testid="access-summary">
+        {[["접속", view.length, "건"], ["사용자", byUser.length, "명"], ["로그아웃", cnt("로그아웃"), "건"], ["세션 종료(추정)", cnt("세션 종료(추정)"), "건"], ["접속 중", cnt("접속 중"), "건"]].map(([l, v, u], i) => (
+          <div key={l} className={`bg-white rounded-xl border border-slate-200 shadow-sm px-4 py-3 ${i === 4 ? "col-span-2 lg:col-span-1" : ""}`}><div className="text-[11.5px] text-slate-500">{l}</div><div className="text-xl font-bold text-slate-800 tabular-nums">{v}<span className="text-xs font-normal text-slate-400 ml-0.5">{u}</span></div></div>
+        ))}
+      </div>
+      <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+        <div className="px-4 py-3 border-b border-slate-100 flex items-center gap-2 flex-wrap">
+          <div className="flex items-center rounded-lg border border-slate-300 overflow-hidden h-9">
+            {[[1, "오늘"], [7, "7일"], [30, "30일"]].map(([n, label], i) => { const on = to === today && curLen === n; return (
+              <button key={n} onClick={() => preset(n)} disabled={loading} className={`px-3 h-full text-sm ${i ? "border-l border-slate-300" : ""} ${on ? "text-white" : "text-slate-600 bg-white hover:bg-slate-50"}`} style={on ? { background: BRAND.accent } : undefined}>{label}</button>); })}
+          </div>
+          <div className="flex items-center gap-1 w-full sm:w-auto">
+            <input type="date" value={from} max={to} onChange={(e) => setFrom(e.target.value)} className={`${ctrl} px-2 min-w-0 flex-1 sm:flex-none`} />
+            <span className="text-slate-400 text-xs">~</span>
+            <input type="date" value={to} min={from} max={today} onChange={(e) => setTo(e.target.value)} className={`${ctrl} px-2 min-w-0 flex-1 sm:flex-none`} />
+            <button onClick={() => load()} disabled={loading} className="h-9 text-sm px-4 rounded-lg text-white disabled:opacity-50" style={{ background: BRAND.accent }}>조회</button>
+          </div>
+          <select value={roleF} onChange={(e) => setRoleF(e.target.value)} className={`${ctrl} px-3 w-32`} data-testid="access-role"><option value="">전체 구분</option>{["관리자", "운영자", "권한 없음"].map((r) => <option key={r}>{r}</option>)}</select>
+          <select value={statusF} onChange={(e) => setStatusF(e.target.value)} className={`${ctrl} px-3 w-36`} data-testid="access-status"><option value="">전체 상태</option>{["로그아웃", "세션 종료(추정)", "접속 중", "접근 차단"].map((r) => <option key={r}>{r}</option>)}</select>
+          <div className="relative w-full sm:w-auto"><Search size={15} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" /><input value={q} onChange={(e) => setQ(e.target.value)} placeholder="이름 · 메일 · 부서 · 기기" className={`${ctrl} pl-8 pr-3 w-full sm:w-56`} /></div>
+          <div className="ml-auto flex items-center gap-2">
+            <div className="flex items-center rounded-lg border border-slate-300 overflow-hidden h-9">
+              {[["session", "세션별"], ["user", "사용자별"]].map(([k, l], i) => <button key={k} onClick={() => setMode(k)} className={`px-3 h-full text-sm ${i ? "border-l border-slate-300" : ""} ${mode === k ? "text-white" : "bg-white text-slate-600 hover:bg-slate-50"}`} style={mode === k ? { background: BRAND.navy } : undefined} data-testid={`access-mode-${k}`}>{l}</button>)}
+            </div>
+            <button onClick={exportExcel} disabled={!view.length} className={btn} data-testid="access-export"><Download size={14} /> Excel 내보내기</button>
+          </div>
+        </div>
+        <div className="mk-scroll overflow-x-auto">
+          {mode === "session" ? (
+            <table className="w-full table-fixed" style={{ minWidth: 960 }} data-testid="access-table">
+              <colgroup><col style={{ width: "15%" }} /><col style={{ width: "9%" }} /><col style={{ width: "13%" }} /><col style={{ width: "12%" }} /><col style={{ width: "12%" }} /><col style={{ width: "10%" }} /><col style={{ width: "12%" }} /><col /></colgroup>
+              <thead className="bg-slate-50 text-slate-500 text-[11.5px]"><tr>{["사용자", "구분", "부서", "로그인", "로그아웃 · 종료", "접속 시간", "상태", "기기"].map((h) => <th key={h} className="px-3 h-8 font-medium text-left whitespace-nowrap border-b border-slate-200">{h}</th>)}</tr></thead>
+              <tbody>
+                {loading ? <tr><td colSpan={8} className="text-center text-slate-400 text-sm py-14"><div className="w-6 h-6 mx-auto mb-2 rounded-full border-2 border-slate-200 animate-spin" style={{ borderTopColor: BRAND.accent }} />접속 기록을 불러오는 중입니다...</td></tr>
+                  : error ? <tr><td colSpan={8} className="text-center text-red-500 text-sm py-12">접속 기록을 불러오지 못했습니다 — {error}</td></tr>
+                  : pageRows.length ? pageRows.map((r) => (
+                    <tr key={r.id} onClick={() => setDetail(r)} className="border-t border-slate-100 first:border-t-0 hover:bg-slate-50 cursor-pointer" data-session={r.Title}>
+                      <td className={`${td} text-[13px] text-slate-800 font-medium`} title={r.UserEmail}>{r.UserName || r.UserEmail}</td>
+                      <td className={td}><Role role={r.Role} /></td>
+                      <td className={`${td} text-[12.5px] text-slate-600`} title={r.Dept || ""}>{r.Dept || <span className="text-slate-300">-</span>}</td>
+                      <td className={`${td} text-[12.5px] text-slate-700 tabular-nums`} title={fmtDate(r.LoginAt)}>{dtShort(r.LoginAt)}</td>
+                      <td className={`${td} text-[12.5px] tabular-nums ${r.st.inferred ? "text-amber-700" : "text-slate-700"}`} title={r.st.end ? fmtDate(r.st.end) + (r.st.inferred ? " — 마지막 활동 시각(추정)" : "") : ""}>{r.st.end ? dtShort(r.st.end) : <span className="text-slate-300">-</span>}</td>
+                      <td className={`${td} text-[12.5px] text-slate-600 tabular-nums`}>{r.st.label === "접근 차단" ? <span className="text-slate-300">-</span> : mkFmtDuration(r.dur)}</td>
+                      <td className={td}><span className={`text-[11px] px-2 rounded-full font-medium leading-5 inline-block whitespace-nowrap ${r.st.cls}`}>{r.st.label}</span></td>
+                      <td className={`${td} text-[12px] text-slate-500`} title={r.Device || ""}>{r.Device || "-"}</td>
+                    </tr>
+                  )) : <tr><td colSpan={8} className="text-center text-slate-400 text-sm py-12">조회 결과가 없습니다.</td></tr>}
+              </tbody>
+            </table>
+          ) : (
+            <table className="w-full table-fixed" style={{ minWidth: 900 }} data-testid="access-users">
+              <colgroup><col style={{ width: "16%" }} /><col style={{ width: "9%" }} /><col style={{ width: "14%" }} /><col style={{ width: "8%" }} /><col style={{ width: "9%" }} /><col style={{ width: "12%" }} /><col style={{ width: "9%" }} /><col style={{ width: "12%" }} /><col /></colgroup>
+              <thead className="bg-slate-50 text-slate-500 text-[11.5px]"><tr>{["사용자", "구분", "부서", "접속", "로그아웃", "세션 종료(추정)", "접근 차단", "마지막 로그인", "접속 시간 합"].map((h) => <th key={h} className="px-3 h-8 font-medium text-left whitespace-nowrap border-b border-slate-200">{h}</th>)}</tr></thead>
+              <tbody>
+                {pageRows.length ? pageRows.map((u) => (
+                  <tr key={u.email} className="border-t border-slate-100 first:border-t-0">
+                    <td className={`${td} text-[13px] text-slate-800 font-medium`} title={u.email}>{u.name}</td>
+                    <td className={td}><Role role={u.role} /></td>
+                    <td className={`${td} text-[12.5px] text-slate-600`}>{u.dept || <span className="text-slate-300">-</span>}</td>
+                    <td className={`${td} text-[12.5px] tabular-nums`}>{u.n}</td>
+                    <td className={`${td} text-[12.5px] tabular-nums text-emerald-700`}>{u.logouts}</td>
+                    <td className={`${td} text-[12.5px] tabular-nums text-amber-700`}>{u.inferred}</td>
+                    <td className={`${td} text-[12.5px] tabular-nums text-red-600`}>{u.blocked}</td>
+                    <td className={`${td} text-[12.5px] tabular-nums text-slate-700`} title={fmtDate(u.last.LoginAt)}>{dtShort(u.last.LoginAt)}</td>
+                    <td className={`${td} text-[12.5px] tabular-nums text-slate-600`}>{u.n === u.blocked ? <span className="text-slate-300">-</span> : mkFmtDuration(u.total)}</td>
+                  </tr>
+                )) : <tr><td colSpan={9} className="text-center text-slate-400 text-sm py-12">{loading ? "불러오는 중..." : error ? "접속 기록을 불러오지 못했습니다 — " + error : "조회 결과가 없습니다."}</td></tr>}
+              </tbody>
+            </table>
+          )}
+        </div>
+        <div className="px-4 py-2.5 border-t border-slate-100 flex items-center justify-between gap-3 text-xs text-slate-500">
+          <span>{loaded && <>{loaded} · </>}총 <b className="text-slate-700 font-semibold">{list.length}</b>{mode === "user" ? "명" : "건"}</span>
+          {totalPages > 1 && (
+            <div className="flex items-center gap-1">
+              <button onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={pageSafe <= 1} className="px-2.5 py-1 rounded-md border border-slate-300 disabled:opacity-40 hover:bg-slate-50">이전</button>
+              <span className="px-2 tabular-nums">{pageSafe} / {totalPages}</span>
+              <button onClick={() => setPage((p) => Math.min(totalPages, p + 1))} disabled={pageSafe >= totalPages} className="px-2.5 py-1 rounded-md border border-slate-300 disabled:opacity-40 hover:bg-slate-50">다음</button>
+            </div>
+          )}
+        </div>
+      </div>
+      </>)}
+      {detail && (
+        <Modal title="접속 상세" onClose={() => setDetail(null)} wide>
+          <div className="flex items-center gap-2 mb-3 flex-wrap"><Role role={detail.Role} /><span className="font-semibold text-slate-800">{detail.UserName}</span><span className="text-sm text-slate-400">{detail.UserEmail}</span><span className={`text-[11px] px-2 rounded-full font-medium leading-5 ${detail.st.cls}`}>{detail.st.label}</span></div>
+          <DetailRow label="로그인 (KST)" value={fmtDate(detail.LoginAt)} />
+          <DetailRow label="마지막 활동 (KST)" value={fmtDate(detail.LastActivityAt)} />
+          <DetailRow label="로그아웃 (KST)" value={detail.LogoutAt ? fmtDate(detail.LogoutAt) : detail.st.inferred ? `기록 없음 — 세션 종료(추정), 마지막 활동 ${fmtDate(detail.LastActivityAt)}` : "-"} />
+          <DetailRow label="접속 시간" value={detail.st.label === "접근 차단" ? "-" : mkFmtDuration(detail.dur)} />
+          <DetailRow label="부서" value={detail.Dept || "-"} />
+          <DetailRow label="기기" value={detail.Device || "-"} />
+          <DetailRow label="브라우저 정보" value={detail.UserAgent || "-"} />
+          <DetailRow label="세션 번호" value={detail.Title || "-"} />
+        </Modal>
+      )}
+    </div>
+  );
 }
 
 function ActivityLogTab() {
@@ -3456,6 +3768,7 @@ function App({ userEmail, userName }) {
   ];
   const adminNav = [
     { id: "categoryAccess", label: "카테고리 접근 권한", icon: KeyRound, cat: "admins" },
+    { id: "accessLog", label: "접속 기록", icon: LogIn, cat: "logs" },   // 10-17 — 활동 이력과 같은 권한(Access_logs)
     { id: "activityLog", label: "활동 이력", icon: History, cat: "logs" },
   ];
   const nav = [...allNav, ...marketingNav, ...hrgaNav, ...adminNav];
@@ -3586,7 +3899,7 @@ function App({ userEmail, userName }) {
                   <div className="text-sm text-slate-200 truncate">{shortName}</div>
                   <div className="text-[11px] text-slate-500 truncate">{roleLabel}</div>
                 </div>
-                <button onClick={() => msalApp.logoutRedirect()}
+                <button onClick={() => mkLogout()}
                   className="shrink-0 flex items-center gap-1 text-xs font-medium text-slate-300 border border-white/15 rounded-lg px-2.5 py-1.5 hover:text-white hover:border-white/40">
                   <LogOut size={13} /> 로그아웃
                 </button>
@@ -3635,7 +3948,7 @@ function App({ userEmail, userName }) {
               className="flex items-center gap-1.5 text-xs font-medium text-slate-500 border border-slate-200 rounded-lg px-2.5 md:px-3 py-1.5 hover:border-teal-400 hover:text-teal-600 transition-colors whitespace-nowrap">
               📬 돌아가기
             </a>
-            <button onClick={() => msalApp.logoutRedirect()}
+            <button onClick={() => mkLogout()}
               className="hidden md:block text-xs font-medium text-slate-500 border border-slate-200 rounded-lg px-3 py-1.5 hover:border-red-300 hover:text-red-500 transition-colors">
               로그아웃
             </button>
@@ -3652,6 +3965,7 @@ function App({ userEmail, userName }) {
             agentQr: [Contact, "영업직원 명함에 넣을 Agent QR 을 만들고 내려받습니다 (인쇄용 600px)"],
             checkins: [ListChecks, "캠페인 센터 방문 인증 기록을 조회하고, 확인이 필요한 건을 승인 처리합니다"],
             agentCheckins: [ListChecks, "영업직원 명함(Agent) QR 스캔 기록을 조회합니다"],
+            accessLog: [LogIn, "계정별 로그인 · 로그아웃 시각과 세션 종료(추정)를 조회하고 Excel 로 내보냅니다"],
             activityLog: [History, "권한 부여 · 센터 · Agent · 체크인 처리 이력을 날짜별로 조회합니다 (기본 최근 3일)"],
             categoryAccess: [KeyRound, "등록된 사용자별로 화면마다 「보기」 · 「편집」 권한을 부여 · 변경합니다. 사용자 추가 · 삭제와 「반영」 내용은 활동 이력에 남습니다."],
           }[tab] || [LayoutDashboard, ""];
@@ -3674,6 +3988,7 @@ function App({ userEmail, userName }) {
             {tab === "agentQr" && (agentsError ? <AgentListMissing error={agentsError} /> : <QrTab items={agents} kind="agent" highlightId={agentHighlightId} readOnly={!canEdit("agentQr")} />)}
             {tab === "checkins" && <CheckInsTab key="center" kind="center" checkins={checkins} reload={reload} checkinRange={checkinRange} onRangeChange={changeCheckinRange} verifyRules={uiContent.verifyRules} readOnly={!canEdit("checkins")} />}
             {tab === "agentCheckins" && <CheckInsTab key="agent" kind="agent" checkins={checkins} reload={reload} checkinRange={checkinRange} onRangeChange={changeCheckinRange} readOnly={!canEdit("agentCheckins")} />}
+            {tab === "accessLog" && <AccessLogTab />}
             {tab === "activityLog" && <ActivityLogTab />}
             {tab === "categoryAccess" && <CategoryAccessTab admins={admins} categoryAccess={categoryAccess} reload={reload} readOnly={!canEdit("admins")} />}
           </>
@@ -3729,6 +4044,7 @@ function AccessDenied({ userEmail }) {
 }
 
 let _mkItMailP = null;
+let _mkAnyAccess = true;   // 권한 목록에 권한 있는 사람이 하나라도 있는지(목록을 못 읽으면 true — 처음 상태로 보지 않는다)
 async function mkBoot(account) {
   _mkLogUser = { email: account.username || "", name: (/\(([^()]+)\)\s*$/.exec(account.name || "") || [])[1] || account.name || "" };   // 이력에 남길 사용자(10-09)
   document.getElementById("login-screen").style.display = "none";
@@ -3757,6 +4073,7 @@ async function mkBoot(account) {
     const rows = items.map((x) => x.fields);
     const anyAccessRows = rows.filter((r) => MK_CATEGORIES.some((c) => mkCatValue(r, c) === true));
     adminEmails = rows.filter((r) => r.Access_admins === true).map((r) => (r.Email || "").trim().toLowerCase()).filter(Boolean);
+    _mkAnyAccess = anyAccessRows.length > 0;
     if (anyAccessRows.length > 0) {
       isAdmin = anyAccessRows.some((r) => (r.Email || "").trim().toLowerCase() === (account.username || "").trim().toLowerCase());
     }
@@ -3765,6 +4082,12 @@ async function mkBoot(account) {
   }
 
   if (_mkItMailP) await _mkItMailP;
+  // 접속 기록(10-17) — 통과 · 차단 모두. 기다리지 않는다(기록이 늦거나 실패해도 첫 화면은 바로)
+  // 구분: 카테고리 접근 권한(Access_admins) 이 있거나 아직 아무에게도 권한이 없는 처음 상태면 관리자, 그 밖의 통과는 운영자
+  const meLower = (account.username || "").trim().toLowerCase();
+  const accRole = !isAdmin ? "" : (adminEmails.includes(meLower) || !_mkAnyAccess) ? "관리자" : "운영자";
+  MkSession.begin({ email: meLower, name: _mkLogUser.name || meLower, role: accRole });
+  if (isAdmin) MkSession.startTimers();
   const loadingEl = document.getElementById("loading");
   if (loadingEl) loadingEl.remove();
   const rootEl = document.getElementById("root");
