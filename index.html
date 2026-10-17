@@ -493,6 +493,25 @@ async function getMkDocDriveId(token) {
   return _mkDocDriveId;
 }
 
+// ---- IT 문의 메일(10-17) — 코드에 메일 주소를 두지 않는다 ----------------------------------------------
+// system_config_final.xlsx 의 MKQR_IT_CONTACT(C열) → 없으면 CONTACT_EMAIL. 못 읽으면(로그인 전 · 읽기 실패) 메일 없이 「IT팀」.
+// 형식이 맞는 메일만 받는다. 로그인 뒤 화면을 그리기 전에 한 번 읽는다(mkBoot).
+let MK_IT_MAIL = "";
+const MK_ITSM_URL = "https://itsm-ticket.startruckkorea.com";
+const mkItTeam = (label = "IT") => (MK_IT_MAIL ? `${label}(${MK_IT_MAIL})` : "IT팀");
+async function loadMkItMail(token) {
+  try {
+    const docDriveId = await getMkDocDriveId(token);
+    const res = await fetch(`${GRAPH}/drives/${docDriveId}/root:/system_config_final.xlsx:/content`, { headers: { Authorization: "Bearer " + token }, cache: "no-cache" });
+    if (!res.ok) throw new Error("system_config_final.xlsx " + res.status);
+    const wb = XLSX.read(await res.arrayBuffer(), { type: "array" });
+    const rows = XLSX.utils.sheet_to_json(wb.Sheets["SystemConfig"] || wb.Sheets[wb.SheetNames[0]], { header: 1 });
+    const pick = (k) => { const r = rows.find((x) => String((x || [])[0] || "").trim().toUpperCase() === k); return r ? String(r[2] || "").trim().toLowerCase() : ""; };
+    const ok = (v) => /^[a-z0-9._%+-]+@[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(v);
+    MK_IT_MAIL = [pick("MKQR_IT_CONTACT"), pick("CONTACT_EMAIL")].find(ok) || "";
+  } catch (e) { console.warn("[MKQR] IT 문의 메일(MKQR_IT_CONTACT) 읽기 실패 — 「IT팀」 으로 표시:", e.message); }
+}
+
 // ---- 활동 이력 기록(10-09 · mkqr-log) — APS logAction 과 같은 파일 방식 ---------------------------------
 // Documents/Logging_data/MKQR/YYYY-MM-DD/HHmmss_사용자_rand.json — 한 건에 파일 하나만 새로 만든다(기존 파일을 고치지 않아 동시 기록 충돌 없음).
 // 내용: { timestampKST, user, userName, system:"MKQR", category, verb, action, target, detail:{ changes:{항목:[이전,이후]} | info:{…} } }
@@ -1528,7 +1547,7 @@ function AgentListMissing({ error }) {
     <div className="max-w-2xl mx-auto bg-white border rounded-xl p-8 text-center">
       <Store size={28} className="mx-auto text-slate-300 mb-3" />
       <div className="text-sm font-medium text-slate-700 mb-1">Agent 목록(SharePoint mkqr_Agents)을 불러오지 못했습니다</div>
-      <div className="text-xs text-slate-400 leading-relaxed">목록이 아직 만들어지지 않았거나 권한이 없습니다. IT(stk_it@hyosung.com)에 확인을 요청해 주세요.</div>
+      <div className="text-xs text-slate-400 leading-relaxed">목록이 아직 만들어지지 않았거나 권한이 없습니다. {mkItTeam()}에 확인을 요청해 주세요.</div>
       {error && <div className="text-[11px] text-slate-300 mt-3 break-all">{error}</div>}
     </div>
   );
@@ -2435,7 +2454,7 @@ function OverviewTab({ centers, agents, agentsError, checkins, admins, setTab, i
         <div className="mt-4 text-[14px] font-semibold text-slate-600">권한 없음</div>
         <p className="mt-1 text-[12.5px] text-slate-400 leading-relaxed">
           이 카테고리는 <span className="font-semibold text-slate-500">{need}</span> 권한이 필요합니다.<br />
-          필요하면 IT(stk_it@hyosung.com)에 요청해 주세요.
+          필요하면 {mkItTeam()}에 요청해 주세요.
         </p>
       </div>
     </section>
@@ -2541,7 +2560,7 @@ function OverviewTab({ centers, agents, agentsError, checkins, admins, setTab, i
         </div>
       ) : (
         <div className="bg-white rounded-xl border border-slate-200 p-6 text-center text-sm text-slate-400">
-          지금은 Overview 만 볼 수 있습니다. 다른 화면 권한이 필요하면 IT(stk_it@hyosung.com)에 요청해 주세요.
+          지금은 Overview 만 볼 수 있습니다. 다른 화면 권한이 필요하면 {mkItTeam()}에 요청해 주세요.
         </div>
       )}
 
@@ -3034,7 +3053,7 @@ function CategoryAccessTab({ admins, categoryAccess, reload, readOnly }) {
           <div className="relative w-full max-w-md">
             <input value={addQ} onChange={(e) => { setAddQ(e.target.value); setAddOpen(true); }} onFocus={() => setAddOpen(true)}
               onBlur={() => setTimeout(() => setAddOpen(false), 150)} onKeyDown={(e) => { if (e.key === "Enter") addUser(); if (e.key === "Escape") setAddOpen(false); }}
-              placeholder="이름 또는 이메일 입력 (예: hong.gildong@hyosung.com)"
+              placeholder="이름 또는 이메일 입력 (예: user@example.com)"
               className="w-full h-9 px-3 border border-slate-300 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-[#2F7B7A]/40" />
             {addOpen && suggestions.length > 0 && (
               <div className="absolute left-0 right-0 top-full mt-1 bg-white border border-slate-200 rounded-lg shadow-lg z-40 max-h-72 overflow-y-auto mk-scroll">
@@ -3554,7 +3573,7 @@ function App({ userEmail, userName }) {
         </nav>
         {railCollapsed ? (
           <div className="py-3 border-t border-white/10 flex justify-center">
-            <a href="mailto:stk_it@hyosung.com" title="문의 · stk_it@hyosung.com" aria-label="문의 stk_it@hyosung.com"
+            <a href={MK_IT_MAIL ? "mailto:" + MK_IT_MAIL : MK_ITSM_URL} target={MK_IT_MAIL ? undefined : "_blank"} rel="noreferrer" title={"문의 · " + (MK_IT_MAIL || "IT팀")} aria-label={"문의 " + (MK_IT_MAIL || "IT팀")}
               className="w-9 h-9 rounded-lg flex items-center justify-center text-slate-400 hover:text-white hover:bg-white/10 transition-colors">
               <Mail size={15} />
             </a>
@@ -3574,8 +3593,8 @@ function App({ userEmail, userName }) {
               </div>
             )}
             <p className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold mb-1">문의</p>
-            <a href="mailto:stk_it@hyosung.com" className="flex items-center gap-1.5 text-xs text-slate-400 hover:text-white transition-colors">
-              <Mail size={12} className="shrink-0" /><span className="truncate">stk_it@hyosung.com</span>
+            <a href={MK_IT_MAIL ? "mailto:" + MK_IT_MAIL : MK_ITSM_URL} target={MK_IT_MAIL ? undefined : "_blank"} rel="noreferrer" className="flex items-center gap-1.5 text-xs text-slate-400 hover:text-white transition-colors">
+              <Mail size={12} className="shrink-0" /><span className="truncate">{MK_IT_MAIL || "IT팀"}</span>
             </a>
           </div>
         )}
@@ -3698,7 +3717,7 @@ function AccessDenied({ userEmail }) {
             <a href="https://itsm-ticket.startruckkorea.com" target="_blank" rel="noreferrer" style={{ color: "#0078d4", fontWeight: 600, wordBreak: "break-all", textDecoration: "none" }}>itsm-ticket.startruckkorea.com</a>
           </div>
         </div>
-        <div style={{ fontSize: ".75rem", color: "#94a3b8", marginBottom: 20 }}>문의: <a href="mailto:stk_it@hyosung.com" style={{ color: "#0078d4", textDecoration: "none" }}>stk_it@hyosung.com</a></div>
+        <div style={{ fontSize: ".75rem", color: "#94a3b8", marginBottom: 20 }}>문의: {MK_IT_MAIL ? <a href={"mailto:" + MK_IT_MAIL} style={{ color: "#0078d4", textDecoration: "none" }}>{MK_IT_MAIL}</a> : "IT팀"}</div>
         <a href="https://aps.startruckkorea.com/" target="_self" title={userEmail ? "현재 계정: " + userEmail : undefined}
           style={{ textDecoration: "none", display: "inline-flex", alignItems: "center", gap: 7, background: "#0078d4", color: "#fff", borderRadius: 10, padding: "10px 28px", fontSize: ".85rem", fontWeight: 600, boxShadow: "0 1px 4px rgba(0,120,212,.25)" }}
           onMouseOver={(e) => { e.currentTarget.style.background = "#106ebe"; }} onMouseOut={(e) => { e.currentTarget.style.background = "#0078d4"; }}>
@@ -3709,6 +3728,7 @@ function AccessDenied({ userEmail }) {
   );
 }
 
+let _mkItMailP = null;
 async function mkBoot(account) {
   _mkLogUser = { email: account.username || "", name: (/\(([^()]+)\)\s*$/.exec(account.name || "") || [])[1] || account.name || "" };   // 이력에 남길 사용자(10-09)
   document.getElementById("login-screen").style.display = "none";
@@ -3717,6 +3737,7 @@ async function mkBoot(account) {
     const token = await getGraphToken();
     const siteRes = await apiGet(`/sites/${SITE_PATH}`, token);
     _siteId = siteRes.id;
+    _mkItMailP = loadMkItMail(token);   // IT 문의 메일 — 권한 확인과 함께 읽고 화면 그리기 전에 기다린다(10-17)
   } catch (e) {
     document.getElementById("loading").style.display = "none";
     document.getElementById("login-screen").style.display = "flex";
@@ -3743,6 +3764,7 @@ async function mkBoot(account) {
     console.warn("[MKQR] mkqr_CategoryAccess 목록 조회 실패, 임시로 전체 허용:", e.message);
   }
 
+  if (_mkItMailP) await _mkItMailP;
   const loadingEl = document.getElementById("loading");
   if (loadingEl) loadingEl.remove();
   const rootEl = document.getElementById("root");
