@@ -584,7 +584,7 @@ async function mkAccWrite(method, itemId, fields, opts = {}) {
   return res.json().catch(() => ({}));
 }
 const MkSession = {
-  itemId: null, sid: "", lastActivity: 0, lastBeat: 0, timer: null, info: null, token: "", listId: "", starting: null,
+  itemId: null, sid: "", lastActivity: 0, lastBeat: 0, timer: null, info: null, token: "", listId: "", starting: null, lastError: "",   // lastError — 이번 접속의 기록 실패 원인(접속 기록 화면에 표시)
   async start(info) {
     this.info = info;
     const now = Date.now();
@@ -614,7 +614,7 @@ const MkSession = {
   },
   // 로그인 기록을 기다리지 않고 시작 — 기록이 늦거나 실패해도 첫 화면은 바로 뜬다(실패는 콘솔 경고만)
   begin(info) {
-    const p = Promise.resolve().then(() => this.start(info)).catch((e) => { console.warn("[MKQR] 접속 기록 실패:", e && e.message); });
+    const p = Promise.resolve().then(() => this.start(info)).then(() => { this.lastError = ""; }).catch((e) => { this.lastError = String((e && e.message) || e).slice(0, 300); console.warn("[MKQR] 접속 기록 실패:", e && e.message); });
     this.starting = p;
     p.then(() => { if (this.starting === p) this.starting = null; });
     return p;
@@ -2329,6 +2329,11 @@ function AccessLogTab() {
         <LogIn size={15} className="text-slate-400 shrink-0 mt-0.5" />
         <div>로그인(권한 확인 통과 시점)마다 한 줄이 생기고, 「로그아웃」 단추를 누르면 로그아웃 시각이 남습니다. 로그아웃 없이 창을 닫거나 {Math.round(MK_ACC_TIMING.idleEndMs / 60e3)}분 넘게 활동이 없으면 <b className="text-amber-700">세션 종료(추정)</b>로 보고 <b className="text-slate-600">마지막 활동 시각</b>을 종료 시각으로 씁니다(활동 신호 {Math.round(MK_ACC_TIMING.heartbeatMs / 60e3)}분 간격). 권한이 없는 계정의 시도는 <b className="text-red-600">접근 차단</b>으로 남습니다.</div>
       </div>
+      {MkSession.lastError && !missing && (
+        <div className="bg-red-50 border border-red-200 rounded-xl px-4 py-3 mb-4 text-xs text-red-700 leading-relaxed break-all" data-testid="access-write-error">
+          <b>이번 접속이 기록되지 않았습니다</b> — {MkSession.lastError}<br />목록 열 이름(내부 이름) · 종류를 확인해 주세요. 열 이름을 고친 뒤 다시 로그인하면 기록됩니다.
+        </div>
+      )}
       {missing ? (
         <div className="bg-white rounded-xl border border-amber-200 shadow-sm p-5" data-testid="access-missing">
           <div className="text-sm font-semibold text-amber-800 mb-1">접속 기록 목록(SharePoint)이 아직 없습니다</div>
