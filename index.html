@@ -177,6 +177,8 @@ const MK_CATEGORIES = [
   { key: "agentQr", label: "Agent QR 코드", field: "Access_agentQr", group: "hrga", inherit: "Access_qr" },
   { key: "agentCheckins", label: "Agent 체크인 기록", field: "Access_agentCheckins", group: "hrga", inherit: "Access_checkins" },
   { key: "admins", label: "카테고리 접근 권한", field: "Access_admins", group: "admin" },
+  // 접속 기록(10-17 · mkqr-access) — 열(Access_accessLog)이 비어 있으면 카테고리 접근 권한(관리자) 값을 따른다(활동 이력과 같은 규칙)
+  { key: "accessLog", label: "접속 기록", field: "Access_accessLog", group: "admin", inherit: "Access_admins" },
   // 활동 이력(10-09 · mkqr-log) — 열이 비어 있으면 카테고리 접근 권한(관리자) 값을 따른다
   { key: "logs", label: "활동 이력", field: "Access_logs", group: "admin", inherit: "Access_admins" },
 ];
@@ -197,7 +199,7 @@ function mkCatValue(row, cat) {
 // ViewOnly 가 비어 있으면 지금처럼 보기 + 편집이라, 기존 사용자 권한은 관리자가 바꾸기 전까지 그대로다.
 // 화면이 모르는 키(앞으로 생길 화면)는 지우지 않고 그대로 둔다. 알아볼 수 없는 값이면 모든 화면을 보기만으로(fail-closed).
 const MK_VIEWONLY_FIELD = "ViewOnly";
-const MK_VIEW_NATURE = new Set(["overview", "logs"]);   // 조회만 하는 화면 — 편집 칸 없음(「—」)
+const MK_VIEW_NATURE = new Set(["overview", "logs", "accessLog"]);   // 조회만 하는 화면 — 편집 칸 없음(「—」)
 function mkViewOnlySet(row) {
   const raw = row ? row[MK_VIEWONLY_FIELD] : undefined;
   const s = raw == null ? "" : String(raw).trim();
@@ -2996,6 +2998,7 @@ function CategoryAccessTab({ admins, categoryAccess, reload, readOnly }) {
     const out = { [cat.key]: fixLevel(cat, lv) };
     if (cat.key === "admins" && out.admins === 2) MK_CATEGORIES.filter(catReady).forEach((c) => { out[c.key] = fixLevel(c, 2); });
     else if (cat.key === "admins" && out.admins === 1 && logsCat && catReady(logsCat) && effectiveLevel(person, logsCat) === 0) out.logs = 1;
+    if (cat.key === "admins" && out.admins === 1) { const ac = MK_CATEGORIES.find((c) => c.key === "accessLog"); if (ac && catReady(ac) && effectiveLevel(person, ac) === 0) out.accessLog = 1; }   // 접속 기록도 활동 이력처럼(10-17)
     return out;
   }
   // 본인의 「카테고리 접근 권한」 편집은 스스로 내려놓을 수 없다 — 되돌릴 화면을 잃는다(ICS 「관리자 전용」 과 같은 규칙)
@@ -3768,7 +3771,7 @@ function App({ userEmail, userName }) {
   ];
   const adminNav = [
     { id: "categoryAccess", label: "카테고리 접근 권한", icon: KeyRound, cat: "admins" },
-    { id: "accessLog", label: "접속 기록", icon: LogIn, cat: "logs" },   // 10-17 — 활동 이력과 같은 권한(Access_logs)
+    { id: "accessLog", label: "접속 기록", icon: LogIn, cat: "accessLog" },   // 10-17 — 권한 열 Access_accessLog(비어 있으면 관리자 값)
     { id: "activityLog", label: "활동 이력", icon: History, cat: "logs" },
   ];
   const nav = [...allNav, ...marketingNav, ...hrgaNav, ...adminNav];
