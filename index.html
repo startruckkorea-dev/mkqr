@@ -175,7 +175,7 @@ async function apiGet(path, token) {
  * mkqr_* SharePoint 목록 — GUID 하드코딩 없이 displayName으로 조회/캐싱 (ICS와 동일 패턴)
  * ------------------------------------------------------------------ */
 const MK_LISTS = { centers: "mkqr_Centers", agents: "mkqr_Agents", staff: "mkqr_Staff", checkins: "mkqr_CheckIns", categoryAccess: "mkqr_CategoryAccess",
-  itAssets: "mkqr_ITAssets", itScans: "mkqr_ITScans", itHistory: "mkqr_ITHistory", itStock: "mkqr_ITStock" };   // CMDB(10-23 · mkqr-cmdb): 변경 이력 · 재고(액세서리)   // IT 자산 QR(10-23 · mkqr-it)   // mkqr_Agents: Agent(딜러사) 명함 QR(10-08 · mkqr-agent)
+  itAssets: "mkqr_ITAssets", itScans: "mkqr_ITScans", itHistory: "mkqr_ITHistory", itStock: "mkqr_ITStock", itSecrets: "mkqr_ITSecrets" };   // CMDB(10-23 · mkqr-cmdb): 변경 이력 · 재고(액세서리) · BitLocker 복구 키(IT 전용 목록)   // IT 자산 QR(10-23 · mkqr-it)   // mkqr_Agents: Agent(딜러사) 명함 QR(10-08 · mkqr-agent)
 // mkqr_Admins 목록은 더 이상 안 씁니다 — 로그인 허용 여부는 mkqr_CategoryAccess 하나로 통제합니다 (카테고리가 하나라도
 // true면 로그인 가능). IT 담당자가 SharePoint에서 mkqr_Admins 목록 자체는 이제 지우셔도 됩니다.
 
@@ -245,7 +245,7 @@ function mkCatLevel(row, cat) {
 // App 이 뜨기 전(null)이나 지금 화면에 편집 권한이 없으면 목록 · 파일 쓰기를 보내지 않는다(활동 이력 기록 mkLog 는 예외).
 let _mkEditGate = null;   // (대상) => boolean
 const MK_WRITE_KEYS = { mkqr_Centers: ["centers"], mkqr_Agents: ["agents"], mkqr_CheckIns: ["checkins", "agentCheckins"], mkqr_CategoryAccess: ["admins"], centerIcon: ["centers"],
-  mkqr_ITAssets: ["itAssets"], mkqr_ITHistory: ["itAssets"], mkqr_ITStock: ["itAssets"] };   // CMDB 화면(사용자별 · 재고 · 이력)은 IT 자산 관리 권한(itAssets)으로 쓴다   // mkqr_ITScans 는 스캔 화면이 권한 확인 뒤 따로 쓴다(mkItWrite)
+  mkqr_ITAssets: ["itAssets"], mkqr_ITHistory: ["itAssets"], mkqr_ITStock: ["itAssets"], mkqr_ITSecrets: ["itAssets"] };   // CMDB 화면(사용자별 · 재고 · 이력)은 IT 자산 관리 권한(itAssets)으로 쓴다   // mkqr_ITScans 는 스캔 화면이 권한 확인 뒤 따로 쓴다(mkItWrite)
 function mkAssertWritable(target) {
   if (!_mkEditGate || !_mkEditGate(target)) throw new Error("보기 권한만 있는 화면이라 저장할 수 없습니다 — 편집 권한이 필요하면 관리자에게 요청해 주세요.");
 }
@@ -4624,6 +4624,7 @@ function ItAssetDrawer({ asset, it, readOnly, canLabel, dir, onClose, onEdit, on
         {kv("Serial No.", a.SerialNo, true)}{kv("Asset Code", a.AssetCode)}{kv("Hostname", a.Hostname, true)}{kv("전화번호", a.PhoneNo)}
         {kv("필수 프로그램", a.CriticalApps)}{kv("보안 프로그램", a.SecurityApp)}{kv("DaaS Object ID", a.ExtObjectId)}{kv("보증 시작일", a.WarrantyStart)}{kv("비고", a.Note)}
       </div>
+      {["Notebook", "Desktop"].includes(a.AssetType) && <ItBitLockerBox asset={a} readOnly={readOnly} />}
       {canLabel && a.QrToken && (
         <div className="bg-white border rounded-xl p-4 mb-4">
           <div className="flex items-center justify-between mb-2"><div className="text-xs font-semibold text-slate-500">QR 라벨 (10 × 5 cm)</div>
@@ -5501,6 +5502,139 @@ function ItHistoryTab({ it }) {
   );
 }
 
+// ---- BitLocker 복구 키(10-23 · mkqr-bitlocker) ----------------------------------------------------------
+// 키는 별도 목록 mkqr_ITSecrets 에만 둔다 — 이 목록은 권한 상속을 끊고 IT 담당자만 접근하게 한다(STK-DB 는 전 직원 「참가」 라 자산 목록에 넣으면 누구나 읽을 수 있다).
+// 자산 목록 · Excel 내보내기 · 활동 이력(mkLog)에는 키 값을 넣지 않는다. 화면에서는 가려 두고 「보기」 · 「복사」 를 누를 때만 보여 주며, 그 사실만 이력에 남긴다.
+const MK_IT_KEY_RE = /\d{6}(?:-\d{6}){7}/g;
+function mkItKeysOf(s) { return String(s || "").match(MK_IT_KEY_RE) || []; }
+function mkItMaskKey(k) { const p = String(k).split("-"); return p.map((x, i) => (i === 0 || i === p.length - 1 ? x : "••••••")).join("-"); }
+async function mkItSecLoad(filter) {
+  try { const v = await mkListAll(MK_LISTS.itSecrets, filter || ""); return { list: v.map((x) => ({ id: x.id, ...x.fields })), err: "" }; }
+  catch (e) { return { list: [], err: e.message || String(e) }; }
+}
+function mkItSecErrText(err) {
+  return /\(403\)|accessDenied|403/.test(err) ? `${MK_LISTS.itSecrets} 목록 권한이 없습니다 — IT 담당자만 볼 수 있습니다`
+    : /\(404\)|찾을 수 없|not found|itemNotFound/i.test(err) ? `${MK_LISTS.itSecrets} 목록이 아직 없습니다` : `복구 키 목록을 읽지 못했습니다 (${mkErrText({ message: err })})`;
+}
+// 시트에서 복구 키 읽기 — 이름에 BitLocker · Recovery 가 들어간 시트, 「Serial」 과 「Recovery Key」 머리글이 있는 줄부터
+function mkItReadKeySheets(wb) {
+  const out = []; let bad = 0;
+  wb.SheetNames.filter((n) => /bitlocker|recovery/i.test(n)).forEach((n) => {
+    const aoa = XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1, defval: "", raw: false });
+    const hi = aoa.findIndex((r) => r.some((c) => /serial/i.test(String(c))) && r.some((c) => /recovery\s*key|recoverykey/i.test(String(c))));
+    if (hi < 0) return;
+    const h = aoa[hi].map((c) => String(c).trim());
+    const col = (re) => h.findIndex((c) => re.test(c));
+    const iS = col(/serial/i), iK = col(/recovery\s*key|recoverykey/i), iH = col(/host/i), iM = col(/model/i), iO = col(/owner|user/i), iN = col(/remark|note/i);
+    aoa.slice(hi + 1).forEach((r) => {
+      const sn = String(r[iS] || "").replace(/　/g, " ").trim().toUpperCase();
+      if (!sn) return;
+      const keys = mkItKeysOf(r[iK]);
+      if (!keys.length) { bad++; return; }
+      const v = (i) => (i >= 0 ? String(r[i] || "").replace(/　/g, " ").trim() : "");
+      out.push({ SerialNo: sn, Hostname: v(iH), Model: v(iM), Owner: v(iO), RecoveryKey: keys.join("\n"), Note: v(iN) });
+    });
+  });
+  return { keys: out, keyBad: bad };
+}
+function mkItKeyPlan(rows, secList, assets, mode) {
+  const p = { create: [], update: [], same: 0, skip: [], noAsset: 0 };
+  const bySn = new Map(secList.map((s) => [String(s.SerialNo || s.Title || "").trim().toUpperCase(), s]));
+  const asn = new Map(assets.filter((a) => a.SerialNo).map((a) => [String(a.SerialNo).toUpperCase(), a]));
+  const seen = new Set();
+  rows.forEach((r, i) => {
+    if (seen.has(r.SerialNo)) { p.skip.push({ row: i + 1, why: `파일 안 중복(${r.SerialNo})` }); return; } seen.add(r.SerialNo);
+    const a = asn.get(r.SerialNo); if (!a) p.noAsset++;
+    const ex = bySn.get(r.SerialNo);
+    const f = { Title: r.SerialNo, SerialNo: r.SerialNo, AssetId: a ? String(a.id) : "", Hostname: r.Hostname || (a && a.Hostname) || "", Model: r.Model || (a && a.Model) || "", Owner: r.Owner, RecoveryKey: r.RecoveryKey, Note: r.Note, Source: "import" };
+    if (!ex) { p.create.push({ f }); return; }
+    const exKeys = mkItKeysOf(ex.RecoveryKey).join("\n");
+    if (exKeys === r.RecoveryKey) { p.same++; return; }
+    if (mode === "fill" && exKeys) { p.same++; return; }
+    p.update.push({ ex, patch: { RecoveryKey: r.RecoveryKey, ...(a && !ex.AssetId ? { AssetId: String(a.id) } : {}) } });
+  });
+  return p;
+}
+// 자산 상세의 복구 키 칸 — 누를 때만 읽고, 가려서 보여 준다
+function ItBitLockerBox({ asset, readOnly }) {
+  const [st, setSt] = useState({ phase: "idle" });
+  const [show, setShow] = useState(false);
+  const [edit, setEdit] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [copied, setCopied] = useState("");
+  const sn = String(asset.SerialNo || "").trim().toUpperCase();
+  const tag = asset.CICD || asset.Title;
+  useEffect(() => { setSt({ phase: "idle" }); setShow(false); setEdit(null); }, [asset.id]);
+  useEffect(() => { if (!show) return; const t = setTimeout(() => setShow(false), 60000); return () => clearTimeout(t); }, [show]);   // 1분 뒤 다시 가림
+  async function load() {
+    setSt({ phase: "load" });
+    const q = sn ? `&$filter=fields/SerialNo eq '${sn.replace(/'/g, "''")}'` : `&$filter=fields/AssetId eq '${String(asset.id).replace(/'/g, "''")}'`;
+    const r = await mkItSecLoad(q);
+    // 서버 필터를 믿되, 한 번 더 이 자산의 행만 고른다(시리얼 → 자산 번호)
+    const mine = r.list.find((x) => sn && String(x.SerialNo || "").trim().toUpperCase() === sn) || r.list.find((x) => String(x.AssetId || "") === String(asset.id)) || null;
+    setSt(r.err ? { phase: "err", err: r.err } : { phase: "ok", item: mine });
+  }
+  function reveal() { setShow(true); mkLog("IT 자산", "BitLocker 키 조회", tag, { id: asset.id, info: { 시리얼: sn } }); }
+  async function copy(k, i) {
+    try { await navigator.clipboard.writeText(k); setCopied(String(i)); setTimeout(() => setCopied(""), 1500); mkLog("IT 자산", "BitLocker 키 복사", tag, { id: asset.id, info: { 시리얼: sn, 순번: i + 1 } }); }
+    catch (e) { alert("복사하지 못했습니다 — 「보기」 로 확인해 주세요."); }
+  }
+  async function save() {
+    const keys = mkItKeysOf(edit);
+    if (!keys.length) { alert("복구 키 형식이 아닙니다 — 6자리 숫자 8묶음(000000-000000-…)으로 넣어 주세요. 여러 개면 줄을 바꿔 넣습니다."); return; }
+    setBusy(true);
+    try {
+      const f = { Title: sn || tag, SerialNo: sn, AssetId: String(asset.id), Hostname: asset.Hostname || "", Model: asset.Model || "", Owner: asset.Assignee || "", RecoveryKey: keys.join("\n"), Source: "MKQR" };
+      const it0 = st.item;
+      if (it0) await mkUpdateItem(MK_LISTS.itSecrets, it0.id, await mkItFields(MK_LISTS.itSecrets, { RecoveryKey: f.RecoveryKey, AssetId: f.AssetId, Hostname: f.Hostname || it0.Hostname || "" }));
+      else await mkCreateItem(MK_LISTS.itSecrets, await mkItFields(MK_LISTS.itSecrets, f));
+      mkLog("IT 자산", "BitLocker 키 저장", tag, { id: asset.id, info: { 시리얼: sn, 키개수: keys.length, 구분: it0 ? "수정" : "등록" } });
+      setEdit(null); await load();
+    } catch (e) { alert(/\(403\)|accessDenied/.test(e.message) ? mkItSecErrText(e.message) : e.message); } finally { setBusy(false); }
+  }
+  const keys = st.item ? mkItKeysOf(st.item.RecoveryKey) : [];
+  return (
+    <div className="bg-white border rounded-xl p-4 mb-4">
+      <div className="flex items-center justify-between mb-2">
+        <div className="text-xs font-semibold text-slate-500 flex items-center gap-1.5"><LockKeyhole size={13} /> BitLocker 복구 키 <span className="font-normal text-slate-400">IT 전용</span></div>
+        {st.phase === "ok" && keys.length > 0 && (show
+          ? <button onClick={() => setShow(false)} className="text-xs px-2 py-1 border border-slate-300 rounded-lg">가리기</button>
+          : <button onClick={reveal} className="text-xs px-2 py-1 border border-slate-300 rounded-lg flex items-center gap-1"><Eye size={12} /> 보기</button>)}
+      </div>
+      {st.phase === "idle" && <button onClick={load} className="text-sm px-3 py-1.5 rounded-lg border border-slate-300 hover:bg-slate-50">복구 키 확인</button>}
+      {st.phase === "load" && <div className="text-xs text-slate-400">불러오는 중…</div>}
+      {st.phase === "err" && <div className="text-xs text-amber-800">{mkItSecErrText(st.err)}</div>}
+      {st.phase === "ok" && (
+        <>
+          {keys.length ? (
+            <div className="space-y-1.5">
+              {keys.map((k, i) => (
+                <div key={i} className="flex items-center gap-2 rounded-lg bg-slate-50 border border-slate-200 px-3 py-2">
+                  <span className="text-[11px] text-slate-400 shrink-0">{keys.length > 1 ? `#${i + 1}` : "키"}</span>
+                  <span className="font-mono text-[12.5px] text-slate-800 break-all flex-1 select-all">{show ? k : mkItMaskKey(k)}</span>
+                  <button onClick={() => copy(k, i)} className="text-[11px] px-2 py-0.5 rounded border border-slate-300 shrink-0">{copied === String(i) ? "복사됨" : "복사"}</button>
+                </div>
+              ))}
+              <div className="text-[11px] text-slate-400">{[st.item.Modified ? `저장 ${mkItKst(st.item.Modified)}` : "", show ? "1분 뒤 다시 가려집니다" : "", "보기 · 복사는 활동 이력에 남습니다(키 값은 남기지 않음)"].filter(Boolean).join(" · ")}</div>
+            </div>
+          ) : <div className="text-xs text-slate-400">저장된 복구 키가 없습니다{sn ? "" : " — 시리얼이 없는 자산은 CI CD 로 연결됩니다"}</div>}
+          {!readOnly && (edit == null
+            ? <button onClick={() => setEdit("")} className="mt-2 text-xs text-slate-600 underline">{keys.length ? "키 바꾸기" : "키 등록"}</button>
+            : (
+              <div className="mt-2">
+                <textarea className={inputCls + " font-mono text-xs"} rows={3} value={edit} onChange={(e) => setEdit(e.target.value)} placeholder="000000-000000-000000-000000-000000-000000-000000-000000 (여러 개면 줄 바꿈)" autoComplete="off" spellCheck={false} />
+                <div className="flex justify-end gap-2 mt-1.5">
+                  <button onClick={() => setEdit(null)} className="px-3 py-1 text-xs border border-slate-300 rounded-lg">취소</button>
+                  <button disabled={busy} onClick={save} className="px-3 py-1 text-xs rounded-lg text-white disabled:opacity-50" style={{ background: BRAND.accent }}>{busy ? "저장 중…" : "저장"}</button>
+                </div>
+              </div>
+            ))}
+        </>
+      )}
+    </div>
+  );
+}
+
 // ---- CMDB Excel 가져오기 — 표준 파일(Assets · Stock · History 시트) ------------------------------------------
 // 자산은 시리얼(없으면 SourceKey), 재고는 품목 이름, 이력은 ImportKey 로 맞춰 같은 파일을 다시 넣어도 겹치지 않는다.
 // 기본은 「빈 칸만 채우기」 — MKQR 에서 바꾼 사용자 · 상태를 예전 파일이 되돌리지 않게. 「파일 값으로 덮어쓰기」 는 고를 때만.
@@ -5587,11 +5721,11 @@ function mkItReadBook(buf) {
   const wb = XLSX.read(buf, { type: "array" });
   const rows = (n) => (wb.Sheets[n] ? XLSX.utils.sheet_to_json(wb.Sheets[n], { defval: "", raw: false }) : null);
   const assets = rows("Assets"), stock = rows("Stock"), hist = rows("History"), issues = rows("Issues");
-  if (!assets && !stock && !hist) throw new Error("Assets · Stock · History 시트가 없습니다 — MKQR CMDB 가져오기 형식의 파일인지 확인해 주세요.");
-  if (wb.SheetNames.some((n) => /bitlocker/i.test(n))) throw new Error("BitLocker 시트가 들어 있는 파일은 가져오지 않습니다 — 복구 키는 MKQR 에 넣지 않습니다.");
+  const { keys, keyBad } = mkItReadKeySheets(wb);   // BitLocker 복구 키(있으면) — IT 전용 목록에만 저장
+  if (!assets && !stock && !hist && !keys.length) throw new Error("Assets · Stock · History 시트나 BitLocker 복구 키 시트가 없습니다 — MKQR CMDB 가져오기 형식 또는 End-user masterdata 파일인지 확인해 주세요.");
   const miss = assets && assets.length && !("SerialNo" in assets[0] || "SourceKey" in assets[0]) ? "Assets 시트 첫 줄에 SerialNo · SourceKey 열이 없습니다" : "";
   if (miss) throw new Error(miss);
-  return { assets: assets || [], stock: stock || [], hist: hist || [], issues: issues || [], sheets: wb.SheetNames };
+  return { assets: assets || [], stock: stock || [], hist: hist || [], issues: issues || [], keys, keyBad, has: { assets: !!assets, stock: !!stock, hist: !!hist, keys: keys.length > 0 }, sheets: wb.SheetNames };
 }
 // 현재 MKQR 데이터를 같은 형식으로 — 고친 뒤 다시 가져오기(덮어쓰기)로 일괄 수정할 수 있다
 function mkItExportBook(it) {
@@ -5622,7 +5756,10 @@ function ItImportModal({ it, onClose, onDone }) {
   const [fileName, setFileName] = useState("");
   const [err, setErr] = useState("");
   const [mode, setMode] = useState("fill");
-  const [use, setUse] = useState({ assets: true, stock: !it.stockErr, hist: !it.histErr });
+  const [use, setUse] = useState({ assets: true, stock: !it.stockErr, hist: !it.histErr, keys: true });
+  const [sec, setSec] = useState(null);   // 복구 키 목록(IT 전용) — 파일에 키가 있을 때만 읽는다
+  useEffect(() => { if (book && book.has.keys && !sec) mkItSecLoad().then(setSec); }, [book]);
+  const keyPlan = useMemo(() => (book && book.has.keys && sec && !sec.err ? mkItKeyPlan(book.keys, sec.list, it.assets, mode) : null), [book, sec, mode, it]);
   const [run, setRun] = useState(null);       // { phase, done, total, errs }
   const [result, setResult] = useState(null);
   const [showIssues, setShowIssues] = useState(false);
@@ -5638,7 +5775,8 @@ function ItImportModal({ it, onClose, onDone }) {
   async function go() {
     stop.current = false;
     const P = plan; const errsAll = []; const created = {}; const stockIds = {};
-    const total = (use.assets ? P.assets.create.length + P.assets.update.length : 0) + (use.stock ? P.stock.create.length + P.stock.update.length : 0) + (use.hist ? P.hist.create.length : 0);
+    const K = use.keys && keyPlan ? keyPlan : null;
+    const total = (use.assets ? P.assets.create.length + P.assets.update.length : 0) + (use.stock ? P.stock.create.length + P.stock.update.length : 0) + (use.hist ? P.hist.create.length : 0) + (K ? K.create.length + K.update.length : 0);
     let done = 0; const tick = (phase) => (errs) => { done++; setRun({ phase, done, total, errs: [...errsAll, ...errs] }); };
     setRun({ phase: "자산", done: 0, total, errs: [] });
     if (use.assets) {
@@ -5668,7 +5806,16 @@ function ItImportModal({ it, onClose, onDone }) {
       } }));
       errsAll.push(...(await mkItPool(tasks, 4, tick("이력"), stop)));
     }
-    const summary = { 자산생성: use.assets ? P.assets.create.length : 0, 자산갱신: use.assets ? P.assets.update.length : 0, 재고생성: use.stock ? P.stock.create.length : 0, 재고갱신: use.stock ? P.stock.update.length : 0, 이력: use.hist ? P.hist.create.length : 0, 실패: errsAll.length, 중단: stop.current, 방식: mode === "fill" ? "빈 칸만 채우기" : "덮어쓰기", 파일: fileName };
+    if (K && !stop.current) {
+      const sn = new Map(); it.assets.forEach((a) => { if (a.SerialNo) sn.set(String(a.SerialNo).toUpperCase(), a.id); });
+      Object.entries(created).forEach(([k, v]) => sn.set(k.slice(2), v.id));
+      const tasks = K.create.map((x) => ({ label: `복구 키 ${x.f.SerialNo}`, run: async () => {
+        const f = { ...x.f, AssetId: x.f.AssetId || (sn.get(x.f.SerialNo) ? String(sn.get(x.f.SerialNo)) : "") };
+        await mkCreateItem(MK_LISTS.itSecrets, await mkItFields(MK_LISTS.itSecrets, f));
+      } })).concat(K.update.map((x) => ({ label: `복구 키 ${x.ex.SerialNo}`, run: async () => { await mkUpdateItem(MK_LISTS.itSecrets, x.ex.id, await mkItFields(MK_LISTS.itSecrets, x.patch)); } })));
+      errsAll.push(...(await mkItPool(tasks, 4, tick("복구 키"), stop)));
+    }
+    const summary = { 복구키: K ? K.create.length + K.update.length : 0, 자산생성: use.assets ? P.assets.create.length : 0, 자산갱신: use.assets ? P.assets.update.length : 0, 재고생성: use.stock ? P.stock.create.length : 0, 재고갱신: use.stock ? P.stock.update.length : 0, 이력: use.hist ? P.hist.create.length : 0, 실패: errsAll.length, 중단: stop.current, 방식: mode === "fill" ? "빈 칸만 채우기" : "덮어쓰기", 파일: fileName };
     mkLog("IT 자산", "CMDB 가져오기", fileName, { info: summary });
     setRun(null); setResult({ ...summary, errs: errsAll });
     await onDone();
@@ -5690,7 +5837,7 @@ function ItImportModal({ it, onClose, onDone }) {
         <>
           <div className="text-xs text-slate-600 leading-relaxed bg-slate-50 border border-slate-200 rounded-lg px-3 py-2.5 mb-3">
             <b>MKQR CMDB 가져오기 형식</b>(시트 Assets · Stock · History)의 파일을 넣습니다. 자산은 <b>시리얼</b>(없으면 SourceKey), 재고는 <b>품목 이름</b>, 이력은 <b>ImportKey</b> 로 맞춰서 같은 파일을 다시 넣어도 두 번 생기지 않습니다.
-            새 자산에는 CI CD 와 QR 이 자동 발행됩니다. <span className="text-rose-700">BitLocker 복구 키는 가져오지 않습니다.</span>
+            새 자산에는 CI CD 와 QR 이 자동 발행됩니다. <b>BitLocker 복구 키</b>는 End-user masterdata 파일(PC_BitLocker 시트)을 넣으면 IT 전용 목록({MK_LISTS.itSecrets})에만 저장되고, 자산 목록 · Excel · 활동 이력에는 남지 않습니다.
             <div className="mt-1.5"><button onClick={() => mkItExportBook(it)} className="underline text-slate-700">현재 데이터를 이 형식으로 내보내기</button> — 내려받아 고친 뒤 「파일 값으로 덮어쓰기」 로 넣으면 일괄 수정이 됩니다.</div>
           </div>
           <label className="flex items-center justify-center gap-2 border-2 border-dashed border-slate-300 rounded-xl py-6 cursor-pointer hover:bg-slate-50 mb-3">
@@ -5707,11 +5854,20 @@ function ItImportModal({ it, onClose, onDone }) {
                   </label>
                 ))}
               </div>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 mb-3">
+              {(book.has.assets || book.has.stock || book.has.hist) && <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 mb-3">
                 <Card k="assets" title={`자산 ${book.assets.length}행`} a={plan.assets.create.length} b={plan.assets.update.length} c={plan.assets.same + plan.assets.skip.length} />
                 <Card k="stock" title={`재고 ${book.stock.length}행`} a={plan.stock.create.length} b={plan.stock.update.length} c={plan.stock.same + plan.stock.skip.length} disabled={!!it.stockErr} why={`${MK_LISTS.itStock} 목록이 없어 건너뜁니다`} />
                 <Card k="hist" title={`이력 ${book.hist.length}행`} a={plan.hist.create.length} b={0} c={plan.hist.skip + plan.hist.bad.length} disabled={!!it.histErr} why={`${MK_LISTS.itHistory} 목록이 없어 건너뜁니다`} />
-              </div>
+              </div>}
+              {book.has.keys && (
+                <div className="mb-3">
+                  <Card k="keys" title={<span className="inline-flex items-center gap-1.5"><LockKeyhole size={13} /> BitLocker 복구 키 {book.keys.length}대 <span className="font-normal text-[11px] text-slate-500">→ {MK_LISTS.itSecrets} (IT 전용)</span></span>}
+                    a={keyPlan ? keyPlan.create.length : 0} b={keyPlan ? keyPlan.update.length : 0} c={keyPlan ? keyPlan.same + keyPlan.skip.length : 0}
+                    disabled={!sec || !!sec.err} why={!sec ? "복구 키 목록을 확인하는 중…" : mkItSecErrText(sec.err)}
+                    extra={keyPlan && (keyPlan.noAsset || book.keyBad) ? <div className="text-[11px] text-slate-500 mt-1.5">{keyPlan.noAsset ? `자산에 없는 시리얼 ${keyPlan.noAsset}대(자산을 먼저 가져오면 연결됩니다)` : ""}{keyPlan.noAsset && book.keyBad ? " · " : ""}{book.keyBad ? `키 형식이 아닌 행 ${book.keyBad}개 건너뜀` : ""}</div> : null} />
+                  <div className="text-[11px] text-rose-700 mt-1.5">{MK_LISTS.itSecrets} 목록은 권한 상속을 끊고 IT 담당자만 접근하게 해 두어야 합니다 — 전 직원 「참가」 가 이어지면 누구나 키를 읽을 수 있습니다.</div>
+                </div>
+              )}
               {plan.assets.update.length > 0 && (
                 <div className="text-[11px] text-slate-500 mb-2">갱신 예: {plan.assets.update.slice(0, 3).map((x) => `${x.ex.CICD || x.ex.SerialNo} (${Object.keys(x.patch).map((k) => MK_IT_ASSET_LABELS[k] || k).join(", ")})`).join(" · ")}{plan.assets.update.length > 3 ? " …" : ""}</div>
               )}
@@ -5727,7 +5883,7 @@ function ItImportModal({ it, onClose, onDone }) {
           )}
           <div className="flex justify-end gap-2 mt-4">
             <button onClick={onClose} className="px-4 py-2 text-sm border border-slate-300 rounded-lg">닫기</button>
-            <button disabled={!plan || !((use.assets && plan.assets.create.length + plan.assets.update.length) || (use.stock && !it.stockErr && plan.stock.create.length + plan.stock.update.length) || (use.hist && !it.histErr && plan.hist.create.length))}
+            <button disabled={!plan || !((use.assets && plan.assets.create.length + plan.assets.update.length) || (use.stock && !it.stockErr && plan.stock.create.length + plan.stock.update.length) || (use.hist && !it.histErr && plan.hist.create.length) || (use.keys && keyPlan && keyPlan.create.length + keyPlan.update.length))}
               onClick={go} className="px-4 py-2 text-sm rounded-lg text-white disabled:opacity-50" style={{ background: BRAND.accent }}>가져오기 시작</button>
           </div>
         </>
@@ -5744,8 +5900,8 @@ function ItImportModal({ it, onClose, onDone }) {
       {result && (
         <div className="py-2">
           <div className="flex items-center gap-2 mb-3"><CheckCircle2 size={22} className={result.실패 ? "text-amber-500" : "text-emerald-500"} /><div className="text-sm font-semibold text-slate-800">{result.중단 ? "중단했습니다" : "가져오기를 마쳤습니다"}</div></div>
-          <div className="grid grid-cols-3 sm:grid-cols-6 gap-2 text-center mb-3">
-            {[["자산 새로", result.자산생성], ["자산 갱신", result.자산갱신], ["재고 새로", result.재고생성], ["재고 갱신", result.재고갱신], ["이력", result.이력], ["실패", result.실패]].map(([l, n]) => <div key={l} className="rounded-lg bg-slate-50 border border-slate-200 py-2"><div className={`text-lg font-bold tabular-nums ${l === "실패" && n ? "text-rose-600" : "text-slate-800"}`}>{n}</div><div className="text-[10.5px] text-slate-500">{l}</div></div>)}
+          <div className="grid grid-cols-4 sm:grid-cols-7 gap-2 text-center mb-3">
+            {[["복구 키", result.복구키], ["자산 새로", result.자산생성], ["자산 갱신", result.자산갱신], ["재고 새로", result.재고생성], ["재고 갱신", result.재고갱신], ["이력", result.이력], ["실패", result.실패]].map(([l, n]) => <div key={l} className="rounded-lg bg-slate-50 border border-slate-200 py-2"><div className={`text-lg font-bold tabular-nums ${l === "실패" && n ? "text-rose-600" : "text-slate-800"}`}>{n}</div><div className="text-[10.5px] text-slate-500">{l}</div></div>)}
           </div>
           {result.errs.length > 0 && <div className="max-h-40 overflow-y-auto mk-scroll text-[11px] text-rose-700 bg-rose-50 border border-rose-200 rounded-lg px-3 py-2 mb-2">{result.errs.slice(0, 50).map((e, i) => <div key={i}>{e}</div>)}</div>}
           <div className="text-xs text-slate-500">같은 파일을 다시 넣으면 실패한 것만 새로 들어갑니다. 다음 순서: 「위치 좌표」 로 사무실 좌표 지정 → 「IT 자산 QR 라벨」 에서 라벨 출력 · 부착 → 스캔으로 확인.</div>

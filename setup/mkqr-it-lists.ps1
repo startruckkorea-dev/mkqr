@@ -77,4 +77,11 @@ Ensure-Field $H "Qty" "Number"
 Ensure-Field $H "Note" "Note"
 Ensure-Index $H "PersonEmail"; Ensure-Index $H "AssetId"; Ensure-Index $H "ChangeDate"; Ensure-Index $H "ImportKey"
 
+# 6) BitLocker 복구 키 — IT 전용 목록. 만든 뒤 반드시 「권한 상속 중지」 → 구성원 · 방문자 제거 → IT 담당자만 남긴다
+$X = "mkqr_ITSecrets"; Ensure-List $X | Out-Null
+foreach ($n in "SerialNo", "AssetId", "Hostname", "Model", "Owner", "Source") { Ensure-Field $X $n "Text" }
+foreach ($n in "RecoveryKey", "Note") { Ensure-Field $X $n "Note" }
+Ensure-Index $X "SerialNo"; Ensure-Index $X "AssetId"
+Write-Host "  !! $X : 목록 설정 > 이 목록에 대한 권한 > 권한 상속 중지 > 구성원 · 방문자 제거 > IT 담당자만 (전 직원 참가가 이어지면 누구나 키를 읽음)" -ForegroundColor Yellow
+
 Write-Host "`n완료 — MKQR 를 새로고침한 뒤 「카테고리 접근 권한」 에서 IT 담당자에게 IT 전용 칸을 체크하고 「반영」 하세요."
