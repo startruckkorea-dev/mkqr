@@ -111,6 +111,7 @@ import {
   ArrowUpRight, ImagePlus, KeyRound, Mail, XCircle, Settings, ChevronDown, ChevronUp, Store, Contact, History,
   ArrowLeftToLine, ArrowRightFromLine, Menu, LockKeyhole, Eye, Check, LogIn,
   Laptop, Printer, ScanLine, LocateFixed,
+  Users, Package, ArrowLeftRight, Undo2, Wrench, FileSpreadsheet, ChevronRight, Smartphone, Cable, Boxes, UserX, Archive, PackagePlus,
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import QRCode from "qrcode";
@@ -174,7 +175,7 @@ async function apiGet(path, token) {
  * mkqr_* SharePoint 목록 — GUID 하드코딩 없이 displayName으로 조회/캐싱 (ICS와 동일 패턴)
  * ------------------------------------------------------------------ */
 const MK_LISTS = { centers: "mkqr_Centers", agents: "mkqr_Agents", staff: "mkqr_Staff", checkins: "mkqr_CheckIns", categoryAccess: "mkqr_CategoryAccess",
-  itAssets: "mkqr_ITAssets", itScans: "mkqr_ITScans" };   // IT 자산 QR(10-23 · mkqr-it)   // mkqr_Agents: Agent(딜러사) 명함 QR(10-08 · mkqr-agent)
+  itAssets: "mkqr_ITAssets", itScans: "mkqr_ITScans", itHistory: "mkqr_ITHistory", itStock: "mkqr_ITStock" };   // CMDB(10-23 · mkqr-cmdb): 변경 이력 · 재고(액세서리)   // IT 자산 QR(10-23 · mkqr-it)   // mkqr_Agents: Agent(딜러사) 명함 QR(10-08 · mkqr-agent)
 // mkqr_Admins 목록은 더 이상 안 씁니다 — 로그인 허용 여부는 mkqr_CategoryAccess 하나로 통제합니다 (카테고리가 하나라도
 // true면 로그인 가능). IT 담당자가 SharePoint에서 mkqr_Admins 목록 자체는 이제 지우셔도 됩니다.
 
@@ -244,7 +245,7 @@ function mkCatLevel(row, cat) {
 // App 이 뜨기 전(null)이나 지금 화면에 편집 권한이 없으면 목록 · 파일 쓰기를 보내지 않는다(활동 이력 기록 mkLog 는 예외).
 let _mkEditGate = null;   // (대상) => boolean
 const MK_WRITE_KEYS = { mkqr_Centers: ["centers"], mkqr_Agents: ["agents"], mkqr_CheckIns: ["checkins", "agentCheckins"], mkqr_CategoryAccess: ["admins"], centerIcon: ["centers"],
-  mkqr_ITAssets: ["itAssets"] };   // mkqr_ITScans 는 스캔 화면이 권한 확인 뒤 따로 쓴다(mkItWrite)
+  mkqr_ITAssets: ["itAssets"], mkqr_ITHistory: ["itAssets"], mkqr_ITStock: ["itAssets"] };   // CMDB 화면(사용자별 · 재고 · 이력)은 IT 자산 관리 권한(itAssets)으로 쓴다   // mkqr_ITScans 는 스캔 화면이 권한 확인 뒤 따로 쓴다(mkItWrite)
 function mkAssertWritable(target) {
   if (!_mkEditGate || !_mkEditGate(target)) throw new Error("보기 권한만 있는 화면이라 저장할 수 없습니다 — 편집 권한이 필요하면 관리자에게 요청해 주세요.");
 }
@@ -2862,15 +2863,18 @@ function OverviewTab({ centers, agents, agentsError, checkins, admins, setTab, i
   const itVerify = it30.filter((r) => r.VerifyStatus === "검증필요").length;
   const itRentSoon = itActive.filter((a) => { const r = mkItRental(a); return r && r.days != null && r.days <= 30; });
   const itRentals = itActive.filter((a) => a.IsRental === true).length;
-  // 확인이 필요한 자산 — 렌탈 만료(임박) · 마지막 스캔이 검증필요 · 좌표 미등록
+  // 확인이 필요한 자산 — 렌탈 만료(임박) · 마지막 스캔이 검증필요 · 고장 · 재고 부족(10-23 CMDB — 자산이 많아 좌표 미등록은 목록에서 뺐다)
   const lastScanOf = {}; (itReady ? it.scans : []).forEach((r) => { const k = String(r.AssetId); if (!lastScanOf[k]) lastScanOf[k] = r; });   // scans 는 최신순
   const itWatch = itActive.map((a) => {
     const why = []; const r = mkItRental(a); const ls = lastScanOf[String(a.id)];
     if (r && r.days != null && r.days <= 30) why.push({ t: r.days < 0 ? "렌탈 만료" : `렌탈 D-${r.days}`, cls: r.cls, w: r.days < 0 ? 0 : 1 });
     if (ls && ls.VerifyStatus === "검증필요") why.push({ t: `위치 다름${ls.DistanceM != null ? ` ${Number(ls.DistanceM).toLocaleString()}m` : ""}`, cls: "bg-amber-50 text-amber-800", w: 2 });
-    if (a.Lat == null || a.Lat === "") why.push({ t: "좌표 미등록", cls: "bg-blue-50 text-blue-700", w: 3 });
+    if (mkItStateOf(a) === "Inoperable") why.push({ t: "고장", cls: "bg-rose-50 text-rose-700", w: 1 });
     return why.length ? { a, why, w: Math.min(...why.map((x) => x.w)) } : null;
-  }).filter(Boolean).sort((x, y) => x.w - y.w);
+  }).filter(Boolean)
+    .concat((itReady && !it.stockErr ? it.stock || [] : []).filter((st) => st.Active !== false && mkItStockLevel(st).k === "low")
+      .map((st) => ({ stock: true, a: { id: "s" + st.id, Title: st.Title, CICD: "재고" }, why: [{ t: `재고 부족 ${mkItNum(st.Qty) + mkItNum(st.PoolQty)}/${mkItNum(st.Threshold)}`, cls: "bg-rose-50 text-rose-700", w: 1 }], w: 1 })))
+    .sort((x, y) => x.w - y.w);
   const itTypes = Object.values(itActive.reduce((m, a) => { const k = a.AssetType || "미분류"; (m[k] = m[k] || { name: k, n: 0, rent: 0 }).n++; if (a.IsRental === true) m[k].rent++; return m; }, {})).sort((x, y) => y.n - x.n).slice(0, 7);
   const itMsg = !showIt ? "" : !it.loaded ? (itLoading ? "IT 자산 정보를 불러오는 중…" : "") : it.err ? "IT 자산 목록을 읽지 못했습니다 — 목록 설정을 확인해 주세요" : "";
   const ItRecent = () => itMsg ? <Empty text={itMsg} /> : it.scanErr ? <Empty text="스캔 기록을 읽지 못했습니다" /> : it30.length ? (
@@ -2889,8 +2893,8 @@ function OverviewTab({ centers, agents, agentsError, checkins, admins, setTab, i
   ) : <Empty text="최근 30일 스캔 기록이 없습니다" />;
   const ItWatch = () => itMsg ? <Empty text={itMsg} /> : itWatch.length ? (
     <div className="pb-2">
-      {itWatch.slice(0, 8).map(({ a, why }) => (
-        <button key={a.id} onClick={() => setTab("itAssets")} className="w-full text-left px-5 py-2 flex items-center justify-between gap-2 hover:bg-slate-50">
+      {itWatch.slice(0, 8).map(({ a, why, stock: isStock }) => (
+        <button key={a.id} onClick={() => setTab(isStock ? "itStock" : "itAssets")} className="w-full text-left px-5 py-2 flex items-center justify-between gap-2 hover:bg-slate-50">
           <div className="min-w-0 flex items-center gap-2">
             <span className="text-[13px] text-slate-700 truncate">{a.Title}</span>
             <span className="hidden 2xl:inline font-mono text-[10.5px] text-slate-400 shrink-0">{a.CICD}</span>
@@ -2904,7 +2908,7 @@ function OverviewTab({ centers, agents, agentsError, checkins, admins, setTab, i
     <div className="flex flex-col items-center justify-center text-center py-9 px-4">
       <div className="w-10 h-10 rounded-full flex items-center justify-center" style={{ background: IT.band }}><CheckCircle2 size={18} style={{ color: IT.main }} /></div>
       <div className="mt-3 text-[13px] font-semibold text-slate-600">확인이 필요한 자산이 없습니다</div>
-      <div className="mt-0.5 text-[11.5px] text-slate-400">렌탈 만료 · 위치 다름 · 좌표 미등록 없음</div>
+      <div className="mt-0.5 text-[11.5px] text-slate-400">렌탈 만료 · 위치 다름 · 고장 · 재고 부족 없음</div>
     </div>
   );
   const ItTypes = () => {
@@ -2916,7 +2920,7 @@ function OverviewTab({ centers, agents, agentsError, checkins, admins, setTab, i
         {itTypes.map((t) => (
           <div key={t.name}>
             <div className="flex items-center justify-between text-[12.5px] mb-1">
-              <span className="text-slate-700 truncate">{t.name}</span>
+              <span className="text-slate-700 truncate">{mkItTypeKo(t.name)}</span>
               <span className="text-slate-500 font-semibold tabular-nums ml-2">{t.n}대{t.rent ? <span className="font-normal text-slate-400"> · 렌탈 {t.rent}</span> : null}</span>
             </div>
             <div className="h-1.5 rounded-full bg-slate-100 overflow-hidden flex">
@@ -3793,10 +3797,12 @@ function CategoryAccessTab({ admins, categoryAccess, reload, readOnly }) {
 // 로그인하지 않은 사람(습득자 등)에게는 「Property of Star Truck Korea」 안내만 보이고 자산 정보는 보이지 않는다.
 // CI CD 는 저장할 때 SharePoint 항목 번호로 자동 발행(STK-CI-00001 꼴) — 번호가 겹치지 않아 따로 채번하지 않는다.
 const MK_IT_RADIUS_DEFAULT = 300;   // 자산 위치 허용 반경(m) — 사무실 · 층 단위라 센터(10km)보다 좁게
-const MK_IT_TYPES = ["Notebook", "Desktop", "Monitor", "Server", "Network", "Printer", "Mobile", "기타"];
+const MK_IT_TYPES = ["Notebook", "Docking Station", "Mobile", "Desktop", "Monitor", "Server", "Network", "Printer", "기타"];
 const MK_IT_ASSET_LABELS = { Title: "Description", SerialNo: "Serial No.", AssetCode: "Asset Code", AssetType: "분류", Location: "위치", AddressKr: "주소",
   Lat: "위도", Lng: "경도", VerifyRadiusM: "허용 반경(m)", Assignee: "사용자 · 담당", Note: "비고", Active: "활성",
-  IsRental: "렌탈 장비", RentalEndDate: "렌탈 종료일", RentalVendor: "렌탈 업체", AssigneeEmail: "사용자 메일" };
+  IsRental: "렌탈 장비", RentalEndDate: "렌탈 종료일", RentalVendor: "렌탈 업체", AssigneeEmail: "사용자 메일",
+  Model: "모델", Hostname: "Hostname", State: "상태", AssignedDate: "지급일", PhoneNo: "전화번호", CriticalApps: "필수 프로그램", SecurityApp: "보안 프로그램",
+  ExtCiId: "DaaS CI ID", ExtObjectId: "DaaS Object ID", WarrantyStart: "보증 시작일" };
 const MK_IT_RENTAL_COLS = ["IsRental", "RentalEndDate", "RentalVendor"];   // 10-23 추가 열 — 목록에 없으면 저장 때 알려 준다
 const MK_IT_EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 
@@ -3906,6 +3912,8 @@ async function getMkListColumnDefs(listName) {
 const MK_IT_COL_EXPECT = {   // 화면이 기대하는 열 형식 — 이 밖의 열은 한 줄 텍스트
   mkqr_ITAssets: { Lat: "number", Lng: "number", VerifyRadiusM: "number", Active: "boolean", IsRental: "boolean", Note: "text", RentalEndDate: "text" },
   mkqr_ITScans: { GpsLat: "number", GpsLng: "number", GpsAccuracy: "number", DistanceM: "number" },
+  mkqr_ITStock: { Qty: "number", PoolQty: "number", Threshold: "number", IsAsset: "boolean", Active: "boolean" },
+  mkqr_ITHistory: { Qty: "number" },
 };
 const MK_COL_TYPE_KO = { text: "텍스트", number: "숫자", boolean: "예/아니요", dateTime: "날짜", choice: "선택", person: "사람", lookup: "조회", calculated: "계산", other: "기타" };
 // 기대와 다른 형식의 열 — [{ name, now, want }]. 텍스트를 기대하는 칸에 선택(choice) 열은 괜찮은 것으로 본다.
@@ -3917,7 +3925,7 @@ async function mkItColumnIssues(listName) {
   [...new Set(names)].forEach((n) => {
     const d = defs.get(n); if (!d) return;
     const want = exp[n] || "text";
-    const ok = d.type === want || (want === "text" && d.type === "choice") || (n === "RentalEndDate" && d.type === "dateTime") || (n === "Note" && d.type === "text");
+    const ok = d.type === want || (want === "text" && d.type === "choice") || (["RentalEndDate", "AssignedDate", "WarrantyStart"].includes(n) && d.type === "dateTime") || (n === "Note" && d.type === "text");
     if (!ok) out.push({ name: n, now: d.type, want });
   });
   return out;
@@ -3954,7 +3962,7 @@ async function mkItFields(listName, fields) {
 // 읽을 때 — 날짜 열로 만든 렌탈 종료일(UTC 시각)을 한국 날짜로, 텍스트 열로 만든 예/아니요 · 숫자를 화면이 쓰는 형식으로
 function mkItNormAsset(a) {
   const o = { ...a };
-  if (o.RentalEndDate && String(o.RentalEndDate).includes("T")) o.RentalEndDate = new Date(Date.parse(o.RentalEndDate) + 9 * 36e5).toISOString().slice(0, 10);
+  ["RentalEndDate", "AssignedDate", "WarrantyStart"].forEach((k) => { if (o[k] && String(o[k]).includes("T")) o[k] = new Date(Date.parse(o[k]) + 9 * 36e5).toISOString().slice(0, 10); });
   ["IsRental", "Active"].forEach((k) => { if (typeof o[k] === "string") o[k] = /^(true|yes|1|예)$/i.test(o[k].trim()) ? true : /^(false|no|0|아니요)$/i.test(o[k].trim()) ? false : o[k]; });
   ["Lat", "Lng", "VerifyRadiusM"].forEach((k) => { if (typeof o[k] === "string" && o[k].trim() !== "" && isFinite(Number(o[k]))) o[k] = Number(o[k]); });
   return o;
@@ -3966,11 +3974,18 @@ async function mkItWrite(fn) {
 }
 async function mkItLoad() {
   const since = new Date(Date.now() - 90 * 864e5).toISOString();
-  const [a, s] = await Promise.all([
+  const [a, s, h, k] = await Promise.all([
     mkListAll(MK_LISTS.itAssets).then((v) => ({ v }), (e) => ({ e })),
     mkListAll(MK_LISTS.itScans, `&$filter=fields/Created ge '${since}'`).then((v) => ({ v }), (e) => ({ e })),
+    mkListAll(MK_LISTS.itHistory).then((v) => ({ v }), (e) => ({ e })),   // CMDB 이력 · 재고 — 목록이 없어도 자산 화면은 그대로
+    mkListAll(MK_LISTS.itStock).then((v) => ({ v }), (e) => ({ e })),
   ]);
+  const num = (x) => (typeof x === "string" && x.trim() !== "" && isFinite(Number(x)) ? Number(x) : x);
   return {
+    history: h.v ? h.v.map((x) => ({ id: x.id, ...x.fields, Qty: num(x.fields.Qty), ChangeDate: String(x.fields.ChangeDate || "").includes("T") ? new Date(Date.parse(x.fields.ChangeDate) + 9 * 36e5).toISOString().slice(0, 10) : x.fields.ChangeDate || "" })) : [],
+    stock: k.v ? k.v.map((x) => { const o = { id: x.id, ...x.fields }; ["Qty", "PoolQty", "Threshold"].forEach((n) => { o[n] = num(o[n]); }); ["IsAsset", "Active"].forEach((n) => { if (typeof o[n] === "string") o[n] = /^(true|yes|1|예)$/i.test(o[n]); }); return o; }) : [],
+    histErr: h.e ? (h.e.message || String(h.e)) : "",
+    stockErr: k.e ? (k.e.message || String(k.e)) : "",
     assets: a.v ? a.v.map((x) => mkItNormAsset({ id: x.id, ...x.fields })) : [],
     scans: s.v ? s.v.map((x) => ({ id: x.id, ...x.fields, Created: x.fields.Created || x.createdDateTime })).sort((p, q) => String(q.Created).localeCompare(String(p.Created))) : [],
     err: a.e ? (a.e.message || String(a.e)) : "",
@@ -4079,10 +4094,277 @@ function MkItLabelPreview({ asset, scale = 1 }) {
   );
 }
 
+// ==== CMDB(10-23 · mkqr-cmdb) — 자산 상태 · 사용자(계정)별 관리 · 재고(액세서리) · 변경 이력 ===============================
+// 목록 3개: mkqr_ITAssets(시리얼 단위 자산 · QR) · mkqr_ITStock(수량으로 관리하는 액세서리) · mkqr_ITHistory(지급 · 반납 · 교체 이력).
+// 사람은 메일(소문자)로 묶는다 — 메일이 없으면 이름으로(「메일 미확인」 표시). 직원 명부(employee_search.xlsx)에 없는 메일은 「명부 없음」(퇴사 · 이동 의심).
+// 액세서리 보유 수량은 이력(지급 + · 반납 −)으로 계산한다 — 시리얼이 없어 품목 단위로만 셀 수 있다.
+const MK_IT_STATES = {
+  Active: { ko: "사용 중", cls: "bg-emerald-50 text-emerald-700", dot: "#059669" },
+  "In Pool": { ko: "회수 재고", cls: "bg-sky-50 text-sky-700", dot: "#0284C7" },
+  "In Stock": { ko: "미개봉 재고", cls: "bg-indigo-50 text-indigo-700", dot: "#4F46E5" },
+  Inoperable: { ko: "고장", cls: "bg-rose-50 text-rose-700", dot: "#E11D48" },
+  Retired: { ko: "폐기 · 반납", cls: "bg-slate-100 text-slate-500", dot: "#94A3B8" },
+};
+const MK_IT_STATE_KEYS = Object.keys(MK_IT_STATES);
+const MK_IT_POOL = ["In Pool", "In Stock"];   // 지급할 수 있는 상태
+function mkItStateOf(a) { if (a && MK_IT_STATES[a.State]) return a.State; return a && a.Active === false ? "Retired" : "Active"; }
+function MkItStateBadge({ a, s }) {
+  const m = MK_IT_STATES[s || mkItStateOf(a)] || MK_IT_STATES.Active;
+  return <span className={`inline-flex items-center gap-1 text-[11px] font-semibold rounded-full px-2 py-0.5 whitespace-nowrap ${m.cls}`}><span className="w-1.5 h-1.5 rounded-full" style={{ background: m.dot }} />{m.ko}</span>;
+}
+const MK_IT_CHANGE = {
+  Issue: { ko: "지급", cls: "bg-emerald-50 text-emerald-700" }, Return: { ko: "반납", cls: "bg-sky-50 text-sky-700" },
+  Replace: { ko: "교체", cls: "bg-violet-50 text-violet-700" }, Transfer: { ko: "사용자 변경", cls: "bg-amber-50 text-amber-800" },
+  Repair: { ko: "고장 · 수리", cls: "bg-rose-50 text-rose-700" }, Retire: { ko: "폐기 · 반납", cls: "bg-slate-100 text-slate-600" },
+  Receive: { ko: "입고", cls: "bg-indigo-50 text-indigo-700" }, Adjust: { ko: "수량 조정", cls: "bg-slate-100 text-slate-600" },
+  Register: { ko: "등록", cls: "bg-teal-50 text-teal-700" }, Update: { ko: "정보 변경", cls: "bg-slate-100 text-slate-600" },
+};
+function MkItChangeBadge({ t }) {
+  const m = MK_IT_CHANGE[t] || { ko: t || "-", cls: "bg-slate-100 text-slate-600" };
+  return <span className={`inline-block text-[11px] font-semibold rounded-full px-2 py-0.5 whitespace-nowrap ${m.cls}`}>{m.ko}</span>;
+}
+const MK_IT_TYPE_ICON = { Notebook: Laptop, Desktop: Laptop, "Docking Station": Cable, Mobile: Smartphone, Monitor: Laptop, Printer: Printer };
+function MkItTypeIcon({ type, size = 15, className = "" }) { const I = MK_IT_TYPE_ICON[type] || Boxes; return <I size={size} className={className} />; }
+const MK_IT_TYPE_KO = { Notebook: "노트북", Desktop: "데스크톱", "Docking Station": "도킹", Mobile: "휴대폰", Monitor: "모니터", Server: "서버", Network: "네트워크", Printer: "프린터", 기타: "기타" };
+const mkItTypeKo = (t) => MK_IT_TYPE_KO[t] || t || "미분류";
+function mkItNameKey(n) {   // 이름 비교 — 「Lee, Jimmy」 와 「Jimmy Lee」 를 같게(괄호 안 한글 · 기호 무시, 낱말 정렬)
+  return String(n || "").replace(/\(.*?\)/g, " ").toLowerCase().split(/[^a-z가-힣]+/).filter(Boolean).sort().join("");
+}
+function mkItPk(email, name) {
+  const e = String(email || "").trim().toLowerCase();
+  if (e) return e;
+  const n = mkItNameKey(name);
+  return n ? "name:" + n : "";
+}
+const MK_IT_NOT_PERSON = new Set(["stkit", "public", "it", "itteam", "techbar", "csp"]);
+function mkItIsPerson(name, email) { return !!String(email || "").trim() || (!!mkItNameKey(name) && !MK_IT_NOT_PERSON.has(mkItNameKey(name))); }
+function mkItInitials(n) {
+  const t = String(n || "").replace(/\(.*?\)/g, "").trim();
+  if (/[가-힣]/.test(t)) return t.replace(/[^가-힣]/g, "").slice(-2);
+  const w = t.split(/[\s,]+/).filter(Boolean);
+  return ((w[1] || "")[0] || "").toUpperCase() + ((w[0] || "")[0] || "").toUpperCase() || "?";
+}
+function useMkDir() {
+  const [st, setSt] = useState({ list: null, err: false });
+  useEffect(() => { let on = true; loadEmployeeDirectory().then((l) => on && setSt({ list: l, err: false })).catch(() => on && setSt({ list: [], err: true })); return () => { on = false; }; }, []);
+  const map = useMemo(() => new Map((st.list || []).map((d) => [d.email, d])), [st.list]);
+  return { list: st.list || [], err: st.err, map, ready: !!st.list && !st.err && st.list.length > 0, loading: st.list === null };
+}
+const mkItNum = (v) => { const n = Number(v); return isFinite(n) ? n : 0; };
+const mkItMe = () => _mkLogUser.name || _mkLogUser.email || "";
+// 429 · 503 · 504 는 잠깐 쉬었다 다시(가져오기처럼 많이 쓸 때)
+async function mkItRetry(fn, tries = 4) {
+  for (let i = 0; ; i++) {
+    try { return await fn(); } catch (e) {
+      if (i >= tries - 1 || !/\((429|503|504)\)/.test(String(e.message))) throw e;
+      await new Promise((r) => setTimeout(r, 1200 * Math.pow(2, i)));
+    }
+  }
+}
+async function mkItGetItem(listName, id) {
+  try {
+    const token = await getGraphToken(); const listId = await getMkListId(listName);
+    const r = await apiGet(`/sites/${_siteId}/lists/${listId}/items/${id}?expand=fields`, token);
+    return { id: r.id, ...r.fields };
+  } catch (e) { return null; }
+}
+async function mkItAssetSave(id, patch) {
+  const p = { ...patch };
+  if (p.State) p.Active = p.State !== "Retired";
+  return mkItRetry(async () => mkUpdateItem(MK_LISTS.itAssets, id, await mkItFields(MK_LISTS.itAssets, p)));
+}
+// 이력 한 줄 — 이력 목록이 없거나 쓰기에 실패해도 본 작업(자산 · 재고 저장)은 막지 않는다. 실패하면 false.
+async function mkItHistAdd(h) {
+  const label = (MK_IT_CHANGE[h.ChangeType] || {}).ko || h.ChangeType || "";
+  const f = { ChangeDate: mkTodayKst(), Source: "MKQR", HandledBy: mkItMe(), ...h };
+  f.Title = `${label} · ${f.CICD || f.SerialNo || f.StockKey || f.ItemType || ""} · ${f.Person || ""}`.slice(0, 250);
+  try { await mkItRetry(async () => mkCreateItem(MK_LISTS.itHistory, await mkItFields(MK_LISTS.itHistory, f))); return true; }
+  catch (e) { console.warn("[MKQR] 이력 저장 실패:", e.message); return false; }
+}
+const mkItHistOfAsset = (a) => ({ Kind: "Asset", AssetId: String(a.id), CICD: a.CICD || "", ItemType: a.AssetType || "", Model: a.Model || "", SerialNo: a.SerialNo || "" });
+
+// 자산 이동 — Issue(지급) · Transfer(사용자 변경) · Return(반납) · Replace(교체) · Repair(고장) · Restore(수리 완료) · Retire(폐기) · Unretire(재고로 복구)
+async function mkItDoMove(kind, o) {
+  const { asset, person = {}, reason = "", ticket = "", note = "", newAsset } = o;
+  const date = o.date || mkTodayKst();
+  const prev = mkItStateOf(asset);
+  const who = { name: asset.Assignee || "", email: (asset.AssigneeEmail || "").toLowerCase() };
+  const pe = { name: String(person.name || "").trim(), email: String(person.email || "").trim().toLowerCase() };
+  const base = { Reason: reason, TicketNo: ticket, Note: note, ChangeDate: date };
+  const H = []; let histOk = true;
+  const hist = async (h) => { histOk = (await mkItHistAdd({ ...base, ...h })) && histOk; };
+  if (kind === "Issue") {
+    await mkItAssetSave(asset.id, { State: "Active", Assignee: pe.name, AssigneeEmail: pe.email, AssignedDate: date });
+    await hist({ ...mkItHistOfAsset(asset), ChangeType: "Issue", Person: pe.name, PersonEmail: pe.email, PrevState: prev, NewState: "Active" });
+  } else if (kind === "Transfer") {
+    await mkItAssetSave(asset.id, { Assignee: pe.name, AssigneeEmail: pe.email, AssignedDate: date });
+    await hist({ ...mkItHistOfAsset(asset), ChangeType: "Transfer", Person: pe.name, PersonEmail: pe.email, PrevState: prev, NewState: prev,
+      Note: [note, who.name || who.email ? `이전 사용자: ${who.name}${who.email ? ` (${who.email})` : ""}` : ""].filter(Boolean).join(" / ") });
+  } else if (kind === "Return") {
+    const to = o.toState || "In Pool";
+    await mkItAssetSave(asset.id, { State: to, Assignee: "", AssigneeEmail: "", AssignedDate: "" });
+    await hist({ ...mkItHistOfAsset(asset), ChangeType: "Return", Person: who.name, PersonEmail: who.email, PrevState: prev, NewState: to });
+  } else if (kind === "Replace") {
+    const to = o.toState || "In Pool";
+    await mkItAssetSave(asset.id, { State: to, Assignee: "", AssigneeEmail: "", AssignedDate: "" });
+    await hist({ ...mkItHistOfAsset(asset), ChangeType: "Return", Person: who.name, PersonEmail: who.email, PrevState: prev, NewState: to, Note: [note, `교체 반납 → ${newAsset.CICD || newAsset.SerialNo || newAsset.Title}`].filter(Boolean).join(" / ") });
+    await mkItAssetSave(newAsset.id, { State: "Active", Assignee: who.name, AssigneeEmail: who.email, AssignedDate: date });
+    await hist({ ...mkItHistOfAsset(newAsset), ChangeType: "Replace", Person: who.name, PersonEmail: who.email, PrevState: mkItStateOf(newAsset), NewState: "Active", Note: [note, `교체 지급 ← ${asset.CICD || asset.SerialNo || asset.Title}`].filter(Boolean).join(" / ") });
+  } else if (kind === "Repair") {
+    await mkItAssetSave(asset.id, { State: "Inoperable" });
+    await hist({ ...mkItHistOfAsset(asset), ChangeType: "Repair", Person: who.name, PersonEmail: who.email, PrevState: prev, NewState: "Inoperable" });
+  } else if (kind === "Restore") {
+    const to = o.toState || (who.name || who.email ? "Active" : "In Pool");
+    await mkItAssetSave(asset.id, { State: to });
+    await hist({ ...mkItHistOfAsset(asset), ChangeType: "Repair", Person: who.name, PersonEmail: who.email, PrevState: prev, NewState: to, Note: [note, "수리 완료"].filter(Boolean).join(" / ") });
+  } else if (kind === "Retire") {
+    await mkItAssetSave(asset.id, { State: "Retired", Assignee: "", AssigneeEmail: "", AssignedDate: "" });
+    await hist({ ...mkItHistOfAsset(asset), ChangeType: "Retire", Person: who.name, PersonEmail: who.email, PrevState: prev, NewState: "Retired" });
+  } else if (kind === "Unretire") {
+    await mkItAssetSave(asset.id, { State: "In Pool" });
+    await hist({ ...mkItHistOfAsset(asset), ChangeType: "Update", PrevState: prev, NewState: "In Pool", Note: [note, "재고로 복구"].filter(Boolean).join(" / ") });
+  }
+  mkLog("IT 자산", (MK_IT_CHANGE[kind === "Restore" ? "Repair" : kind === "Unretire" ? "Update" : kind] || {}).ko || kind, asset.CICD || asset.Title, { id: asset.id,
+    info: { 사용자: pe.name || who.name, 메일: pe.email || who.email, 사유: reason, 티켓: ticket, ...(newAsset ? { "교체 자산": newAsset.CICD || newAsset.Title } : {}) } });
+  return { histOk };
+}
+// 재고(액세서리) 이동 — Issue · Return · Receive(입고) · Adjust(수량 조정). 저장 직전 최신 수량을 다시 읽는다.
+async function mkItStockDo(kind, o) {
+  const { item, person = {}, reason = "", ticket = "", note = "" } = o;
+  const qty = Math.max(1, Math.floor(mkItNum(o.qty) || 1));
+  const cur = (await mkItGetItem(MK_LISTS.itStock, item.id)) || item;
+  let Q = mkItNum(cur.Qty), P = mkItNum(cur.PoolQty);
+  const pe = { name: String(person.name || "").trim(), email: String(person.email || "").trim().toLowerCase() };
+  const h = { Kind: "Stock", StockId: String(item.id), StockKey: item.Title, ItemType: item.Category || "", Model: item.Title, Qty: qty, Reason: reason, TicketNo: ticket, Note: note, ChangeDate: o.date || mkTodayKst() };
+  if (kind === "Issue") {
+    const src = o.source === "new" ? "new" : "pool";
+    if (src === "pool" ? P < qty : Q < qty) throw new Error(`재고가 부족합니다 — ${src === "pool" ? "회수 재고" : "신품"} ${src === "pool" ? P : Q}개`);
+    if (src === "pool") P -= qty; else Q -= qty;
+    Object.assign(h, { ChangeType: "Issue", Person: pe.name, PersonEmail: pe.email, PrevState: src === "pool" ? "In Pool" : "In Stock", NewState: "Active" });
+  } else if (kind === "Return") {
+    const bad = o.condition === "bad";
+    if (!bad) P += qty;
+    Object.assign(h, { ChangeType: "Return", Person: pe.name, PersonEmail: pe.email, PrevState: "Active", NewState: bad ? "Retired" : "In Pool", Note: [note, bad ? "불량 — 재고에 넣지 않음" : ""].filter(Boolean).join(" / ") });
+  } else if (kind === "Receive") {
+    Q += qty; Object.assign(h, { ChangeType: "Receive", NewState: "In Stock" });
+  } else if (kind === "Adjust") {
+    const nQ = Math.max(0, Math.floor(mkItNum(o.newQty))), nP = Math.max(0, Math.floor(mkItNum(o.newPool)));
+    Object.assign(h, { ChangeType: "Adjust", Qty: (nQ + nP) - (Q + P), Note: [note, `신품 ${Q}→${nQ} · 회수 ${P}→${nP}`].filter(Boolean).join(" / ") });
+    Q = nQ; P = nP;
+  }
+  await mkItRetry(async () => mkUpdateItem(MK_LISTS.itStock, item.id, await mkItFields(MK_LISTS.itStock, { Qty: Q, PoolQty: P })));
+  const histOk = await mkItHistAdd(h);
+  mkLog("IT 재고", (MK_IT_CHANGE[kind] || {}).ko || kind, item.Title, { id: item.id, info: { 수량: h.Qty, 사용자: pe.name, 메일: pe.email, 신품: Q, 회수: P, 사유: reason } });
+  return { histOk, Q, P };
+}
+function mkItStockLevel(s) {
+  const tot = mkItNum(s.Qty) + mkItNum(s.PoolQty), th = mkItNum(s.Threshold);
+  if (th > 0 && tot < th) return { k: "low", ko: "부족", cls: "bg-rose-50 text-rose-700" };
+  if (th > 0 && tot <= Math.ceil(th * 1.2)) return { k: "warn", ko: "주의", cls: "bg-amber-50 text-amber-800" };
+  return { k: "ok", ko: "충분", cls: "bg-emerald-50 text-emerald-700" };
+}
+// 사람별 액세서리 보유(이력 기준) — Map 사람키 → [{ key, qty, last }]
+function mkItHoldings(history) {
+  const m = new Map();
+  [...history].filter((h) => h.Kind === "Stock").sort((x, y) => String(x.ChangeDate).localeCompare(String(y.ChangeDate)) || Number(x.id) - Number(y.id)).forEach((h) => {
+    if (!mkItIsPerson(h.Person, h.PersonEmail)) return;
+    const pk = mkItPk(h.PersonEmail, h.Person); if (!pk) return;
+    const k = h.StockKey || h.ItemType || h.Model || "기타"; const q = Math.abs(mkItNum(h.Qty)) || 1;
+    if (!m.has(pk)) m.set(pk, new Map());
+    const pm = m.get(pk); const cur = pm.get(k) || { key: k, qty: 0, last: "" };
+    if (h.ChangeType === "Issue") cur.qty += q; else if (h.ChangeType === "Return") cur.qty -= q;
+    cur.last = h.ChangeDate || cur.last; pm.set(k, cur);
+  });
+  const out = new Map();
+  m.forEach((pm, pk) => { const l = [...pm.values()].filter((x) => x.qty > 0); if (l.length) out.set(pk, l); });
+  return out;
+}
+// 사람 목록 — 자산 사용자 · 이력 속 사람 · (선택) 직원 명부. 이름만 있는 사람은 같은 이름의 메일 있는 사람에 합친다.
+function mkItPeople(assets, history, dir) {
+  const P = new Map();
+  const get = (email, name) => {
+    if (!mkItIsPerson(name, email)) return null;
+    const k = mkItPk(email, name); if (!k) return null;
+    if (!P.has(k)) P.set(k, { key: k, email: String(email || "").trim().toLowerCase(), name: String(name || "").trim(), assets: [], hold: [], hist: [] });
+    const p = P.get(k); if (!p.name && name) p.name = String(name).trim();
+    return p;
+  };
+  assets.forEach((a) => { if (mkItStateOf(a) === "Retired") return; if (a.Assignee || a.AssigneeEmail) { const p = get(a.AssigneeEmail, a.Assignee); if (p) p.assets.push(a); } });
+  history.forEach((h) => { const p = get(h.PersonEmail, h.Person); if (p) p.hist.push(h); });
+  mkItHoldings(history).forEach((l, pk) => { const p = P.get(pk); if (p) p.hold = l; });
+  // 이름만 → 메일 있는 사람으로 합치기
+  const byName = new Map();
+  P.forEach((p) => { if (p.email) { [p.name, dir && dir.map.get(p.email) && dir.map.get(p.email).name].forEach((n) => { const k = mkItNameKey(n); if (k && !byName.has(k)) byName.set(k, p); }); } });
+  [...P.values()].filter((p) => !p.email).forEach((p) => {
+    const t = byName.get(mkItNameKey(p.name)); if (!t) return;
+    t.assets.push(...p.assets); t.hist.push(...p.hist);
+    p.hold.forEach((x) => { const c = t.hold.find((y) => y.key === x.key); if (c) c.qty += x.qty; else t.hold.push({ ...x }); });
+    P.delete(p.key);
+  });
+  P.forEach((p) => {
+    const d = dir && p.email ? dir.map.get(p.email) : null;
+    p.dept = d ? d.dept : ""; p.dirName = d ? d.name : "";
+    p.missing = !!(dir && dir.ready && p.email && !d);
+    p.noMail = !p.email;
+    p.hist.sort((x, y) => String(y.ChangeDate).localeCompare(String(x.ChangeDate)) || Number(y.id) - Number(x.id));
+    p.count = (t) => p.assets.filter((a) => a.AssetType === t).length;
+    p.holdQty = p.hold.reduce((s, x) => s + x.qty, 0);
+  });
+  return P;
+}
+function MkItPersonChip({ name, email, missing }) {
+  return (
+    <span className="min-w-0">
+      <span className="text-slate-800">{name || email || "-"}</span>
+      {email && name && <span className="block text-[11px] text-slate-500 break-all">{email}</span>}
+      {missing && <span className="inline-block mt-0.5 text-[10px] px-1.5 py-0.5 rounded-full bg-red-50 text-red-600 leading-none font-medium" title="직원 명부(employee_search.xlsx)에 없는 메일 — 퇴사 · 이동 여부 확인">명부 없음</span>}
+    </span>
+  );
+}
+function MkItSetupNotice({ list, what }) {
+  return (
+    <div className="bg-amber-50 border border-amber-200 rounded-xl px-5 py-4 text-sm text-amber-900 leading-relaxed">
+      <div className="font-semibold mb-1">{what} 목록이 아직 없습니다</div>
+      <div className="text-xs">SharePoint STK-DB 사이트에 <b>{list}</b> 목록을 만들어 주세요(저장소의 setup/mkqr-it-lists.ps1 이 열과 인덱스까지 만듭니다). 목록을 만든 뒤 새로고침하면 이 화면을 쓸 수 있습니다.</div>
+    </div>
+  );
+}
+function MkItKpi({ label, value, sub, active, onClick, tone }) {
+  return (
+    <button onClick={onClick} className={`text-left bg-white border rounded-xl px-4 py-3 transition-colors ${onClick ? "hover:border-slate-300" : "cursor-default"}`}
+      style={active ? { borderColor: tone || BRAND.accent, boxShadow: `0 0 0 1px ${tone || BRAND.accent}` } : {}}>
+      <div className="text-[11.5px] text-slate-500 flex items-center gap-1.5">{label}</div>
+      <div className="text-xl font-bold text-slate-800 tabular-nums mt-0.5">{value}{sub != null && <span className="text-xs font-normal text-slate-400 ml-1">{sub}</span>}</div>
+    </button>
+  );
+}
+// 오른쪽에서 열리는 패널(자산 상세 · 사람 상세 공용)
+function MkDrawer({ title, onClose, children, width = "max-w-2xl" }) {
+  useEffect(() => { const k = (e) => { if (e.key === "Escape") onClose(); }; window.addEventListener("keydown", k); return () => window.removeEventListener("keydown", k); }, []);
+  return (
+    <div className="fixed inset-0 z-40 flex justify-end bg-black/30" onClick={onClose}>
+      <div className={`h-full w-full ${width} bg-slate-50 shadow-2xl overflow-y-auto mk-scroll`} onClick={(e) => e.stopPropagation()} role="dialog" aria-label={typeof title === "string" ? title : undefined}>
+        <div className="sticky top-0 z-10 bg-white/95 backdrop-blur border-b px-5 py-3.5 flex items-center justify-between gap-3">
+          <div className="min-w-0 font-semibold text-slate-800 truncate">{title}</div>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-700 shrink-0" aria-label="닫기"><X size={18} /></button>
+        </div>
+        <div className="p-5">{children}</div>
+      </div>
+    </div>
+  );
+}
+const MK_IT_REASONS = {
+  Issue: ["신규 입사", "교체 지급", "추가 요청", "임시 대여", "업무 변경"], Transfer: ["업무 인계", "부서 이동", "사용자 변경"],
+  Return: ["퇴사", "육아휴직", "휴직", "교체로 반납", "임시 대여 종료", "불필요"], Replace: ["고장 교체", "노후 교체", "성능 업그레이드"],
+  Repair: ["전원 불량", "화면 불량", "키보드 불량", "배터리 불량", "파손", "기타 고장"], Restore: ["수리 완료"], Retire: ["노후 폐기", "수리 불가", "분실", "매각 · 인수", "렌탈 반납"], Unretire: ["재사용"],
+  Receive: ["신규 구매", "반환 입고"], Adjust: ["재고 실사", "오류 정정"],
+};
+
 // ---- IT 자산 관리 -----------------------------------------------------------------------------------
 function ItAssetEditModal({ asset, onClose, onSave, busy, readOnly }) {
-  const [form, setForm] = useState(() => ({ Active: true, VerifyRadiusM: MK_IT_RADIUS_DEFAULT, AssetType: "", ...asset }));
+  const [form, setForm] = useState(() => ({ VerifyRadiusM: MK_IT_RADIUS_DEFAULT, AssetType: "", ...asset, State: mkItStateOf(asset.id ? asset : { State: asset.State || "Active" }) }));   // 새 자산은 「사용 중」 으로 시작(재고로 들이면 상태만 바꾼다)
   const [locMsg, setLocMsg] = useState("");
+  const [more, setMore] = useState(() => !!(asset.CriticalApps || asset.SecurityApp || asset.ExtCiId || asset.ExtObjectId || asset.WarrantyStart));
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.type === "checkbox" ? e.target.checked : e.target.value }));
   async function hereLocation() {
     setLocMsg("현재 위치를 확인하는 중…");
@@ -4102,40 +4384,60 @@ function ItAssetEditModal({ asset, onClose, onSave, busy, readOnly }) {
     } catch (e) { setLocMsg("좌표 찾기 실패: " + e.message); }
   }
   const dis = readOnly || busy;
+  const assigned = form.State === "Active";
+  const badMail = !!String(form.AssigneeEmail || "").trim() && !MK_IT_EMAIL_RE.test(String(form.AssigneeEmail).trim());
+  const rentalBad = form.IsRental === true && (!String(form.RentalEndDate || "").trim() || !String(form.RentalVendor || "").trim());
   return (
-    <Modal title={asset.id ? "IT 자산 수정" : "IT 자산 등록"} onClose={onClose} wide>
+    <Modal title={asset.id ? `IT 자산 수정 · ${asset.CICD || ""}` : "IT 자산 등록"} onClose={onClose} wide>
       <fieldset disabled={dis} className="contents">
-        <Field label="Description (자산 설명)" required><input className={inputCls} value={form.Title || ""} onChange={set("Title")} placeholder="예: Dell Latitude 7440 노트북" /></Field>
+        <Field label="Description (자산 설명)" required><input className={inputCls} value={form.Title || ""} onChange={set("Title")} placeholder="예: HP 840G10 i7 Laptop" /></Field>
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="분류">
+            <select className={inputCls} value={form.AssetType || ""} onChange={set("AssetType")}>
+              <option value="">선택</option>{MK_IT_TYPES.map((t) => <option key={t} value={t}>{t} · {mkItTypeKo(t)}</option>)}
+            </select>
+          </Field>
+          <Field label="모델"><input className={inputCls} value={form.Model || ""} onChange={set("Model")} placeholder="예: HP 840G10 i7" /></Field>
+        </div>
         <div className="grid grid-cols-2 gap-3">
           <Field label="Serial No."><input className={inputCls} value={form.SerialNo || ""} onChange={set("SerialNo")} placeholder="제조사 일련번호" /></Field>
           <Field label="Asset Code"><input className={inputCls} value={form.AssetCode || ""} onChange={set("AssetCode")} placeholder="회계 · SAP 자산 번호" /></Field>
         </div>
         <div className="grid grid-cols-2 gap-3">
           <Field label="CI CD (자동 발행)"><input className={inputCls + " bg-slate-50 text-slate-500"} value={form.CICD || (asset.id ? mkItCicd(asset.id) : "저장하면 자동 발행됩니다")} readOnly /></Field>
-          <Field label="분류">
-            <select className={inputCls} value={form.AssetType || ""} onChange={set("AssetType")}>
-              <option value="">선택</option>{MK_IT_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
-            </select>
-          </Field>
+          {form.AssetType === "Mobile"
+            ? <Field label="전화번호"><input className={inputCls} value={form.PhoneNo || ""} onChange={set("PhoneNo")} placeholder="010-0000-0000" /></Field>
+            : <Field label="Hostname"><input className={inputCls} value={form.Hostname || ""} onChange={set("Hostname")} placeholder="예: STK5CG4104880" /></Field>}
         </div>
-        <Field label="사용자 · 담당 (이름 · 메일)">
-          <MkItPersonPicker name={form.Assignee} email={form.AssigneeEmail} disabled={dis}
-            onChange={(v) => setForm((f) => ({ ...f, Assignee: v.name, AssigneeEmail: v.email }))} />
-        </Field>
-        <Field label="위치 (설치 장소)"><input className={inputCls} value={form.Location || ""} onChange={set("Location")} placeholder="예: 본사 5층 IT실" /></Field>
+        <div className="rounded-xl border border-slate-200 px-3 pt-3 pb-1 mb-3 bg-slate-50/60">
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="상태">
+              <select className={inputCls} value={form.State} onChange={(e) => setForm((f) => ({ ...f, State: e.target.value }))}>
+                {MK_IT_STATE_KEYS.map((k) => <option key={k} value={k}>{MK_IT_STATES[k].ko} ({k})</option>)}
+              </select>
+            </Field>
+            <Field label="지급일"><input type="date" className={inputCls} value={String(form.AssignedDate || "").slice(0, 10)} onChange={set("AssignedDate")} disabled={!assigned} /></Field>
+          </div>
+          {assigned ? (
+            <Field label="사용자 · 담당 (이름 · 메일)">
+              <MkItPersonPicker name={form.Assignee} email={form.AssigneeEmail} disabled={dis} onChange={(v) => setForm((f) => ({ ...f, Assignee: v.name, AssigneeEmail: v.email }))} />
+            </Field>
+          ) : <div className="text-xs text-slate-500 mb-3">{MK_IT_STATES[form.State].ko} 상태는 사용자가 없습니다 — 저장하면 사용자 칸을 비웁니다. 지급 · 반납은 자산 상세의 단추로 하면 이력이 함께 남습니다.</div>}
+        </div>
+        <Field label="위치 (설치 장소)"><input className={inputCls} value={form.Location || ""} onChange={set("Location")} placeholder="예: SSQ · Busan Branch · Yeoju PDC" list="mk-it-locs" /></Field>
         <Field label="주소 (좌표 찾기용, 선택)">
           <div className="flex gap-2">
             <input className={inputCls} value={form.AddressKr || ""} onChange={set("AddressKr")} placeholder="예: 서울시 ○○구 ○○로 00" />
             {!readOnly && <button type="button" onClick={geocode} className="shrink-0 px-3 py-2 text-xs border border-slate-300 rounded-lg hover:bg-slate-50 flex items-center gap-1"><MapPin size={13} /> 주소로 찾기</button>}
           </div>
         </Field>
-        <div className="grid grid-cols-3 gap-3 items-end">
-          <Field label="위도 (Lat)"><input className={inputCls} value={form.Lat ?? ""} onChange={set("Lat")} /></Field>
-          <Field label="경도 (Lng)"><input className={inputCls} value={form.Lng ?? ""} onChange={set("Lng")} /></Field>
-          <Field label="GPS 허용 반경 (m)"><input className={inputCls} type="number" min="10" value={form.VerifyRadiusM ?? ""} onChange={set("VerifyRadiusM")} /></Field>
+        <div className="grid grid-cols-3 gap-3">
+          <Field label="위도 (Lat)"><input className={inputCls} value={form.Lat ?? ""} onChange={set("Lat")} inputMode="decimal" /></Field>
+          <Field label="경도 (Lng)"><input className={inputCls} value={form.Lng ?? ""} onChange={set("Lng")} inputMode="decimal" /></Field>
+          <Field label="GPS 허용 반경 (m)"><input className={inputCls} value={form.VerifyRadiusM ?? ""} onChange={set("VerifyRadiusM")} inputMode="numeric" /></Field>
         </div>
         {!readOnly && (
-          <div className="flex items-center gap-2 -mt-1 mb-3">
+          <div className="flex items-center gap-2 mb-3 -mt-1 flex-wrap">
             <button type="button" onClick={hereLocation} className="px-3 py-1.5 text-xs border border-slate-300 rounded-lg hover:bg-slate-50 flex items-center gap-1"><LocateFixed size={13} /> 현재 위치로 채우기</button>
             <span className="text-xs text-slate-500">{locMsg || "스캔 위치가 이 좌표에서 허용 반경 안이면 「정상」, 밖이면 「검증필요」 입니다"}</span>
           </div>
@@ -4149,40 +4451,255 @@ function ItAssetEditModal({ asset, onClose, onSave, busy, readOnly }) {
             </div>
           )}
         </div>
+        <div className="mb-3">
+          <button type="button" onClick={() => setMore((v) => !v)} className="text-xs text-slate-500 hover:text-slate-800 flex items-center gap-1">{more ? <ChevronUp size={13} /> : <ChevronDown size={13} />} 추가 정보 — 필수 프로그램 · 보안 · DaaS CI · 보증 시작일</button>
+          {more && (
+            <div className="grid grid-cols-2 gap-3 mt-2">
+              <Field label="필수 프로그램 (Critical Application)"><input className={inputCls} value={form.CriticalApps || ""} onChange={set("CriticalApps")} placeholder="예: Adobe Standard, 한컴 2022" /></Field>
+              <Field label="보안 프로그램"><input className={inputCls} value={form.SecurityApp || ""} onChange={set("SecurityApp")} placeholder="예: Crowdstrike" /></Field>
+              <Field label="DaaS CI ID"><input className={inputCls} value={form.ExtCiId || ""} onChange={set("ExtCiId")} /></Field>
+              <Field label="DaaS Object ID"><input className={inputCls} value={form.ExtObjectId || ""} onChange={set("ExtObjectId")} /></Field>
+              <Field label="보증 시작일"><input type="date" className={inputCls} value={String(form.WarrantyStart || "").slice(0, 10)} onChange={set("WarrantyStart")} /></Field>
+            </div>
+          )}
+        </div>
         <Field label="비고"><textarea className={inputCls} rows={2} value={form.Note || ""} onChange={set("Note")} /></Field>
-        <label className="flex items-center gap-2 text-sm text-slate-700 mb-2"><input type="checkbox" checked={form.Active !== false} onChange={set("Active")} /> 사용 중(활성) — 끄면 폐기 · 반납 자산으로 표시합니다</label>
       </fieldset>
       <div className="flex justify-end gap-2 mt-4">
         <button onClick={onClose} className="px-4 py-2 text-sm border border-slate-300 rounded-lg">닫기</button>
-        {!readOnly && <button disabled={busy || !String(form.Title || "").trim() || (form.IsRental === true && (!String(form.RentalEndDate || "").trim() || !String(form.RentalVendor || "").trim())) || (!!String(form.AssigneeEmail || "").trim() && !MK_IT_EMAIL_RE.test(String(form.AssigneeEmail).trim()))} onClick={() => onSave(form)} className="px-4 py-2 text-sm rounded-lg text-white disabled:opacity-50" style={{ background: BRAND.accent }}>{busy ? "저장 중…" : "저장"}</button>}
+        {!readOnly && <button disabled={busy || !String(form.Title || "").trim() || rentalBad || badMail} onClick={() => onSave(form)} className="px-4 py-2 text-sm rounded-lg text-white disabled:opacity-50" style={{ background: BRAND.accent }}>{busy ? "저장 중…" : "저장"}</button>}
       </div>
     </Modal>
   );
 }
 
+// 지급 · 반납 · 교체 등 — 자산이 정해져 있으면(asset) 사람을, 사람이 정해져 있으면(person) 자산을 고른다
+function ItMoveModal({ kind, asset, person, assets, onClose, onDone }) {
+  const KO = { Issue: "지급", Transfer: "다른 사용자로 변경", Return: "반납", Replace: "교체", Repair: "고장 처리", Restore: "수리 완료", Retire: "폐기 · 반납 처리", Unretire: "재고로 복구" };
+  const [who, setWho] = useState({ name: (person && person.name) || "", email: (person && person.email) || "" });
+  const [pick, setPick] = useState(asset || null);
+  const [nw, setNw] = useState(null);
+  const [q, setQ] = useState("");
+  const [typeF, setTypeF] = useState(asset && kind === "Replace" ? asset.AssetType || "" : "");
+  const [f, setF] = useState({ date: mkTodayKst(), reason: "", ticket: "", note: "", toState: "In Pool" });
+  const [busy, setBusy] = useState(false);
+  const needPerson = (kind === "Issue" || kind === "Transfer") && !person;
+  const needAsset = !asset;
+  const needNew = kind === "Replace";
+  const pool = (assets || []).filter((a) => MK_IT_POOL.includes(mkItStateOf(a)) && (!typeF || a.AssetType === typeF) && (!asset || a.id !== asset.id));
+  const qq = q.trim().toLowerCase();
+  const poolShown = pool.filter((a) => !qq || [a.Title, a.Model, a.SerialNo, a.CICD, a.Hostname, a.Location].some((v) => String(v || "").toLowerCase().includes(qq))).slice(0, 60);
+  const types = [...new Set((assets || []).filter((a) => MK_IT_POOL.includes(mkItStateOf(a))).map((a) => a.AssetType).filter(Boolean))];
+  const target = pick;
+  const badMail = who.email && !MK_IT_EMAIL_RE.test(who.email.trim());
+  const ok = target && (!needPerson || (who.name.trim() && !badMail)) && (!needNew || nw) && f.date;
+  async function go() {
+    setBusy(true);
+    try {
+      const r = await mkItDoMove(kind, { asset: target, person: needPerson ? who : person, newAsset: nw, ...f });
+      onDone(r);
+    } catch (e) { alert(e.message); } finally { setBusy(false); }
+  }
+  const renderPick = (value, onPick, title) => (
+    <div className="mb-3">
+      <div className="text-xs font-semibold text-slate-600 mb-1.5">{title}</div>
+      {value ? (
+        <div className="flex items-center justify-between gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2">
+          <div className="min-w-0 flex items-center gap-2"><MkItTypeIcon type={value.AssetType} className="text-slate-400 shrink-0" />
+            <div className="min-w-0"><div className="text-sm text-slate-800 truncate">{value.Title}</div><div className="text-[11px] text-slate-500 font-mono">{value.CICD} · {value.SerialNo || "시리얼 없음"}</div></div></div>
+          {!(value === asset) && <button onClick={() => onPick(null)} className="text-xs text-slate-500 hover:text-slate-800 shrink-0">다시 고르기</button>}
+        </div>
+      ) : (
+        <div className="rounded-lg border border-slate-200 bg-white">
+          <div className="flex gap-2 p-2 border-b border-slate-100">
+            <select value={typeF} onChange={(e) => setTypeF(e.target.value)} className="border border-slate-300 rounded-lg px-2 py-1.5 text-xs">
+              <option value="">모든 분류</option>{types.map((t) => <option key={t} value={t}>{mkItTypeKo(t)}</option>)}
+            </select>
+            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="재고에서 검색 — 모델 · 시리얼 · CI CD" className="flex-1 min-w-0 border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs" />
+          </div>
+          <div className="max-h-56 overflow-y-auto mk-scroll">
+            {poolShown.map((a) => (
+              <button key={a.id} onClick={() => onPick(a)} className="w-full text-left px-3 py-2 border-b border-slate-50 hover:bg-slate-50 flex items-center gap-2">
+                <MkItTypeIcon type={a.AssetType} className="text-slate-400 shrink-0" />
+                <span className="min-w-0 flex-1"><span className="text-[13px] text-slate-800">{a.Title}</span><span className="block text-[11px] text-slate-500 font-mono">{a.CICD} · {a.SerialNo || "시리얼 없음"}{a.Location ? ` · ${a.Location}` : ""}</span></span>
+                <MkItStateBadge a={a} />
+              </button>
+            ))}
+            {!poolShown.length && <div className="text-center text-xs text-slate-400 py-6">지급할 수 있는 재고(회수 · 미개봉)가 없습니다</div>}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+  return (
+    <Modal title={`${KO[kind]}${asset ? ` · ${asset.CICD || asset.Title}` : person ? ` · ${person.name || person.email}` : ""}`} onClose={onClose} wide>
+      {needAsset ? renderPick(pick, setPick, "지급할 자산") : (
+        <div className="mb-3 rounded-lg border border-slate-200 bg-white px-3 py-2 flex items-center gap-2">
+          <MkItTypeIcon type={asset.AssetType} className="text-slate-400" />
+          <div className="min-w-0 flex-1"><div className="text-sm text-slate-800 truncate">{asset.Title}</div><div className="text-[11px] text-slate-500 font-mono">{asset.CICD} · {asset.SerialNo || "시리얼 없음"}</div></div>
+          <MkItStateBadge a={asset} />
+        </div>
+      )}
+      {(kind === "Return" || kind === "Replace" || kind === "Transfer" || kind === "Repair" || kind === "Retire") && asset && (asset.Assignee || asset.AssigneeEmail) && (
+        <div className="text-xs text-slate-500 mb-3">현재 사용자 <b className="text-slate-700">{asset.Assignee}</b>{asset.AssigneeEmail ? ` · ${asset.AssigneeEmail}` : ""}</div>
+      )}
+      {needPerson && <Field label={kind === "Transfer" ? "새 사용자 (이름 · 메일)" : "받는 사람 (이름 · 메일)"} required><MkItPersonPicker name={who.name} email={who.email} onChange={setWho} /></Field>}
+      {person && (kind === "Issue") && <div className="text-xs text-slate-500 mb-3">받는 사람 <b className="text-slate-700">{person.name}</b>{person.email ? ` · ${person.email}` : ""}</div>}
+      {needNew && renderPick(nw, setNw, "새로 지급할 자산(재고에서)")}
+      {(kind === "Return" || kind === "Replace") && (
+        <Field label={kind === "Replace" ? "반납 자산 상태" : "반납 후 상태"}>
+          <div className="flex gap-2">{["In Pool", "Inoperable"].map((k) => (
+            <label key={k} className={`flex-1 flex items-center gap-2 rounded-lg border px-3 py-2 text-sm cursor-pointer ${f.toState === k ? "border-slate-400 bg-slate-50" : "border-slate-200"}`}>
+              <input type="radio" checked={f.toState === k} onChange={() => setF((x) => ({ ...x, toState: k }))} /> <MkItStateBadge s={k} /> <span className="text-xs text-slate-500">{k === "In Pool" ? "다시 지급 가능" : "수리 · 폐기 대상"}</span>
+            </label>))}</div>
+        </Field>
+      )}
+      <div className="grid grid-cols-2 gap-3">
+        <Field label="처리일" required><input type="date" className={inputCls} value={f.date} onChange={(e) => setF((x) => ({ ...x, date: e.target.value }))} /></Field>
+        <Field label="티켓 번호 (IT Ticket)"><input className={inputCls} value={f.ticket} onChange={(e) => setF((x) => ({ ...x, ticket: e.target.value }))} placeholder="예: 396" /></Field>
+      </div>
+      <Field label="사유">
+        <input className={inputCls} value={f.reason} onChange={(e) => setF((x) => ({ ...x, reason: e.target.value }))} list={`mk-it-reason-${kind}`} placeholder="선택하거나 직접 입력" />
+        <datalist id={`mk-it-reason-${kind}`}>{(MK_IT_REASONS[kind] || []).map((r) => <option key={r} value={r} />)}</datalist>
+      </Field>
+      <Field label="메모"><input className={inputCls} value={f.note} onChange={(e) => setF((x) => ({ ...x, note: e.target.value }))} placeholder="선택" /></Field>
+      <div className="flex justify-end gap-2 mt-2">
+        <button onClick={onClose} className="px-4 py-2 text-sm border border-slate-300 rounded-lg">닫기</button>
+        <button disabled={!ok || busy} onClick={go} className="px-4 py-2 text-sm rounded-lg text-white disabled:opacity-50" style={{ background: BRAND.accent }}>{busy ? "처리 중…" : `${KO[kind]} 처리`}</button>
+      </div>
+      {busy && <BlockingOverlay message="처리하는 중입니다…" />}
+    </Modal>
+  );
+}
+
+// 자산 상세 — 정보 · 라벨 · 지급/반납 단추 · 이력 + 스캔 타임라인
+function ItAssetDrawer({ asset, it, readOnly, canLabel, dir, onClose, onEdit, onMove, onDelete }) {
+  const a = asset; const st = mkItStateOf(a);
+  const hist = (it.history || []).filter((h) => (h.AssetId && String(h.AssetId) === String(a.id)) || (a.SerialNo && h.SerialNo && String(h.SerialNo).toUpperCase() === String(a.SerialNo).toUpperCase()));
+  const scans = (it.scans || []).filter((s) => String(s.AssetId) === String(a.id));
+  const tl = [...hist.map((h) => ({ t: "h", d: h.ChangeDate || "", h })), ...scans.map((s) => ({ t: "s", d: mkItKst(s.Created).slice(0, 10), s }))].sort((x, y) => String(y.d).localeCompare(String(x.d)));
+  const d = dir && a.AssigneeEmail ? dir.map.get(String(a.AssigneeEmail).toLowerCase()) : null;
+  const missing = !!(dir && dir.ready && a.AssigneeEmail && !d);
+  const rent = mkItRental(a);
+  const actions = readOnly ? [] : st === "Active" ? [["Return", "반납", Undo2], ["Replace", "교체", ArrowLeftRight], ["Transfer", "사용자 변경", Users], ["Repair", "고장", Wrench]]
+    : MK_IT_POOL.includes(st) ? [["Issue", "지급", PackagePlus], ["Repair", "고장", Wrench], ["Retire", "폐기", Archive]]
+    : st === "Inoperable" ? [["Restore", "수리 완료", CheckCircle2], ["Retire", "폐기", Archive]] : [["Unretire", "재고로 복구", Undo2]];
+  const kv = (k, v, mono) => v ? <div className="py-1.5 flex gap-3 text-sm border-b border-slate-100 last:border-0"><div className="w-28 shrink-0 text-slate-500 text-xs pt-0.5">{k}</div><div className={`min-w-0 flex-1 break-words text-slate-800 ${mono ? "font-mono text-[13px]" : ""}`}>{v}</div></div> : null;
+  return (
+    <MkDrawer onClose={onClose} title={<span className="flex items-center gap-2"><MkItTypeIcon type={a.AssetType} className="text-slate-400" /><span className="font-mono text-sm">{a.CICD || "CI CD 미발행"}</span><MkItStateBadge a={a} /></span>}>
+      <div className="bg-white border rounded-xl p-4 mb-4">
+        <div className="text-[11px] font-semibold tracking-wide text-slate-400">{mkItTypeKo(a.AssetType)}{a.Model ? ` · ${a.Model}` : ""}</div>
+        <div className="text-lg font-semibold text-slate-800 mt-0.5">{a.Title}</div>
+        <div className="flex flex-wrap gap-1.5 mt-2">
+          {rent && <span className={`text-[11px] rounded-full px-2 py-0.5 ${rent.cls}`}>{rent.text}{a.RentalVendor ? ` · ${a.RentalVendor}` : ""}</span>}
+          {a.ExtCiId && <span className="text-[11px] rounded-full px-2 py-0.5 bg-slate-100 text-slate-600">DaaS CI {a.ExtCiId}</span>}
+          {!scans.length && <span className="text-[11px] rounded-full px-2 py-0.5 bg-amber-50 text-amber-800">QR 스캔 기록 없음</span>}
+        </div>
+        {actions.length > 0 && (
+          <div className="flex flex-wrap gap-2 mt-4">
+            {actions.map(([k, l, I]) => <button key={k} onClick={() => onMove(k, a)} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm border border-slate-300 bg-white hover:bg-slate-50"><I size={14} /> {l}</button>)}
+            {onEdit && <button onClick={() => onEdit(a)} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm border border-slate-300 bg-white hover:bg-slate-50"><Pencil size={14} /> 수정</button>}
+          </div>
+        )}
+        {readOnly && onEdit && <button onClick={() => onEdit(a)} className="mt-3 flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm border border-slate-300"><Eye size={14} /> 전체 정보</button>}
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+        <div className="bg-white border rounded-xl p-4">
+          <div className="text-xs font-semibold text-slate-500 mb-2">사용자</div>
+          {st === "Active" && (a.Assignee || a.AssigneeEmail) ? (
+            <div className="flex items-start gap-3">
+              <div className="w-9 h-9 rounded-full flex items-center justify-center text-xs font-bold text-white shrink-0" style={{ background: MK_GROUP_TONE.it.main }}>{mkItInitials(a.Assignee || a.AssigneeEmail)}</div>
+              <div className="min-w-0 text-sm"><MkItPersonChip name={a.Assignee} email={a.AssigneeEmail} missing={missing} />
+                <div className="text-[11px] text-slate-400 mt-0.5">{[d && d.dept, a.AssignedDate && `지급 ${a.AssignedDate}`].filter(Boolean).join(" · ")}</div></div>
+            </div>
+          ) : <div className="text-sm text-slate-400">{MK_IT_STATES[st].ko} — 사용자 없음</div>}
+        </div>
+        <div className="bg-white border rounded-xl p-4">
+          <div className="text-xs font-semibold text-slate-500 mb-2">위치</div>
+          <div className="text-sm text-slate-800">{a.Location || "-"}</div>
+          <div className="text-[11px] text-slate-400 mt-0.5">{a.Lat != null && a.Lat !== "" ? `좌표 ${Number(a.Lat).toFixed(4)}, ${Number(a.Lng).toFixed(4)} · 반경 ${a.VerifyRadiusM || MK_IT_RADIUS_DEFAULT}m` : "좌표 미등록 — 스캔 판정은 「위치미등록」"}</div>
+        </div>
+      </div>
+      <div className="bg-white border rounded-xl px-4 py-2 mb-4">
+        {kv("Serial No.", a.SerialNo, true)}{kv("Asset Code", a.AssetCode)}{kv("Hostname", a.Hostname, true)}{kv("전화번호", a.PhoneNo)}
+        {kv("필수 프로그램", a.CriticalApps)}{kv("보안 프로그램", a.SecurityApp)}{kv("DaaS Object ID", a.ExtObjectId)}{kv("보증 시작일", a.WarrantyStart)}{kv("비고", a.Note)}
+      </div>
+      {canLabel && a.QrToken && (
+        <div className="bg-white border rounded-xl p-4 mb-4">
+          <div className="flex items-center justify-between mb-2"><div className="text-xs font-semibold text-slate-500">QR 라벨 (10 × 5 cm)</div>
+            <button onClick={() => mkItPrintLabels([a])} className="flex items-center gap-1 text-xs px-2 py-1 border border-slate-300 rounded-lg hover:bg-slate-50"><Printer size={12} /> 출력</button></div>
+          <style>{MK_IT_LABEL_CSS}</style>
+          <div className="flex justify-center bg-slate-50 rounded-lg py-3 overflow-hidden"><MkItLabelPreview asset={a} scale={0.82} /></div>
+        </div>
+      )}
+      <div className="bg-white border rounded-xl p-4">
+        <div className="text-xs font-semibold text-slate-500 mb-3">이력 · 스캔 <span className="font-normal text-slate-400">({hist.length + scans.length})</span></div>
+        {tl.length ? (
+          <ol className="relative border-l border-slate-200 ml-1.5">
+            {tl.map((x, i) => (
+              <li key={i} className="ml-4 pb-3 last:pb-0">
+                <span className="absolute -left-[5px] mt-1.5 w-2.5 h-2.5 rounded-full border-2 border-white" style={{ background: x.t === "s" ? "#94A3B8" : (MK_IT_STATES[x.h.NewState] || {}).dot || MK_GROUP_TONE.it.main }} />
+                {x.t === "h" ? (
+                  <div className="text-sm">
+                    <div className="flex items-center gap-2 flex-wrap"><span className="text-[11.5px] text-slate-400 tabular-nums">{x.h.ChangeDate}</span><MkItChangeBadge t={x.h.ChangeType} />
+                      {x.h.Person && <span className="text-slate-700">{x.h.Person}</span>}{x.h.TicketNo && <span className="text-[11px] text-slate-400">Ticket {x.h.TicketNo}</span>}</div>
+                    {(x.h.Reason || x.h.Note) && <div className="text-xs text-slate-500 mt-0.5">{[x.h.Reason, x.h.Note].filter(Boolean).join(" · ")}</div>}
+                    {(x.h.PrevState || x.h.NewState) && x.h.PrevState !== x.h.NewState && <div className="text-[11px] text-slate-400 mt-0.5">{(MK_IT_STATES[x.h.PrevState] || {}).ko || x.h.PrevState || "-"} → {(MK_IT_STATES[x.h.NewState] || {}).ko || x.h.NewState || "-"}{x.h.HandledBy ? ` · 처리 ${x.h.HandledBy}` : ""}</div>}
+                  </div>
+                ) : (
+                  <div className="text-sm flex items-center gap-2 flex-wrap"><span className="text-[11.5px] text-slate-400 tabular-nums">{mkItKst(x.s.Created)}</span><span className="text-[11px] text-slate-500">QR 스캔</span><MkItStatus s={x.s.VerifyStatus} /><span className="text-xs text-slate-500">{x.s.ScannedByName || x.s.ScannedBy}</span></div>
+                )}
+              </li>
+            ))}
+          </ol>
+        ) : <div className="text-sm text-slate-400 py-4 text-center">아직 이력이 없습니다</div>}
+      </div>
+      {!readOnly && onDelete && <div className="mt-4 text-right"><button onClick={() => onDelete(a)} className="text-xs text-slate-400 hover:text-red-600 inline-flex items-center gap-1"><Trash2 size={12} /> 자산 삭제(잘못 등록한 경우만)</button></div>}
+    </MkDrawer>
+  );
+}
+
 function ItAssetsTab({ it, reloadIt, readOnly, canLabel, onLabelTab }) {
   const { assets, scans, err } = it;
+  const dir = useMkDir();
   const [editing, setEditing] = useState(null);
+  const [detailId, setDetailId] = useState(null);
+  const [move, setMove] = useState(null);       // { kind, asset }
   const [busy, setBusy] = useState(false);
   const [q, setQ] = useState("");
-  const [showInactive, setShowInactive] = useState(false);
+  const [stF, setStF] = useState("live");        // live(폐기 제외) · 상태 키 · all
+  const [typeF, setTypeF] = useState("");
+  const [locF, setLocF] = useState("");
   const [rentalOnly, setRentalOnly] = useState(false);
+  const [noScan, setNoScan] = useState(false);
+  const [showImport, setShowImport] = useState(false);
+  const [showLoc, setShowLoc] = useState(false);
   const [colIssues, setColIssues] = useState([]);
   useEffect(() => { mkItColumnIssues(MK_LISTS.itAssets).then(setColIssues).catch(() => {}); }, []);
   const [sel, setSel] = useState(() => new Set());
   const lastScan = useMemo(() => { const m = {}; scans.forEach((s) => { const k = String(s.AssetId); if (!m[k]) m[k] = s; }); return m; }, [scans]);
+  const counts = useMemo(() => { const m = { all: assets.length, live: 0 }; assets.forEach((a) => { const s = mkItStateOf(a); m[s] = (m[s] || 0) + 1; if (s !== "Retired") m.live++; }); return m; }, [assets]);
+  const types = useMemo(() => [...new Set(assets.map((a) => a.AssetType).filter(Boolean))].sort(), [assets]);
+  const locs = useMemo(() => [...new Set(assets.map((a) => a.Location).filter(Boolean))].sort(), [assets]);
   const qq = q.trim().toLowerCase();
-  const filtered = assets.filter((a) => (showInactive || a.Active !== false) && (!rentalOnly || a.IsRental === true) &&
-    (!qq || [a.Title, a.SerialNo, a.AssetCode, a.CICD, a.Assignee, a.AssigneeEmail, a.Location, a.AssetType, a.RentalVendor].some((v) => String(v || "").toLowerCase().includes(qq))))
-    .sort((x, y) => Number(y.id) - Number(x.id));
+  const filtered = assets.filter((a) => {
+    const s = mkItStateOf(a);
+    if (stF === "live" ? s === "Retired" : stF !== "all" && s !== stF) return false;
+    if (typeF && a.AssetType !== typeF) return false;
+    if (locF && a.Location !== locF) return false;
+    if (rentalOnly && a.IsRental !== true) return false;
+    if (noScan && lastScan[String(a.id)]) return false;
+    return !qq || [a.Title, a.Model, a.SerialNo, a.AssetCode, a.CICD, a.Hostname, a.Assignee, a.AssigneeEmail, a.Location, a.AssetType, a.RentalVendor, a.PhoneNo].some((v) => String(v || "").toLowerCase().includes(qq));
+  }).sort((x, y) => Number(y.id) - Number(x.id));
   const [page, setPage] = useState(1);
-  const PAGE = 20;
-  useEffect(() => { setPage(1); }, [q, showInactive, rentalOnly]);
+  const PAGE = 25;
+  useEffect(() => { setPage(1); }, [q, stF, typeF, locF, rentalOnly, noScan]);
   const pages = Math.max(1, Math.ceil(filtered.length / PAGE));
   const pageSafe = Math.min(page, pages);
   const rows = filtered.slice((pageSafe - 1) * PAGE, pageSafe * PAGE);
   const toggle = (id) => setSel((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
   const allOnPage = rows.length > 0 && rows.every((a) => sel.has(a.id));
+  const detail = detailId != null ? assets.find((a) => String(a.id) === String(detailId)) : null;
 
   async function save(form) {
     if (readOnly) return;
@@ -4190,28 +4707,47 @@ function ItAssetsTab({ it, reloadIt, readOnly, canLabel, onLabelTab }) {
     let skippedCols = [];
     try {
       const num = (v) => (v === "" || v == null || isNaN(Number(v)) ? null : Number(v));
+      const state = form.State || "Active";
+      const assigned = state === "Active";
       const fields = {
-        Title: String(form.Title || "").trim(), SerialNo: form.SerialNo || "", AssetCode: form.AssetCode || "", AssetType: form.AssetType || "",
+        Title: String(form.Title || "").trim(), SerialNo: String(form.SerialNo || "").trim(), AssetCode: form.AssetCode || "", AssetType: form.AssetType || "",
+        Model: form.Model || "", Hostname: form.Hostname || "", PhoneNo: form.PhoneNo || "", State: state, Active: state !== "Retired",
         Location: form.Location || "", AddressKr: form.AddressKr || "", Lat: num(form.Lat), Lng: num(form.Lng),
-        VerifyRadiusM: num(form.VerifyRadiusM) || MK_IT_RADIUS_DEFAULT, Assignee: String(form.Assignee || "").trim(), Note: form.Note || "", Active: form.Active !== false,
-        AssigneeEmail: String(form.AssigneeEmail || "").trim().toLowerCase(),
+        VerifyRadiusM: num(form.VerifyRadiusM) || MK_IT_RADIUS_DEFAULT, Note: form.Note || "",
+        Assignee: assigned ? String(form.Assignee || "").trim() : "", AssigneeEmail: assigned ? String(form.AssigneeEmail || "").trim().toLowerCase() : "",
+        AssignedDate: assigned ? String(form.AssignedDate || "").slice(0, 10) : "",
+        CriticalApps: form.CriticalApps || "", SecurityApp: form.SecurityApp || "", ExtCiId: form.ExtCiId || "", ExtObjectId: form.ExtObjectId || "", WarrantyStart: String(form.WarrantyStart || "").slice(0, 10),
         IsRental: form.IsRental === true,
         RentalEndDate: form.IsRental === true ? String(form.RentalEndDate || "").slice(0, 10) : "",
         RentalVendor: form.IsRental === true ? String(form.RentalVendor || "").trim() : "",
       };
-      // 10-23 추가 열(렌탈 · 사용자 메일)이 목록에 아직 없으면 그 값은 저장되지 않는다 — 값을 넣은 경우에만 미리 알려 준다
-      const want = [...(fields.IsRental ? MK_IT_RENTAL_COLS : []), ...(fields.AssigneeEmail ? ["AssigneeEmail"] : [])];
+      if (fields.SerialNo) {
+        const dup = assets.find((a) => String(a.SerialNo || "").toUpperCase() === fields.SerialNo.toUpperCase() && (!editing || String(a.id) !== String(editing.id)));
+        if (dup && !confirm(`같은 시리얼(${fields.SerialNo})의 자산이 이미 있습니다 — ${dup.CICD || dup.Title}\n그래도 저장할까요?`)) { setBusy(false); return; }
+      }
+      const want = [...(fields.IsRental ? MK_IT_RENTAL_COLS : []), ...(fields.AssigneeEmail ? ["AssigneeEmail"] : []), ...(fields.State !== "Active" ? ["State"] : [])];
       if (want.length) {
         let cols = null; try { cols = await getMkListColumnNames(MK_LISTS.itAssets); } catch (e) {}
         const miss = cols ? want.filter((c) => !cols.has(c)) : [];
         if (miss.length && !confirm(`SharePoint 목록 ${MK_LISTS.itAssets} 에 열(${miss.join(", ")})이 아직 없어 ${miss.map((c) => MK_IT_ASSET_LABELS[c]).join(" · ")} 값은 저장되지 않습니다.\n나머지 정보만 저장할까요?`)) { setBusy(false); return; }
       }
+      let histNote = null;
       if (editing && editing.id) {
-        if (!editing.CICD) fields.CICD = mkItCicd(editing.id);          // 예전 저장에서 발행이 빠진 건 이번에 채운다
+        if (!editing.CICD) fields.CICD = mkItCicd(editing.id);
         if (!editing.QrToken) fields.QrToken = randomToken(12);
         const body = await mkItFields(MK_LISTS.itAssets, fields); skippedCols = body._skipped || [];
         await mkUpdateItem(MK_LISTS.itAssets, editing.id, body);
-        mkLog("IT 자산", "수정", editing.CICD || fields.Title, { id: editing.id, changes: mkDiff({ ...editing, IsRental: editing.IsRental === true, RentalEndDate: editing.RentalEndDate || "", RentalVendor: editing.RentalVendor || "", AssigneeEmail: editing.AssigneeEmail || "" }, fields, MK_IT_ASSET_LABELS) });
+        const before = { ...editing, State: mkItStateOf(editing), IsRental: editing.IsRental === true };
+        ["RentalEndDate", "RentalVendor", "AssigneeEmail", "Model", "Hostname", "PhoneNo", "AssignedDate", "CriticalApps", "SecurityApp", "ExtCiId", "ExtObjectId", "WarrantyStart"].forEach((k) => { before[k] = before[k] || ""; });
+        mkLog("IT 자산", "수정", editing.CICD || fields.Title, { id: editing.id, changes: mkDiff(before, fields, MK_IT_ASSET_LABELS) });
+        // 사용자 · 상태가 바뀌었으면 이력도(지급 · 반납 단추를 쓰지 않고 직접 고친 경우)
+        const pk0 = mkItPk(editing.AssigneeEmail, editing.Assignee), pk1 = mkItPk(fields.AssigneeEmail, fields.Assignee);
+        if (pk0 !== pk1 || before.State !== fields.State) {
+          const ct = !pk0 && pk1 ? "Issue" : pk0 && !pk1 ? (fields.State === "Retired" ? "Retire" : fields.State === "Inoperable" ? "Repair" : "Return") : pk0 !== pk1 ? "Transfer"
+            : fields.State === "Retired" ? "Retire" : fields.State === "Inoperable" ? "Repair" : "Update";
+          const p = pk1 ? { name: fields.Assignee, email: fields.AssigneeEmail } : { name: editing.Assignee || "", email: editing.AssigneeEmail || "" };
+          histNote = await mkItHistAdd({ ...mkItHistOfAsset({ ...editing, ...fields }), ChangeType: ct, Person: p.name, PersonEmail: (p.email || "").toLowerCase(), PrevState: before.State, NewState: fields.State, Reason: "자산 정보 수정", Note: ct === "Transfer" ? `이전 사용자: ${editing.Assignee || editing.AssigneeEmail}` : "" });
+        }
       } else {
         fields.QrToken = randomToken(12);
         const body = await mkItFields(MK_LISTS.itAssets, fields); skippedCols = body._skipped || [];
@@ -4219,42 +4755,51 @@ function ItAssetsTab({ it, reloadIt, readOnly, canLabel, onLabelTab }) {
         const cicd = mkItCicd(created.id);
         try { await mkUpdateItem(MK_LISTS.itAssets, created.id, await mkItFields(MK_LISTS.itAssets, { CICD: cicd })); }
         catch (e) { alert(`자산은 등록됐지만 CI CD 발행에 실패했습니다 — 다시 열어 저장하면 발행됩니다.\n(${e.message})`); }
-        mkLog("IT 자산", "등록", cicd, { id: created.id, info: { Description: fields.Title, "Serial No.": fields.SerialNo, "Asset Code": fields.AssetCode, 위치: fields.Location, "사용자 · 담당": fields.AssigneeEmail ? `${fields.Assignee} (${fields.AssigneeEmail})` : fields.Assignee } });
+        mkLog("IT 자산", "등록", cicd, { id: created.id, info: { Description: fields.Title, "Serial No.": fields.SerialNo, 상태: fields.State, 위치: fields.Location, "사용자 · 담당": fields.AssigneeEmail ? `${fields.Assignee} (${fields.AssigneeEmail})` : fields.Assignee } });
+        histNote = await mkItHistAdd({ ...mkItHistOfAsset({ id: created.id, CICD: cicd, ...fields }), ChangeType: fields.Assignee ? "Issue" : "Register", Person: fields.Assignee, PersonEmail: fields.AssigneeEmail, PrevState: "", NewState: fields.State, Reason: "신규 등록" });
       }
       setEditing(null);
       await reloadIt();
       if (skippedCols.length) alert(`저장했습니다. 다만 다음 열은 SharePoint 형식이 달라 값을 넣지 못했습니다: ${skippedCols.join(", ")}\n열을 「한 줄 텍스트」로 다시 만들면 저장됩니다.`);
+      else if (histNote === false && !it.histErr) alert("저장했습니다. 다만 변경 이력은 남기지 못했습니다(이력 목록 확인).");
     } catch (e) {
       const gen = /generalException|500/.test(e.message);
-      alert(gen ? `저장하지 못했습니다 — SharePoint 목록 ${MK_LISTS.itAssets} 의 열 형식이 맞지 않을 수 있습니다.\nIT 자산 관리 화면 위쪽 「열 형식 점검」 안내를 확인해 주세요.\n\n(${e.message.slice(0, 300)})` : e.message);
+      alert(gen ? `저장하지 못했습니다 — SharePoint 목록 ${MK_LISTS.itAssets} 의 열 형식이 맞지 않을 수 있습니다.\nIT 자산 관리 화면 위쪽 「열 형식 점검」 안내를 확인해 주세요.\n\n(${e.message.slice(0, 300)})`
+        : /\(403\)|accessDenied/.test(e.message) ? `저장하지 못했습니다 — ${MK_LISTS.itAssets} 목록에 쓰기 권한이 없습니다(목록 권한 · 고급 설정의 만들기/편집 권한 확인).\n\n(${e.message.slice(0, 200)})` : e.message);
     } finally { setBusy(false); }
   }
   async function remove(a) {
     if (readOnly) return;
-    if (!confirm(`「${a.CICD || a.Title}」 자산을 삭제할까요?\n붙어 있는 QR 라벨은 더 이상 열리지 않습니다. 폐기 · 반납은 삭제 대신 「사용 중」 을 끄는 것을 권장합니다.`)) return;
+    if (!confirm(`「${a.CICD || a.Title}」 자산을 삭제할까요?\n붙어 있는 QR 라벨은 더 이상 열리지 않습니다. 폐기 · 반납은 삭제 대신 「폐기」 처리를 권장합니다(이력이 남습니다).`)) return;
     try {
       await mkDeleteItem(MK_LISTS.itAssets, a.id);
       mkLog("IT 자산", "삭제", a.CICD || a.Title, { id: a.id, info: { Description: a.Title, "Serial No.": a.SerialNo, "Asset Code": a.AssetCode, "QR 토큰": mkMaskToken(a.QrToken) } });
-      await reloadIt();
+      setDetailId(null); await reloadIt();
     } catch (e) { alert(e.message); }
   }
   function exportXlsx() {
     const data = filtered.map((a) => {
       const s = lastScan[String(a.id)];
-      return { "CI CD": a.CICD, Description: a.Title, "Serial No.": a.SerialNo, "Asset Code": a.AssetCode, 분류: a.AssetType, "사용자 · 담당": a.Assignee, "사용자 메일": a.AssigneeEmail || "",
-        위치: a.Location, 주소: a.AddressKr, 위도: a.Lat, 경도: a.Lng, "허용 반경(m)": a.VerifyRadiusM, 상태: a.Active === false ? "비활성" : "사용 중",
+      return { "CI CD": a.CICD, 분류: a.AssetType, Description: a.Title, 모델: a.Model || "", "Serial No.": a.SerialNo, Hostname: a.Hostname || "", "Asset Code": a.AssetCode,
+        상태: MK_IT_STATES[mkItStateOf(a)].ko, "사용자 · 담당": a.Assignee, "사용자 메일": a.AssigneeEmail || "", 지급일: a.AssignedDate || "", 전화번호: a.PhoneNo || "",
+        위치: a.Location, 주소: a.AddressKr, 위도: a.Lat, 경도: a.Lng, "허용 반경(m)": a.VerifyRadiusM,
         렌탈: a.IsRental === true ? "렌탈" : "자산", "렌탈 종료일": a.IsRental === true ? a.RentalEndDate || "" : "", "렌탈 업체": a.IsRental === true ? a.RentalVendor || "" : "",
+        "필수 프로그램": a.CriticalApps || "", "보안 프로그램": a.SecurityApp || "", "DaaS CI ID": a.ExtCiId || "", "보증 시작일": a.WarrantyStart || "",
         "최근 스캔(KST)": s ? mkItKst(s.Created) : "", "최근 스캔 판정": s ? s.VerifyStatus : "", 비고: a.Note };
     });
     const ws = XLSX.utils.json_to_sheet(data); const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, "IT Assets");
     XLSX.writeFile(wb, `MKQR_IT자산_${mkTodayKst()}.xlsx`);
-    mkLog("IT 자산", "Excel 다운로드", `자산 ${data.length}건`, { info: { 건수: data.length, 검색어: q.trim() } });
+    mkLog("IT 자산", "Excel 다운로드", `자산 ${data.length}건`, { info: { 건수: data.length, 검색어: q.trim(), 상태: stF } });
   }
+  const after = async (r) => { setMove(null); await reloadIt(); if (r && r.histOk === false && !it.histErr) alert("처리했습니다. 다만 변경 이력은 남기지 못했습니다(이력 목록 확인)."); };
 
   if (err) return <MkItListMissing error={err} />;
+  const stChips = [["live", "전체(폐기 제외)", counts.live], ["Active", MK_IT_STATES.Active.ko, counts.Active || 0], ["In Pool", MK_IT_STATES["In Pool"].ko, counts["In Pool"] || 0],
+    ["In Stock", MK_IT_STATES["In Stock"].ko, counts["In Stock"] || 0], ["Inoperable", MK_IT_STATES.Inoperable.ko, counts.Inoperable || 0], ["Retired", MK_IT_STATES.Retired.ko, counts.Retired || 0]];
   return (
     <div className="w-full">
       {busy && <BlockingOverlay message="저장하는 중입니다…" />}
+      <datalist id="mk-it-locs">{locs.map((l) => <option key={l} value={l} />)}</datalist>
       {colIssues.length > 0 && (
         <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-900">
           <div className="font-semibold mb-1 flex items-center gap-1.5"><AlertTriangle size={13} /> 열 형식 점검 — {MK_LISTS.itAssets} 목록에 화면이 기대하는 형식과 다른 열이 있습니다</div>
@@ -4264,21 +4809,35 @@ function ItAssetsTab({ it, reloadIt, readOnly, canLabel, onLabelTab }) {
           <div className="mt-1.5 text-amber-800">저장은 열 형식에 맞춰 바꿔 보내지만, 사람 · 조회 · 계산 열은 값을 넣을 수 없습니다. 열을 지우고 권장 형식으로 같은 이름으로 다시 만들어 주세요.</div>
         </div>
       )}
-      <div className="mb-4 flex items-center justify-between flex-wrap gap-2">
-        <div className="flex items-center gap-3 flex-wrap">
+      <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-6 gap-2.5 mb-4">
+        {stChips.map(([k, l, n]) => (
+          <MkItKpi key={k} label={k === "live" ? l : <><span className="w-1.5 h-1.5 rounded-full" style={{ background: MK_IT_STATES[k].dot }} />{l}</>} value={n}
+            active={stF === k} onClick={() => setStF(stF === k ? "live" : k)} tone={k === "live" ? MK_GROUP_TONE.it.main : MK_IT_STATES[k].dot} />
+        ))}
+      </div>
+      <div className="mb-3 flex items-center justify-between flex-wrap gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <div className="relative w-full sm:w-auto">
             <Search size={15} className="absolute left-2.5 top-2.5 text-slate-400" />
-            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="CI CD · 설명 · 시리얼 · 자산코드 · 사용자 검색" title="Description · Serial No. · CI CD · Asset Code · 사용자 · 렌탈 업체로 검색" className="pl-8 pr-3 py-2 border border-slate-300 rounded-lg text-sm w-full sm:w-96 text-ellipsis" />
+            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="CI CD · 설명 · 시리얼 · 사용자 · 호스트 검색" title="Description · 모델 · Serial No. · CI CD · Asset Code · Hostname · 사용자 · 위치 · 전화번호로 검색" className="pl-8 pr-3 py-2 border border-slate-300 rounded-lg text-sm w-full sm:w-80 text-ellipsis" />
           </div>
-          <label className="flex items-center gap-1.5 text-xs text-slate-500"><input type="checkbox" checked={showInactive} onChange={(e) => setShowInactive(e.target.checked)} /> 비활성 포함</label>
+          <select value={typeF} onChange={(e) => setTypeF(e.target.value)} className="border border-slate-300 rounded-lg px-2 py-2 text-sm" aria-label="분류">
+            <option value="">모든 분류</option>{types.map((t) => <option key={t} value={t}>{mkItTypeKo(t)} ({assets.filter((a) => a.AssetType === t && mkItStateOf(a) !== "Retired").length})</option>)}
+          </select>
+          <select value={locF} onChange={(e) => setLocF(e.target.value)} className="border border-slate-300 rounded-lg px-2 py-2 text-sm max-w-[11rem]" aria-label="위치">
+            <option value="">모든 위치</option>{locs.map((l) => <option key={l} value={l}>{l}</option>)}
+          </select>
           <label className="flex items-center gap-1.5 text-xs text-slate-500"><input type="checkbox" checked={rentalOnly} onChange={(e) => setRentalOnly(e.target.checked)} /> 렌탈만</label>
-          {(() => { const soon = assets.filter((a) => { const r = mkItRental(a); return a.Active !== false && r && r.days != null && r.days <= 30; }).length;
+          <label className="flex items-center gap-1.5 text-xs text-slate-500" title="QR 스캔 기록이 한 번도 없는 자산 — 라벨 부착 확인 전"><input type="checkbox" checked={noScan} onChange={(e) => setNoScan(e.target.checked)} /> QR 미스캔</label>
+          {(() => { const soon = assets.filter((a) => { const r = mkItRental(a); return mkItStateOf(a) !== "Retired" && r && r.days != null && r.days <= 30; }).length;
             return soon ? <button onClick={() => setRentalOnly(true)} className="text-xs rounded-full px-2.5 py-1 bg-amber-50 text-amber-800 border border-amber-200">렌탈 만료 · 30일 이내 {soon}건</button> : null; })()}
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           {canLabel && <button onClick={() => mkItPrintLabels(assets.filter((a) => sel.has(a.id)))} disabled={!sel.size}
-            className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm border border-slate-300 disabled:opacity-40"><Printer size={14} /> 선택 라벨 출력 ({sel.size})</button>}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm border border-slate-300 disabled:opacity-40"><Printer size={14} /> 라벨 ({sel.size})</button>}
           <button onClick={exportXlsx} disabled={!filtered.length} className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm border border-slate-300 disabled:opacity-40"><Download size={14} /> Excel</button>
+          {!readOnly && <button onClick={() => setShowLoc(true)} className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm border border-slate-300" title="위치(SSQ · 지점 등)별로 좌표를 한 번에 지정"><MapPin size={14} /> 위치 좌표</button>}
+          {!readOnly && <button onClick={() => setShowImport(true)} className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm border border-slate-300"><FileSpreadsheet size={14} /> Excel 가져오기</button>}
           {!readOnly && <button onClick={() => setEditing({})} className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm text-white" style={{ background: BRAND.accent }}><Plus size={14} /> 자산 등록</button>}
         </div>
       </div>
@@ -4287,35 +4846,36 @@ function ItAssetsTab({ it, reloadIt, readOnly, canLabel, onLabelTab }) {
           <thead className="bg-slate-50 text-xs text-slate-500">
             <tr>
               {canLabel && <th className="px-3 py-2.5 w-8"><input type="checkbox" checked={allOnPage} onChange={() => setSel((s) => { const n = new Set(s); rows.forEach((a) => (allOnPage ? n.delete(a.id) : n.add(a.id))); return n; })} aria-label="이 페이지 전체 선택" /></th>}
-              <th className="px-3 py-2.5 text-left">CI CD</th><th className="px-3 py-2.5 text-left">Description</th><th className="px-3 py-2.5 text-left">Serial No.</th>
-              <th className="px-3 py-2.5 text-left">Asset Code</th><th className="px-3 py-2.5 text-left">사용자 · 위치</th><th className="px-3 py-2.5 text-left">최근 스캔</th>
-              <th className="px-3 py-2.5 text-center">상태</th><th className="px-3 py-2.5 w-24" />
+              <th className="px-3 py-2.5 text-left">CI CD</th><th className="px-3 py-2.5 text-left">자산</th><th className="px-3 py-2.5 text-left">Serial No.</th>
+              <th className="px-3 py-2.5 text-left">사용자</th><th className="px-3 py-2.5 text-left">위치</th><th className="px-3 py-2.5 text-center">상태</th>
+              <th className="px-3 py-2.5 text-left">최근 스캔</th><th className="px-3 py-2.5 w-16" />
             </tr>
           </thead>
           <tbody>
             {rows.map((a) => {
-              const s = lastScan[String(a.id)];
+              const s = lastScan[String(a.id)]; const r = mkItRental(a);
+              const miss = dir.ready && a.AssigneeEmail && !dir.map.get(String(a.AssigneeEmail).toLowerCase());
               return (
-                <tr key={a.id} className="border-t border-slate-100 hover:bg-slate-50/60">
-                  {canLabel && <td className="px-3 py-2"><input type="checkbox" checked={sel.has(a.id)} onChange={() => toggle(a.id)} aria-label={`${a.CICD || a.Title} 선택`} /></td>}
+                <tr key={a.id} className="border-t border-slate-100 hover:bg-slate-50/70 cursor-pointer" onClick={() => setDetailId(a.id)}>
+                  {canLabel && <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}><input type="checkbox" checked={sel.has(a.id)} onChange={() => toggle(a.id)} aria-label={`${a.CICD || a.Title} 선택`} /></td>}
                   <td className="px-3 py-2 font-mono text-xs whitespace-nowrap">{a.CICD || <span className="text-amber-600">미발행</span>}</td>
-                  <td className="px-3 py-2"><div className="font-medium text-slate-800">{a.Title}</div>
-                    <div className="flex items-center gap-1.5 flex-wrap mt-0.5">{a.AssetType && <span className="text-[11px] text-slate-400">{a.AssetType}</span>}
-                      {(() => { const r = mkItRental(a); return r ? <span className={`text-[11px] rounded-full px-2 py-0.5 whitespace-nowrap ${r.cls}`} title={a.RentalVendor ? `렌탈 업체: ${a.RentalVendor}` : undefined}>{r.text}{a.RentalVendor ? ` · ${a.RentalVendor}` : ""}</span> : null; })()}</div></td>
-                  <td className="px-3 py-2 text-xs">{a.SerialNo || "-"}</td>
-                  <td className="px-3 py-2 text-xs">{a.AssetCode || "-"}</td>
-                  <td className="px-3 py-2 text-xs"><div>{a.Assignee || "-"}</div>{a.AssigneeEmail && <div className="text-slate-500 break-all">{a.AssigneeEmail}</div>}<div className="text-slate-400">{a.Location || ""}{a.Lat == null || a.Lat === "" ? " · 좌표 없음" : ""}</div></td>
-                  <td className="px-3 py-2 text-xs whitespace-nowrap">{s ? <><div>{mkItKst(s.Created)}</div><MkItStatus s={s.VerifyStatus} /></> : <span className="text-slate-400">없음</span>}</td>
-                  <td className="px-3 py-2 text-center">{a.Active === false ? <span className="text-[11px] rounded-full px-2 py-0.5 bg-slate-100 text-slate-500">비활성</span> : <span className="text-[11px] rounded-full px-2 py-0.5 bg-emerald-50 text-emerald-700">사용 중</span>}</td>
-                  <td className="px-3 py-2 text-right whitespace-nowrap">
+                  <td className="px-3 py-2 min-w-[13rem]"><div className="flex items-start gap-2"><MkItTypeIcon type={a.AssetType} className="text-slate-400 mt-0.5 shrink-0" />
+                    <div className="min-w-0"><div className="font-medium text-slate-800">{a.Title}</div>
+                      <div className="flex items-center gap-1.5 flex-wrap mt-0.5 text-[11px] text-slate-400">{[mkItTypeKo(a.AssetType), a.Hostname || a.PhoneNo].filter(Boolean).join(" · ")}
+                        {r && <span className={`rounded-full px-2 py-0.5 whitespace-nowrap ${r.cls}`} title={a.RentalVendor ? `렌탈 업체: ${a.RentalVendor}` : undefined}>{r.text}{a.RentalVendor ? ` · ${a.RentalVendor}` : ""}</span>}</div></div></div></td>
+                  <td className="px-3 py-2 text-xs font-mono">{a.SerialNo || <span className="text-slate-300">-</span>}</td>
+                  <td className="px-3 py-2 text-xs min-w-[10rem]">{a.Assignee || a.AssigneeEmail ? <MkItPersonChip name={a.Assignee} email={a.AssigneeEmail} missing={miss} /> : <span className="text-slate-300">-</span>}</td>
+                  <td className="px-3 py-2 text-xs"><div>{a.Location || "-"}</div>{(a.Lat == null || a.Lat === "") && <div className="text-[10.5px] text-slate-400">좌표 없음</div>}</td>
+                  <td className="px-3 py-2 text-center"><MkItStateBadge a={a} /></td>
+                  <td className="px-3 py-2 text-xs whitespace-nowrap">{s ? <><div className="text-slate-500">{mkItKst(s.Created).slice(0, 10)}</div><MkItStatus s={s.VerifyStatus} /></> : <span className="text-slate-300">없음</span>}</td>
+                  <td className="px-3 py-2 text-right whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
                     {canLabel && <button onClick={() => mkItPrintLabels([a])} title="라벨 출력" className="p-1.5 text-slate-400 hover:text-slate-700"><Printer size={15} /></button>}
-                    <button onClick={() => setEditing(a)} title={readOnly ? "보기" : "수정"} className="p-1.5 text-slate-400 hover:text-slate-700">{readOnly ? <Eye size={15} /> : <Pencil size={15} />}</button>
-                    {!readOnly && <button onClick={() => remove(a)} title="삭제" className="p-1.5 text-slate-400 hover:text-red-600"><Trash2 size={15} /></button>}
+                    <button onClick={() => setDetailId(a.id)} title="상세" className="p-1.5 text-slate-400 hover:text-slate-700"><ChevronRight size={15} /></button>
                   </td>
                 </tr>
               );
             })}
-            {!rows.length && <tr><td colSpan={9} className="text-center text-slate-400 py-10">{assets.length ? "검색 결과가 없습니다" : "등록된 IT 자산이 없습니다 — 「자산 등록」 으로 시작하세요"}</td></tr>}
+            {!rows.length && <tr><td colSpan={9} className="text-center text-slate-400 py-10">{assets.length ? "조건에 맞는 자산이 없습니다" : <>등록된 IT 자산이 없습니다 — {readOnly ? "" : <>「자산 등록」 또는 <button className="underline" onClick={() => setShowImport(true)}>Excel 가져오기</button>로 시작하세요</>}</>}</td></tr>}
           </tbody>
         </table>
       </div>
@@ -4326,23 +4886,894 @@ function ItAssetsTab({ it, reloadIt, readOnly, canLabel, onLabelTab }) {
           <button disabled={pageSafe >= pages} onClick={() => setPage(pageSafe + 1)} className="px-2.5 py-1 border rounded disabled:opacity-40">다음</button>
         </div>
       )}
-      <div className="text-xs text-slate-400 mt-2">전체 {assets.length}건 · 표시 {filtered.length}건{canLabel && onLabelTab ? <> · 라벨 미리보기는 <button className="underline" onClick={onLabelTab}>IT 자산 QR 라벨</button></> : null}</div>
+      <div className="text-xs text-slate-400 mt-2">전체 {assets.length}건 · 표시 {filtered.length}건 · 행을 누르면 상세(지급 · 반납 · 이력){canLabel && onLabelTab ? <> · 라벨 묶음 출력은 <button className="underline" onClick={onLabelTab}>IT 자산 QR 라벨</button></> : null}</div>
+      {detail && <ItAssetDrawer asset={detail} it={it} readOnly={readOnly} canLabel={canLabel} dir={dir} onClose={() => setDetailId(null)} onEdit={(a) => setEditing(a)} onMove={(kind, a) => setMove({ kind, asset: a })} onDelete={remove} />}
+      {move && <ItMoveModal kind={move.kind} asset={move.asset} assets={assets} onClose={() => setMove(null)} onDone={after} />}
       {editing !== null && <ItAssetEditModal asset={editing} onClose={() => setEditing(null)} onSave={save} busy={busy} readOnly={readOnly} />}
+      {showImport && <ItImportModal it={it} onClose={() => setShowImport(false)} onDone={async () => { await reloadIt(); }} />}
+      {showLoc && <ItLocModal assets={assets} onClose={() => setShowLoc(false)} onDone={async () => { setShowLoc(false); await reloadIt(); }} />}
     </div>
+  );
+}
+
+// 위치별 좌표 일괄 지정 — 같은 위치 이름(SSQ · Busan Branch …)의 자산에 같은 좌표 · 반경
+function ItLocModal({ assets, onClose, onDone }) {
+  const groups = useMemo(() => {
+    const m = new Map();
+    assets.filter((a) => mkItStateOf(a) !== "Retired" && a.Location).forEach((a) => {
+      const g = m.get(a.Location) || { loc: a.Location, all: [], none: [] };
+      g.all.push(a); if (a.Lat == null || a.Lat === "") g.none.push(a); m.set(a.Location, g);
+    });
+    return [...m.values()].sort((x, y) => y.all.length - x.all.length);
+  }, [assets]);
+  const [loc, setLoc] = useState(groups[0] ? groups[0].loc : "");
+  const g = groups.find((x) => x.loc === loc);
+  const known = g ? g.all.find((a) => a.Lat != null && a.Lat !== "") : null;
+  const [f, setF] = useState({ addr: "", lat: "", lng: "", r: String(MK_IT_RADIUS_DEFAULT), all: false });
+  const [msg, setMsg] = useState("");
+  const [prog, setProg] = useState(null);
+  useEffect(() => { setF((x) => ({ ...x, lat: known ? String(known.Lat) : "", lng: known ? String(known.Lng) : "", r: known && known.VerifyRadiusM ? String(known.VerifyRadiusM) : x.r, addr: known && known.AddressKr ? known.AddressKr : "" })); setMsg(""); }, [loc]);
+  async function geocode() {
+    if (!f.addr.trim()) { setMsg("주소를 입력해 주세요"); return; }
+    setMsg("주소로 좌표를 찾는 중…");
+    try {
+      const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=kr&q=${encodeURIComponent(f.addr)}`);
+      const data = await res.json();
+      if (!data.length) { setMsg("좌표를 찾지 못했습니다 — 현재 위치나 직접 입력을 써 주세요"); return; }
+      setF((x) => ({ ...x, lat: Number(data[0].lat).toFixed(6), lng: Number(data[0].lon).toFixed(6) })); setMsg("주소로 좌표를 채웠습니다");
+    } catch (e) { setMsg("좌표 찾기 실패: " + e.message); }
+  }
+  async function here() { setMsg("현재 위치를 확인하는 중…"); const p = await mkItGps(); if (p.denied) { setMsg(p.reason); return; } setF((x) => ({ ...x, lat: p.lat.toFixed(6), lng: p.lng.toFixed(6) })); setMsg(`현재 위치로 채웠습니다 (정확도 약 ${p.accuracy}m)`); }
+  const targets = g ? (f.all ? g.all : g.none) : [];
+  const ok = g && targets.length && isFinite(Number(f.lat)) && isFinite(Number(f.lng)) && f.lat !== "" && f.lng !== "";
+  async function apply() {
+    if (!confirm(`「${loc}」 자산 ${targets.length}대에 좌표(${f.lat}, ${f.lng}) · 반경 ${f.r}m 를 넣을까요?`)) return;
+    setProg({ done: 0, total: targets.length, fail: 0 });
+    let fail = 0;
+    for (let i = 0; i < targets.length; i++) {
+      try { await mkItAssetSave(targets[i].id, { Lat: Number(f.lat), Lng: Number(f.lng), VerifyRadiusM: Number(f.r) || MK_IT_RADIUS_DEFAULT, ...(f.addr ? { AddressKr: f.addr } : {}) }); } catch (e) { fail++; }
+      setProg({ done: i + 1, total: targets.length, fail });
+    }
+    mkLog("IT 자산", "위치 좌표 일괄 지정", loc, { info: { 대상: targets.length, 실패: fail, 위도: f.lat, 경도: f.lng, 반경: f.r } });
+    if (fail) alert(`${targets.length - fail}대 저장 · ${fail}대 실패`);
+    onDone();
+  }
+  return (
+    <Modal title="위치별 좌표 일괄 지정" onClose={onClose} wide>
+      <p className="text-xs text-slate-500 -mt-1 mb-3 leading-relaxed">같은 위치 이름의 자산에 같은 좌표를 넣으면, QR 스캔 때 그 사무실 · 지점 반경 안인지로 「정상 · 검증필요」 를 판정합니다. 노트북 · 휴대폰처럼 들고 다니는 자산은 반경을 넉넉히(예: 500m) 두세요.</p>
+      {!groups.length ? <div className="text-sm text-slate-400 py-6 text-center">위치가 입력된 자산이 없습니다</div> : (
+        <>
+          <div className="flex flex-wrap gap-1.5 mb-3">
+            {groups.map((x) => <button key={x.loc} onClick={() => setLoc(x.loc)} className={`text-xs rounded-full px-2.5 py-1 border ${x.loc === loc ? "text-white" : "bg-white text-slate-600 border-slate-200"}`} style={x.loc === loc ? { background: MK_GROUP_TONE.it.main, borderColor: MK_GROUP_TONE.it.main } : {}}>{x.loc} <span className="opacity-70">{x.none.length}/{x.all.length}</span></button>)}
+          </div>
+          <div className="text-xs text-slate-500 mb-3"><b className="text-slate-700">{loc}</b> — 자산 {g.all.length}대 중 좌표 없음 {g.none.length}대{known ? " · 이미 좌표가 있는 자산의 값을 채워 두었습니다" : ""}</div>
+          <Field label="주소"><div className="flex gap-2"><input className={inputCls} value={f.addr} onChange={(e) => setF((x) => ({ ...x, addr: e.target.value }))} placeholder="예: 서울 용산구 한강대로 416" />
+            <button type="button" onClick={geocode} className="shrink-0 px-3 py-2 text-xs border border-slate-300 rounded-lg hover:bg-slate-50 flex items-center gap-1"><MapPin size={13} /> 찾기</button></div></Field>
+          <div className="grid grid-cols-3 gap-3">
+            <Field label="위도"><input className={inputCls} value={f.lat} onChange={(e) => setF((x) => ({ ...x, lat: e.target.value }))} /></Field>
+            <Field label="경도"><input className={inputCls} value={f.lng} onChange={(e) => setF((x) => ({ ...x, lng: e.target.value }))} /></Field>
+            <Field label="허용 반경 (m)"><input className={inputCls} value={f.r} onChange={(e) => setF((x) => ({ ...x, r: e.target.value }))} /></Field>
+          </div>
+          <div className="flex items-center gap-2 flex-wrap mb-3 -mt-1">
+            <button type="button" onClick={here} className="px-3 py-1.5 text-xs border border-slate-300 rounded-lg hover:bg-slate-50 flex items-center gap-1"><LocateFixed size={13} /> 현재 위치</button>
+            <span className="text-xs text-slate-500">{msg}</span>
+          </div>
+          <label className="flex items-center gap-2 text-xs text-slate-600 mb-1"><input type="checkbox" checked={f.all} onChange={(e) => setF((x) => ({ ...x, all: e.target.checked }))} /> 이미 좌표가 있는 자산도 이 값으로 바꾸기</label>
+          {prog && <div className="mt-3"><div className="h-2 rounded-full bg-slate-100 overflow-hidden"><div className="h-full" style={{ width: `${(prog.done / prog.total) * 100}%`, background: MK_GROUP_TONE.it.main }} /></div><div className="text-[11px] text-slate-500 mt-1">{prog.done} / {prog.total}{prog.fail ? ` · 실패 ${prog.fail}` : ""}</div></div>}
+        </>
+      )}
+      <div className="flex justify-end gap-2 mt-4">
+        <button onClick={onClose} className="px-4 py-2 text-sm border border-slate-300 rounded-lg">닫기</button>
+        <button disabled={!ok || !!prog} onClick={apply} className="px-4 py-2 text-sm rounded-lg text-white disabled:opacity-50" style={{ background: BRAND.accent }}>{targets.length ? `${targets.length}대에 적용` : "적용할 자산 없음"}</button>
+      </div>
+    </Modal>
+  );
+}
+
+// ---- 재고(액세서리) 지급 · 반납 · 입고 · 조정 -------------------------------------------------------------
+function ItStockMoveModal({ kind, item, person, stock, holdings, onClose, onDone }) {
+  const KO = { Issue: "액세서리 지급", Return: "액세서리 반납", Receive: "입고", Adjust: "수량 조정" };
+  const [it0, setIt0] = useState(item || null);
+  const [who, setWho] = useState({ name: (person && person.name) || "", email: (person && person.email) || "" });
+  const [f, setF] = useState({ qty: 1, source: item && mkItNum(item.PoolQty) > 0 ? "pool" : "new", condition: "ok", date: mkTodayKst(), reason: "", ticket: "", note: "",
+    newQty: item ? mkItNum(item.Qty) : 0, newPool: item ? mkItNum(item.PoolQty) : 0 });
+  const [busy, setBusy] = useState(false);
+  const cur = it0;
+  useEffect(() => { if (cur) setF((x) => ({ ...x, source: mkItNum(cur.PoolQty) > 0 ? "pool" : "new", newQty: mkItNum(cur.Qty), newPool: mkItNum(cur.PoolQty) })); }, [cur && cur.id]);
+  const needPerson = (kind === "Issue" || kind === "Return") && !person;
+  const avail = cur ? (f.source === "pool" ? mkItNum(cur.PoolQty) : mkItNum(cur.Qty)) : 0;
+  const held = person && holdings ? holdings.filter((h) => !cur || h.key === cur.Title) : [];
+  const badMail = who.email && !MK_IT_EMAIL_RE.test(who.email.trim());
+  const ok = cur && f.date && (kind === "Adjust" || mkItNum(f.qty) >= 1) && (!needPerson || (who.name.trim() && !badMail)) && (kind !== "Issue" || mkItNum(f.qty) <= avail);
+  const items = (stock || []).filter((s) => s.Active !== false && (kind !== "Return" || !person || !holdings || holdings.some((h) => h.key === s.Title) || true));
+  async function go() {
+    setBusy(true);
+    try { const r = await mkItStockDo(kind, { item: cur, person: needPerson ? who : person, ...f }); onDone(r); }
+    catch (e) { alert(e.message); } finally { setBusy(false); }
+  }
+  return (
+    <Modal title={`${KO[kind]}${cur ? ` · ${cur.Title}` : ""}`} onClose={onClose} wide>
+      {!item && (
+        <Field label="품목" required>
+          <select className={inputCls} value={cur ? String(cur.id) : ""} onChange={(e) => setIt0(items.find((s) => String(s.id) === e.target.value) || null)}>
+            <option value="">선택</option>
+            {items.map((s) => <option key={s.id} value={String(s.id)}>{s.Title} — 신품 {mkItNum(s.Qty)} · 회수 {mkItNum(s.PoolQty)}{person && holdings && holdings.find((h) => h.key === s.Title) ? ` · 보유 ${holdings.find((h) => h.key === s.Title).qty}` : ""}</option>)}
+          </select>
+        </Field>
+      )}
+      {cur && (
+        <div className="grid grid-cols-3 gap-2 mb-3 text-center">
+          {[["신품", mkItNum(cur.Qty)], ["회수 재고", mkItNum(cur.PoolQty)], ["기준(최소)", mkItNum(cur.Threshold)]].map(([k, v]) => <div key={k} className="rounded-lg bg-slate-50 border border-slate-200 py-2"><div className="text-[11px] text-slate-500">{k}</div><div className="text-lg font-bold tabular-nums text-slate-800">{v}</div></div>)}
+        </div>
+      )}
+      {needPerson && <Field label={kind === "Return" ? "반납하는 사람" : "받는 사람"} required><MkItPersonPicker name={who.name} email={who.email} onChange={setWho} /></Field>}
+      {person && (kind === "Issue" || kind === "Return") && <div className="text-xs text-slate-500 mb-3">{kind === "Return" ? "반납하는 사람" : "받는 사람"} <b className="text-slate-700">{person.name}</b>{person.email ? ` · ${person.email}` : ""}{held.length && cur ? ` · 지금 보유(기록 기준) ${held[0].qty}개` : ""}</div>}
+      {kind === "Adjust" ? (
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="신품 수량(실사)"><input type="number" min="0" className={inputCls} value={f.newQty} onChange={(e) => setF((x) => ({ ...x, newQty: e.target.value }))} /></Field>
+          <Field label="회수 재고 수량(실사)"><input type="number" min="0" className={inputCls} value={f.newPool} onChange={(e) => setF((x) => ({ ...x, newPool: e.target.value }))} /></Field>
+        </div>
+      ) : (
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="수량" required><input type="number" min="1" className={inputCls} value={f.qty} onChange={(e) => setF((x) => ({ ...x, qty: e.target.value }))} /></Field>
+          {kind === "Issue" && <Field label="꺼낼 재고"><select className={inputCls} value={f.source} onChange={(e) => setF((x) => ({ ...x, source: e.target.value }))}><option value="pool">회수 재고 ({cur ? mkItNum(cur.PoolQty) : 0})</option><option value="new">신품 ({cur ? mkItNum(cur.Qty) : 0})</option></select></Field>}
+          {kind === "Return" && <Field label="상태"><select className={inputCls} value={f.condition} onChange={(e) => setF((x) => ({ ...x, condition: e.target.value }))}><option value="ok">재사용 가능 → 회수 재고</option><option value="bad">불량 · 폐기 → 재고에 넣지 않음</option></select></Field>}
+          {kind === "Receive" && <div className="text-xs text-slate-500 self-end pb-4">신품 재고에 더합니다</div>}
+        </div>
+      )}
+      {kind === "Issue" && cur && mkItNum(f.qty) > avail && <div className="text-xs text-rose-600 -mt-2 mb-3">{f.source === "pool" ? "회수 재고" : "신품"}가 {avail}개뿐입니다</div>}
+      <div className="grid grid-cols-2 gap-3">
+        <Field label="처리일" required><input type="date" className={inputCls} value={f.date} onChange={(e) => setF((x) => ({ ...x, date: e.target.value }))} /></Field>
+        <Field label="티켓 번호"><input className={inputCls} value={f.ticket} onChange={(e) => setF((x) => ({ ...x, ticket: e.target.value }))} placeholder="선택" /></Field>
+      </div>
+      <Field label="사유"><input className={inputCls} value={f.reason} onChange={(e) => setF((x) => ({ ...x, reason: e.target.value }))} list={`mk-it-sreason-${kind}`} placeholder="선택하거나 직접 입력" />
+        <datalist id={`mk-it-sreason-${kind}`}>{(MK_IT_REASONS[kind] || []).map((r) => <option key={r} value={r} />)}</datalist></Field>
+      <Field label="메모"><input className={inputCls} value={f.note} onChange={(e) => setF((x) => ({ ...x, note: e.target.value }))} placeholder="선택" /></Field>
+      <div className="flex justify-end gap-2 mt-2">
+        <button onClick={onClose} className="px-4 py-2 text-sm border border-slate-300 rounded-lg">닫기</button>
+        <button disabled={!ok || busy} onClick={go} className="px-4 py-2 text-sm rounded-lg text-white disabled:opacity-50" style={{ background: BRAND.accent }}>{busy ? "처리 중…" : `${KO[kind]}`}</button>
+      </div>
+      {busy && <BlockingOverlay message="처리하는 중입니다…" />}
+    </Modal>
+  );
+}
+
+// 퇴사 · 휴직 일괄 반납 — 이 사람의 자산(→ 회수 재고) · 액세서리(→ 회수 재고) 를 한 번에
+function ItOffboardModal({ person, stock, onClose, onDone }) {
+  const [selA, setSelA] = useState(() => new Set(person.assets.map((a) => a.id)));
+  const [selH, setSelH] = useState(() => new Set(person.hold.filter((h) => (stock || []).some((s) => s.Title === h.key)).map((h) => h.key)));
+  const [f, setF] = useState({ reason: "퇴사", date: mkTodayKst(), ticket: "", toState: "In Pool" });
+  const [prog, setProg] = useState(null);
+  async function go() {
+    const tasks = [...person.assets.filter((a) => selA.has(a.id)).map((a) => ({ t: "a", a })), ...person.hold.filter((h) => selH.has(h.key)).map((h) => ({ t: "h", h }))];
+    if (!tasks.length) return;
+    if (!confirm(`${person.name || person.email} 님의 자산 ${tasks.filter((x) => x.t === "a").length}대 · 액세서리 ${tasks.filter((x) => x.t === "h").length}종을 반납 처리할까요?`)) return;
+    setProg({ done: 0, total: tasks.length, fail: [] });
+    const fail = [];
+    for (let i = 0; i < tasks.length; i++) {
+      const x = tasks[i];
+      try {
+        if (x.t === "a") await mkItDoMove("Return", { asset: x.a, reason: f.reason, date: f.date, ticket: f.ticket, toState: f.toState });
+        else { const item = (stock || []).find((s) => s.Title === x.h.key); await mkItStockDo("Return", { item, qty: x.h.qty, person, reason: f.reason, date: f.date, ticket: f.ticket }); }
+      } catch (e) { fail.push(`${x.t === "a" ? x.a.CICD || x.a.Title : x.h.key}: ${e.message}`); }
+      setProg({ done: i + 1, total: tasks.length, fail: [...fail] });
+    }
+    mkLog("IT 자산", "일괄 반납", person.name || person.email, { info: { 메일: person.email, 사유: f.reason, 건수: tasks.length, 실패: fail.length } });
+    if (fail.length) alert(`일부 실패 ${fail.length}건:\n` + fail.slice(0, 8).join("\n"));
+    onDone();
+  }
+  const noStock = person.hold.filter((h) => !(stock || []).some((s) => s.Title === h.key));
+  return (
+    <Modal title={`일괄 반납 · ${person.name || person.email}`} onClose={onClose} wide>
+      <p className="text-xs text-slate-500 -mt-1 mb-3">퇴사 · 휴직 때 이 사람이 가진 자산과 액세서리를 한 번에 반납합니다. 자산은 반납 후 상태로, 재사용 가능한 액세서리는 회수 재고로 들어갑니다.</p>
+      <div className="text-xs font-semibold text-slate-600 mb-1.5">자산 {person.assets.length}대</div>
+      <div className="rounded-lg border border-slate-200 bg-white mb-3 divide-y divide-slate-100">
+        {person.assets.map((a) => (
+          <label key={a.id} className="flex items-center gap-2.5 px-3 py-2 text-sm cursor-pointer">
+            <input type="checkbox" checked={selA.has(a.id)} onChange={() => setSelA((s) => { const n = new Set(s); n.has(a.id) ? n.delete(a.id) : n.add(a.id); return n; })} />
+            <MkItTypeIcon type={a.AssetType} className="text-slate-400" /><span className="flex-1 min-w-0 truncate">{a.Title}</span><span className="font-mono text-[11px] text-slate-500">{a.CICD}</span>
+          </label>
+        ))}
+        {!person.assets.length && <div className="text-xs text-slate-400 px-3 py-3">없음</div>}
+      </div>
+      <div className="text-xs font-semibold text-slate-600 mb-1.5">액세서리(이력 기준 보유)</div>
+      <div className="rounded-lg border border-slate-200 bg-white mb-3 divide-y divide-slate-100">
+        {person.hold.map((h) => {
+          const has = (stock || []).some((s) => s.Title === h.key);
+          return (
+            <label key={h.key} className={`flex items-center gap-2.5 px-3 py-2 text-sm ${has ? "cursor-pointer" : "opacity-60"}`}>
+              <input type="checkbox" disabled={!has} checked={selH.has(h.key)} onChange={() => setSelH((s) => { const n = new Set(s); n.has(h.key) ? n.delete(h.key) : n.add(h.key); return n; })} />
+              <Package size={14} className="text-slate-400" /><span className="flex-1 min-w-0 truncate">{h.key}</span><span className="text-[11px] text-slate-500">{h.qty}개{!has ? " · 재고 품목 없음" : ""}</span>
+            </label>
+          );
+        })}
+        {!person.hold.length && <div className="text-xs text-slate-400 px-3 py-3">없음</div>}
+      </div>
+      {noStock.length > 0 && <div className="text-[11px] text-slate-400 -mt-2 mb-3">재고 품목과 이어지지 않은 기록({noStock.map((h) => h.key).join(", ")})은 「재고 · 액세서리」 에서 품목을 만든 뒤 반납할 수 있습니다.</div>}
+      <div className="grid grid-cols-3 gap-3">
+        <Field label="사유"><input className={inputCls} value={f.reason} onChange={(e) => setF((x) => ({ ...x, reason: e.target.value }))} list="mk-it-reason-Return" /></Field>
+        <Field label="처리일"><input type="date" className={inputCls} value={f.date} onChange={(e) => setF((x) => ({ ...x, date: e.target.value }))} /></Field>
+        <Field label="자산 반납 후"><select className={inputCls} value={f.toState} onChange={(e) => setF((x) => ({ ...x, toState: e.target.value }))}><option value="In Pool">회수 재고</option><option value="Inoperable">고장</option></select></Field>
+      </div>
+      <datalist id="mk-it-reason-Return">{MK_IT_REASONS.Return.map((r) => <option key={r} value={r} />)}</datalist>
+      {prog && <div className="mt-1"><div className="h-2 rounded-full bg-slate-100 overflow-hidden"><div className="h-full" style={{ width: `${(prog.done / prog.total) * 100}%`, background: MK_GROUP_TONE.it.main }} /></div><div className="text-[11px] text-slate-500 mt-1">{prog.done} / {prog.total}{prog.fail.length ? ` · 실패 ${prog.fail.length}` : ""}</div></div>}
+      <div className="flex justify-end gap-2 mt-4">
+        <button onClick={onClose} className="px-4 py-2 text-sm border border-slate-300 rounded-lg">닫기</button>
+        <button disabled={(!selA.size && !selH.size) || !!prog} onClick={go} className="px-4 py-2 text-sm rounded-lg text-white disabled:opacity-50" style={{ background: BRAND.accent }}>일괄 반납 ({selA.size + selH.size})</button>
+      </div>
+    </Modal>
+  );
+}
+
+// ---- 사용자별 자산(계정별 관리) --------------------------------------------------------------------------
+function ItPeopleTab({ it, reloadIt, readOnly, canLabel }) {
+  const dir = useMkDir();
+  const { assets, history = [], stock = [] } = it;
+  const people = useMemo(() => mkItPeople(assets, history, dir), [assets, history, dir.list, dir.ready]);
+  const [q, setQ] = useState("");
+  const [flt, setFlt] = useState("all");     // all · missing · nomail · nolaptop
+  const [selKey, setSelKey] = useState(null);
+  const [move, setMove] = useState(null);     // { kind, asset? , person }
+  const [smove, setSmove] = useState(null);   // { kind, person, item? }
+  const [offb, setOffb] = useState(null);
+  const [detailAsset, setDetailAsset] = useState(null);
+  const list = useMemo(() => {
+    let l = [...people.values()].filter((p) => p.assets.length || p.holdQty);
+    if (flt === "nolaptop") {   // 직원 명부에 있는데 노트북이 없는 사람
+      const has = new Set([...people.values()].filter((p) => p.count("Notebook")).map((p) => p.email).filter(Boolean));
+      l = dir.list.filter((d) => !has.has(d.email)).map((d) => people.get(d.email) || { key: d.email, email: d.email, name: d.name, dept: d.dept, assets: [], hold: [], hist: [], count: () => 0, holdQty: 0, missing: false, noMail: false, virtual: true });
+    }
+    if (flt === "missing") l = l.filter((p) => p.missing);
+    if (flt === "nomail") l = l.filter((p) => p.noMail);
+    const qq = q.trim().toLowerCase();
+    if (qq) l = l.filter((p) => [p.name, p.email, p.dept, p.dirName, ...p.assets.map((a) => `${a.CICD} ${a.SerialNo} ${a.Title}`)].some((v) => String(v || "").toLowerCase().includes(qq)));
+    return l.sort((x, y) => (y.missing - x.missing) || String(x.name || x.email).localeCompare(String(y.name || y.email)));
+  }, [people, q, flt, dir.list]);
+  const cnt = useMemo(() => { const all = [...people.values()].filter((p) => p.assets.length || p.holdQty); return { all: all.length, missing: all.filter((p) => p.missing).length, nomail: all.filter((p) => p.noMail).length }; }, [people]);
+  const sel = selKey ? (people.get(selKey) || list.find((p) => p.key === selKey)) : null;
+  const done = async (r) => { setMove(null); setSmove(null); setOffb(null); await reloadIt(); if (r && r.histOk === false && !it.histErr) alert("처리했습니다. 다만 변경 이력은 남기지 못했습니다(이력 목록 확인)."); };
+  const typeCount = (p) => [["Notebook", Laptop], ["Docking Station", Cable], ["Mobile", Smartphone]].map(([t, I]) => [t, I, p.count(t)]).filter((x) => x[2]);
+  const others = (p) => p.assets.filter((a) => !["Notebook", "Docking Station", "Mobile"].includes(a.AssetType)).length;
+  const Detail = ({ p }) => (
+    <div>
+      <div className="bg-white border rounded-xl p-4 mb-4">
+        <div className="flex items-start gap-3">
+          <div className="w-12 h-12 rounded-full flex items-center justify-center text-sm font-bold text-white shrink-0" style={{ background: p.missing ? "#DC2626" : MK_GROUP_TONE.it.main }}>{mkItInitials(p.name || p.email)}</div>
+          <div className="min-w-0 flex-1">
+            <div className="text-lg font-semibold text-slate-800 flex items-center gap-2 flex-wrap">{p.name || p.email}
+              {p.missing && <span className="text-[11px] px-2 py-0.5 rounded-full bg-red-50 text-red-600 font-medium">명부 없음 · 퇴사 · 이동 확인</span>}
+              {p.noMail && <span className="text-[11px] px-2 py-0.5 rounded-full bg-amber-50 text-amber-800 font-medium">메일 미확인</span>}</div>
+            <div className="text-xs text-slate-500 break-all">{[p.email, p.dept, p.dirName && p.dirName !== p.name ? `명부 이름 ${p.dirName}` : ""].filter(Boolean).join(" · ") || "메일 없음 — 기록의 이름으로만 묶었습니다"}</div>
+          </div>
+        </div>
+        {!readOnly && (
+          <div className="flex flex-wrap gap-2 mt-4">
+            <button onClick={() => setMove({ kind: "Issue", person: { name: p.name, email: p.email } })} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm text-white" style={{ background: BRAND.accent }}><PackagePlus size={14} /> 자산 지급</button>
+            <button disabled={it.stockErr || !stock.length} onClick={() => setSmove({ kind: "Issue", person: { name: p.name, email: p.email } })} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm border border-slate-300 bg-white hover:bg-slate-50 disabled:opacity-40"><Package size={14} /> 액세서리 지급</button>
+            {(p.assets.length > 0 || p.hold.length > 0) && <button onClick={() => setOffb(p)} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm border border-slate-300 bg-white hover:bg-slate-50"><UserX size={14} /> 퇴사 · 일괄 반납</button>}
+            {canLabel && p.assets.some((a) => a.QrToken) && <button onClick={() => mkItPrintLabels(p.assets)} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm border border-slate-300 bg-white hover:bg-slate-50"><Printer size={14} /> 라벨 {p.assets.length}장</button>}
+          </div>
+        )}
+      </div>
+      <div className="bg-white border rounded-xl p-4 mb-4">
+        <div className="text-xs font-semibold text-slate-500 mb-2">자산 <span className="font-normal text-slate-400">{p.assets.length}대</span></div>
+        <div className="grid grid-cols-1 xl:grid-cols-2 gap-2">
+          {p.assets.map((a) => (
+            <div key={a.id} className="rounded-lg border border-slate-200 px-3 py-2.5 hover:border-slate-300 cursor-pointer" onClick={() => setDetailAsset(a)}>
+              <div className="flex items-start gap-2">
+                <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0" style={{ background: MK_GROUP_TONE.it.band }}><MkItTypeIcon type={a.AssetType} size={15} className="text-[#8A5A1C]" /></div>
+                <div className="min-w-0 flex-1"><div className="text-sm font-medium text-slate-800 truncate">{a.Title}</div>
+                  <div className="text-[11px] text-slate-500 font-mono truncate">{a.CICD} · {a.SerialNo || "시리얼 없음"}</div>
+                  <div className="text-[11px] text-slate-400">{[a.AssignedDate && `지급 ${a.AssignedDate}`, a.Location, a.PhoneNo].filter(Boolean).join(" · ")}</div></div>
+                <MkItStateBadge a={a} />
+              </div>
+              {!readOnly && (
+                <div className="flex gap-1.5 mt-2" onClick={(e) => e.stopPropagation()}>
+                  {[["Return", "반납", Undo2], ["Replace", "교체", ArrowLeftRight], ["Transfer", "이전", Users]].map(([k, l, I]) => <button key={k} onClick={() => setMove({ kind: k, asset: a })} className="flex items-center gap-1 text-[11.5px] px-2 py-1 rounded-md border border-slate-200 hover:bg-slate-50"><I size={12} /> {l}</button>)}
+                </div>
+              )}
+            </div>
+          ))}
+          {!p.assets.length && <div className="text-sm text-slate-400 py-3">지급된 자산이 없습니다</div>}
+        </div>
+      </div>
+      <div className="bg-white border rounded-xl p-4 mb-4">
+        <div className="text-xs font-semibold text-slate-500 mb-2">액세서리 <span className="font-normal text-slate-400">이력 기준 보유 {p.holdQty}개</span></div>
+        <div className="flex flex-wrap gap-2">
+          {p.hold.map((h) => {
+            const item = stock.find((s) => s.Title === h.key);
+            return (
+              <div key={h.key} className="flex items-center gap-2 rounded-lg border border-slate-200 pl-3 pr-1.5 py-1.5 text-sm">
+                <Package size={13} className="text-slate-400" /><span className="text-slate-700">{h.key}</span><span className="text-xs text-slate-500 tabular-nums">× {h.qty}</span><span className="text-[11px] text-slate-400">{h.last}</span>
+                {!readOnly && item && <button onClick={() => setSmove({ kind: "Return", person: { name: p.name, email: p.email }, item })} className="text-[11px] px-1.5 py-0.5 rounded border border-slate-200 hover:bg-slate-50">반납</button>}
+              </div>
+            );
+          })}
+          {!p.hold.length && <div className="text-sm text-slate-400 py-1">기록된 보유 액세서리가 없습니다</div>}
+        </div>
+      </div>
+      <div className="bg-white border rounded-xl p-4">
+        <div className="text-xs font-semibold text-slate-500 mb-3">이력 <span className="font-normal text-slate-400">{p.hist.length}건</span></div>
+        {p.hist.length ? (
+          <ol className="relative border-l border-slate-200 ml-1.5">
+            {p.hist.slice(0, 60).map((h) => (
+              <li key={h.id || h.ImportKey} className="ml-4 pb-3 last:pb-0">
+                <span className="absolute -left-[5px] mt-1.5 w-2.5 h-2.5 rounded-full border-2 border-white" style={{ background: (MK_IT_STATES[h.NewState] || {}).dot || MK_GROUP_TONE.it.main }} />
+                <div className="text-sm flex items-center gap-2 flex-wrap"><span className="text-[11.5px] text-slate-400 tabular-nums">{h.ChangeDate}</span><MkItChangeBadge t={h.ChangeType} />
+                  <span className="text-slate-700">{h.Kind === "Stock" ? `${h.StockKey || h.ItemType || h.Model}${mkItNum(h.Qty) > 1 ? ` × ${h.Qty}` : ""}` : `${mkItTypeKo(h.ItemType)} ${h.CICD || h.SerialNo || ""}`}</span>
+                  {h.TicketNo && <span className="text-[11px] text-slate-400">Ticket {h.TicketNo}</span>}</div>
+                {(h.Reason || h.Note) && <div className="text-xs text-slate-500 mt-0.5">{[h.Reason, h.Note].filter(Boolean).join(" · ")}</div>}
+              </li>
+            ))}
+          </ol>
+        ) : <div className="text-sm text-slate-400 text-center py-4">이력이 없습니다</div>}
+      </div>
+    </div>
+  );
+  if (it.err) return <MkItListMissing error={it.err} />;
+  return (
+    <div className="w-full">
+      {it.histErr && <div className="mb-3 text-xs rounded-lg px-3 py-2 bg-amber-50 border border-amber-200 text-amber-900">변경 이력 목록({MK_LISTS.itHistory})이 없어 액세서리 보유 · 이력은 비어 있습니다 — 자산 지급 · 반납은 그대로 됩니다.</div>}
+      <div className="grid grid-cols-1 lg:grid-cols-[minmax(300px,360px)_1fr] gap-4 items-start">
+        <div className={`bg-white border rounded-xl overflow-hidden ${sel ? "hidden lg:block" : ""}`}>
+          <div className="p-3 border-b border-slate-100">
+            <div className="relative mb-2"><Search size={14} className="absolute left-2.5 top-2.5 text-slate-400" />
+              <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="이름 · 메일 · 부서 · 시리얼 검색" className="w-full pl-8 pr-3 py-2 border border-slate-300 rounded-lg text-sm" /></div>
+            <div className="flex flex-wrap gap-1.5">
+              {[["all", "전체", cnt.all], ["missing", "명부 없음", cnt.missing], ["nomail", "메일 미확인", cnt.nomail], ["nolaptop", "노트북 없는 직원", null]].map(([k, l, n]) => (
+                <button key={k} onClick={() => setFlt(k)} disabled={k === "nolaptop" && !dir.ready} className={`text-[11.5px] rounded-full px-2.5 py-1 border disabled:opacity-40 ${flt === k ? "text-white" : "bg-white text-slate-600 border-slate-200"}`}
+                  style={flt === k ? { background: k === "missing" ? "#DC2626" : MK_GROUP_TONE.it.main, borderColor: "transparent" } : {}}>{l}{n != null ? ` ${n}` : ""}</button>
+              ))}
+            </div>
+          </div>
+          <div className="max-h-[70vh] overflow-y-auto mk-scroll divide-y divide-slate-50">
+            {list.slice(0, 400).map((p) => (
+              <button key={p.key} onClick={() => setSelKey(p.key)} className={`w-full text-left px-3 py-2.5 flex items-center gap-3 hover:bg-slate-50 ${sel && sel.key === p.key ? "bg-[#FAF5EE]" : ""}`}>
+                <div className="w-8 h-8 rounded-full flex items-center justify-center text-[11px] font-bold text-white shrink-0" style={{ background: p.missing ? "#DC2626" : p.noMail ? "#B45309" : MK_GROUP_TONE.it.main }}>{mkItInitials(p.name || p.email)}</div>
+                <div className="min-w-0 flex-1">
+                  <div className="text-[13px] font-medium text-slate-800 truncate">{p.name || p.email}</div>
+                  <div className="text-[11px] text-slate-400 truncate">{p.email || "메일 미확인"}{p.dept ? ` · ${p.dept}` : ""}</div>
+                </div>
+                <div className="flex items-center gap-2 shrink-0 text-[11px] text-slate-500">
+                  {typeCount(p).map(([t, I, n]) => <span key={t} className="inline-flex items-center gap-0.5" title={mkItTypeKo(t)}><I size={12} />{n}</span>)}
+                  {others(p) > 0 && <span className="inline-flex items-center gap-0.5" title="기타 자산"><Boxes size={12} />{others(p)}</span>}
+                  {p.holdQty > 0 && <span className="inline-flex items-center gap-0.5" title="액세서리"><Package size={12} />{p.holdQty}</span>}
+                  {p.missing && <span className="w-1.5 h-1.5 rounded-full bg-red-500" title="명부 없음" />}
+                </div>
+              </button>
+            ))}
+            {!list.length && <div className="text-center text-sm text-slate-400 py-10">{flt === "nolaptop" ? "노트북이 없는 직원이 없습니다" : "조건에 맞는 사람이 없습니다"}</div>}
+          </div>
+          <div className="px-3 py-2 text-[11px] text-slate-400 border-t border-slate-100">{list.length}명{dir.loading ? " · 직원 명부 읽는 중…" : dir.err ? " · 직원 명부를 읽지 못해 「명부 없음」 판단 안 함" : ""}</div>
+        </div>
+        <div className={sel ? "" : "hidden lg:block"}>
+          {sel ? <>
+            <button onClick={() => setSelKey(null)} className="lg:hidden mb-3 text-sm text-slate-600 flex items-center gap-1"><ArrowLeftToLine size={14} /> 목록</button>
+            <Detail p={sel} />
+          </> : (
+            <div className="bg-white border border-dashed rounded-xl p-10 text-center">
+              <Users size={28} className="mx-auto text-slate-300" />
+              <div className="mt-3 text-sm font-medium text-slate-600">사람을 고르면 가진 자산 · 액세서리 · 이력이 보입니다</div>
+              <div className="mt-1 text-xs text-slate-400 leading-relaxed">왼쪽 「명부 없음」 은 직원 명부에 없는 메일 — 퇴사 · 이동 후 반납되지 않은 자산일 수 있습니다.<br />「노트북 없는 직원」 은 명부에 있는데 노트북이 지급되지 않은 사람입니다.</div>
+            </div>
+          )}
+        </div>
+      </div>
+      {move && <ItMoveModal kind={move.kind} asset={move.asset} person={move.person} assets={assets} onClose={() => setMove(null)} onDone={done} />}
+      {smove && <ItStockMoveModal kind={smove.kind} item={smove.item} person={smove.person} stock={stock} holdings={sel ? sel.hold : null} onClose={() => setSmove(null)} onDone={done} />}
+      {offb && <ItOffboardModal person={offb} stock={stock} onClose={() => setOffb(null)} onDone={done} />}
+      {detailAsset && <ItAssetDrawer asset={assets.find((a) => a.id === detailAsset.id) || detailAsset} it={it} readOnly={readOnly} canLabel={canLabel} dir={dir} onClose={() => setDetailAsset(null)} onEdit={null} onDelete={null}
+        onMove={(k, a) => { setDetailAsset(null); setMove({ kind: k, asset: a }); }} />}
+    </div>
+  );
+}
+
+// ---- 재고 · 액세서리 -----------------------------------------------------------------------------------
+function ItStockEditModal({ item, onClose, onDone, readOnly }) {
+  const isNew = !item.id;
+  const [f, setF] = useState(() => ({ Title: "", Category: "Accessory", Qty: 0, PoolQty: 0, Threshold: 0, Entity: "STK", IsAsset: true, Ownership: "Company owned", Note: "", Active: true, ...item }));
+  const [busy, setBusy] = useState(false);
+  const set = (k) => (e) => setF((x) => ({ ...x, [k]: e.target.type === "checkbox" ? e.target.checked : e.target.value }));
+  async function save() {
+    setBusy(true);
+    try {
+      const fields = { Title: String(f.Title).trim(), Category: f.Category || "", Threshold: mkItNum(f.Threshold), Entity: f.Entity || "", IsAsset: f.IsAsset === true || f.IsAsset === "Y", Ownership: f.Ownership || "", Note: f.Note || "", Active: f.Active !== false };
+      if (isNew) {
+        Object.assign(fields, { Qty: Math.max(0, Math.floor(mkItNum(f.Qty))), PoolQty: Math.max(0, Math.floor(mkItNum(f.PoolQty))) });
+        const r = await mkCreateItem(MK_LISTS.itStock, await mkItFields(MK_LISTS.itStock, fields));
+        await mkItHistAdd({ Kind: "Stock", StockId: String(r.id), StockKey: fields.Title, ItemType: fields.Category, Model: fields.Title, ChangeType: "Register", Qty: fields.Qty + fields.PoolQty, NewState: "In Stock", Reason: "품목 등록", Note: `신품 ${fields.Qty} · 회수 ${fields.PoolQty}` });
+        mkLog("IT 재고", "품목 등록", fields.Title, { id: r.id, info: { 신품: fields.Qty, 회수: fields.PoolQty, 기준: fields.Threshold } });
+      } else {
+        await mkUpdateItem(MK_LISTS.itStock, item.id, await mkItFields(MK_LISTS.itStock, fields));
+        mkLog("IT 재고", "품목 수정", fields.Title, { id: item.id, changes: mkDiff(item, fields, { Title: "품목", Category: "분류", Threshold: "기준", Entity: "법인", Ownership: "소유", Note: "비고", Active: "사용" }) });
+      }
+      onDone();
+    } catch (e) { alert(e.message); } finally { setBusy(false); }
+  }
+  return (
+    <Modal title={isNew ? "재고 품목 추가" : `재고 품목 수정 · ${item.Title}`} onClose={onClose} wide>
+      <fieldset disabled={readOnly || busy} className="contents">
+        <Field label="품목 이름" required><input className={inputCls} value={f.Title} onChange={set("Title")} placeholder='예: 27" Monitor · Keyboard Mouse Set' /></Field>
+        <div className="grid grid-cols-3 gap-3">
+          <Field label="분류"><select className={inputCls} value={f.Category} onChange={set("Category")}>{["Accessory", "Monitor", "Cable", "Furniture", "Network", "Consumable"].map((c) => <option key={c} value={c}>{c}</option>)}</select></Field>
+          <Field label="최소 기준 수량"><input type="number" min="0" className={inputCls} value={f.Threshold} onChange={set("Threshold")} /></Field>
+          <Field label="법인 · 소유"><input className={inputCls} value={f.Ownership} onChange={set("Ownership")} placeholder="Company owned · ○○ Rental" /></Field>
+        </div>
+        {isNew && <div className="grid grid-cols-2 gap-3">
+          <Field label="신품 수량"><input type="number" min="0" className={inputCls} value={f.Qty} onChange={set("Qty")} /></Field>
+          <Field label="회수 재고 수량"><input type="number" min="0" className={inputCls} value={f.PoolQty} onChange={set("PoolQty")} /></Field>
+        </div>}
+        {!isNew && <div className="text-xs text-slate-500 mb-3">수량은 「입고 · 지급 · 반납 · 수량 조정」 으로만 바꿉니다(이력이 남습니다).</div>}
+        <Field label="비고"><input className={inputCls} value={f.Note} onChange={set("Note")} /></Field>
+        <label className="flex items-center gap-2 text-sm text-slate-700 mb-1"><input type="checkbox" checked={f.IsAsset === true || f.IsAsset === "Y"} onChange={(e) => setF((x) => ({ ...x, IsAsset: e.target.checked }))} /> 회사 자산(회계 자산 대상)</label>
+        <label className="flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" checked={f.Active !== false} onChange={set("Active")} /> 사용 중인 품목 — 끄면 목록에서 숨김</label>
+      </fieldset>
+      <div className="flex justify-end gap-2 mt-4">
+        <button onClick={onClose} className="px-4 py-2 text-sm border border-slate-300 rounded-lg">닫기</button>
+        {!readOnly && <button disabled={busy || !String(f.Title).trim()} onClick={save} className="px-4 py-2 text-sm rounded-lg text-white disabled:opacity-50" style={{ background: BRAND.accent }}>{busy ? "저장 중…" : "저장"}</button>}
+      </div>
+    </Modal>
+  );
+}
+function ItStockTab({ it, reloadIt, readOnly }) {
+  const { stock = [], history = [] } = it;
+  const [q, setQ] = useState("");
+  const [lvF, setLvF] = useState("");
+  const [showOff, setShowOff] = useState(false);
+  const [edit, setEdit] = useState(null);
+  const [smove, setSmove] = useState(null);
+  const [histOf, setHistOf] = useState(null);
+  const holders = useMemo(() => { const m = new Map(); mkItHoldings(history).forEach((l, pk) => l.forEach((x) => { const c = m.get(x.key) || { n: 0, qty: 0 }; c.n++; c.qty += x.qty; m.set(x.key, c); })); return m; }, [history]);
+  if (it.stockErr) return <MkItSetupNotice list={MK_LISTS.itStock} what="재고 · 액세서리" />;
+  const qq = q.trim().toLowerCase();
+  const live = stock.filter((s) => showOff || s.Active !== false);
+  const list = live.filter((s) => (!lvF || mkItStockLevel(s).k === lvF) && (!qq || [s.Title, s.Category, s.Note, s.Ownership].some((v) => String(v || "").toLowerCase().includes(qq))))
+    .sort((x, y) => ({ low: 0, warn: 1, ok: 2 }[mkItStockLevel(x).k] - { low: 0, warn: 1, ok: 2 }[mkItStockLevel(y).k]) || String(x.Title).localeCompare(String(y.Title)));
+  const lv = { low: live.filter((s) => mkItStockLevel(s).k === "low").length, warn: live.filter((s) => mkItStockLevel(s).k === "warn").length };
+  const out = [...holders.values()].reduce((s, x) => s + x.qty, 0);
+  const done = async (r) => { setSmove(null); setEdit(null); await reloadIt(); if (r && r.histOk === false && !it.histErr) alert("처리했습니다. 다만 변경 이력은 남기지 못했습니다(이력 목록 확인)."); };
+  async function remove(s) {
+    if (!confirm(`「${s.Title}」 품목을 삭제할까요? 이력은 남아 있습니다. 더 쓰지 않는 품목은 삭제 대신 「사용 중인 품목」 을 끄는 것을 권장합니다.`)) return;
+    try { await mkDeleteItem(MK_LISTS.itStock, s.id); mkLog("IT 재고", "품목 삭제", s.Title, { id: s.id }); await reloadIt(); } catch (e) { alert(e.message); }
+  }
+  function exportXlsx() {
+    const data = list.map((s) => ({ 품목: s.Title, 분류: s.Category, 신품: mkItNum(s.Qty), "회수 재고": mkItNum(s.PoolQty), 합계: mkItNum(s.Qty) + mkItNum(s.PoolQty), "최소 기준": mkItNum(s.Threshold),
+      상태: mkItStockLevel(s).ko, "지급 중(기록 기준)": (holders.get(s.Title) || {}).qty || 0, "보유 인원": (holders.get(s.Title) || {}).n || 0, 소유: s.Ownership, 비고: s.Note }));
+    const ws = XLSX.utils.json_to_sheet(data); const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, "IT Stock");
+    XLSX.writeFile(wb, `MKQR_IT재고_${mkTodayKst()}.xlsx`);
+    mkLog("IT 재고", "Excel 다운로드", `품목 ${data.length}건`, { info: { 건수: data.length } });
+  }
+  return (
+    <div className="w-full">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-2.5 mb-4">
+        <MkItKpi label="품목" value={live.length} active={!lvF} onClick={() => setLvF("")} tone={MK_GROUP_TONE.it.main} />
+        <MkItKpi label={<><span className="w-1.5 h-1.5 rounded-full bg-rose-500" />부족 (기준 미만)</>} value={lv.low} active={lvF === "low"} onClick={() => setLvF(lvF === "low" ? "" : "low")} tone="#E11D48" />
+        <MkItKpi label={<><span className="w-1.5 h-1.5 rounded-full bg-amber-500" />주의 (기준 근처)</>} value={lv.warn} active={lvF === "warn"} onClick={() => setLvF(lvF === "warn" ? "" : "warn")} tone="#D97706" />
+        <MkItKpi label="지급 중 (기록 기준)" value={out} sub="개" />
+      </div>
+      <div className="mb-3 flex items-center justify-between flex-wrap gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
+          <div className="relative w-full sm:w-auto"><Search size={15} className="absolute left-2.5 top-2.5 text-slate-400" />
+            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="품목 · 분류 검색" className="pl-8 pr-3 py-2 border border-slate-300 rounded-lg text-sm w-full sm:w-64" /></div>
+          <label className="flex items-center gap-1.5 text-xs text-slate-500"><input type="checkbox" checked={showOff} onChange={(e) => setShowOff(e.target.checked)} /> 숨긴 품목 포함</label>
+        </div>
+        <div className="flex items-center gap-2 flex-wrap">
+          <button onClick={exportXlsx} disabled={!list.length} className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm border border-slate-300 disabled:opacity-40"><Download size={14} /> Excel</button>
+          {!readOnly && <button onClick={() => setSmove({ kind: "Issue" })} disabled={!stock.length} className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm border border-slate-300 disabled:opacity-40"><PackagePlus size={14} /> 지급</button>}
+          {!readOnly && <button onClick={() => setEdit({})} className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm text-white" style={{ background: BRAND.accent }}><Plus size={14} /> 품목 추가</button>}
+        </div>
+      </div>
+      <div className="bg-white border rounded-xl overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead className="bg-slate-50 text-xs text-slate-500">
+            <tr><th className="px-3 py-2.5 text-left">품목</th><th className="px-3 py-2.5 text-right">신품</th><th className="px-3 py-2.5 text-right">회수</th>
+              <th className="px-3 py-2.5 text-left w-48">재고 / 기준</th><th className="px-3 py-2.5 text-center">상태</th><th className="px-3 py-2.5 text-right">지급 중</th><th className="px-3 py-2.5 w-56" /></tr>
+          </thead>
+          <tbody>
+            {list.map((s) => {
+              const l = mkItStockLevel(s); const tot = mkItNum(s.Qty) + mkItNum(s.PoolQty); const th = mkItNum(s.Threshold); const max = Math.max(tot, th, 1); const h = holders.get(s.Title);
+              return (
+                <tr key={s.id} className={`border-t border-slate-100 ${s.Active === false ? "opacity-50" : ""}`}>
+                  <td className="px-3 py-2.5"><div className="font-medium text-slate-800">{s.Title}</div><div className="text-[11px] text-slate-400">{[s.Category, s.Ownership !== "Company owned" ? s.Ownership : "", s.Note].filter(Boolean).join(" · ")}</div></td>
+                  <td className="px-3 py-2.5 text-right tabular-nums">{mkItNum(s.Qty)}</td>
+                  <td className="px-3 py-2.5 text-right tabular-nums">{mkItNum(s.PoolQty)}</td>
+                  <td className="px-3 py-2.5">
+                    <div className="relative h-2 rounded-full bg-slate-100 overflow-hidden">
+                      <div className="absolute inset-y-0 left-0" style={{ width: `${(tot / max) * 100}%`, background: l.k === "low" ? "#E11D48" : l.k === "warn" ? "#D97706" : MK_GROUP_TONE.it.main }} />
+                      {th > 0 && <div className="absolute inset-y-0 w-0.5 bg-slate-700/60" style={{ left: `calc(${(th / max) * 100}% - 1px)` }} title={`기준 ${th}`} />}
+                    </div>
+                    <div className="text-[11px] text-slate-500 mt-1 tabular-nums">{tot}{th ? ` / 기준 ${th}` : ""}</div>
+                  </td>
+                  <td className="px-3 py-2.5 text-center"><span className={`text-[11px] font-semibold rounded-full px-2 py-0.5 ${l.cls}`}>{l.ko}</span></td>
+                  <td className="px-3 py-2.5 text-right text-xs tabular-nums">{h ? <span title={`${h.n}명`}>{h.qty}<span className="text-slate-400"> · {h.n}명</span></span> : <span className="text-slate-300">-</span>}</td>
+                  <td className="px-3 py-2.5 text-right whitespace-nowrap">
+                    {!readOnly && <>
+                      <button onClick={() => setSmove({ kind: "Issue", item: s })} className="text-[11.5px] px-2 py-1 rounded-md border border-slate-200 hover:bg-slate-50 mr-1">지급</button>
+                      <button onClick={() => setSmove({ kind: "Return", item: s })} className="text-[11.5px] px-2 py-1 rounded-md border border-slate-200 hover:bg-slate-50 mr-1">반납</button>
+                      <button onClick={() => setSmove({ kind: "Receive", item: s })} className="text-[11.5px] px-2 py-1 rounded-md border border-slate-200 hover:bg-slate-50 mr-1">입고</button>
+                      <button onClick={() => setSmove({ kind: "Adjust", item: s })} className="text-[11.5px] px-2 py-1 rounded-md border border-slate-200 hover:bg-slate-50 mr-1" title="재고 실사 결과로 수량 맞추기">조정</button>
+                    </>}
+                    <button onClick={() => setHistOf(s)} title="이력" className="p-1.5 text-slate-400 hover:text-slate-700"><History size={15} /></button>
+                    <button onClick={() => setEdit(s)} title={readOnly ? "보기" : "수정"} className="p-1.5 text-slate-400 hover:text-slate-700">{readOnly ? <Eye size={15} /> : <Pencil size={15} />}</button>
+                    {!readOnly && <button onClick={() => remove(s)} title="삭제" className="p-1.5 text-slate-400 hover:text-red-600"><Trash2 size={15} /></button>}
+                  </td>
+                </tr>
+              );
+            })}
+            {!list.length && <tr><td colSpan={7} className="text-center text-slate-400 py-10">{stock.length ? "조건에 맞는 품목이 없습니다" : "재고 품목이 없습니다 — 「품목 추가」 또는 IT 자산 관리의 「Excel 가져오기」 로 시작하세요"}</td></tr>}
+          </tbody>
+        </table>
+      </div>
+      <div className="text-xs text-slate-400 mt-2">신품 = 새 제품 재고 · 회수 = 반납받아 다시 지급할 수 있는 재고. 지급 중 수량은 지급 · 반납 이력으로 계산합니다.</div>
+      {edit && <ItStockEditModal item={edit} readOnly={readOnly} onClose={() => setEdit(null)} onDone={done} />}
+      {smove && <ItStockMoveModal kind={smove.kind} item={smove.item} stock={stock} onClose={() => setSmove(null)} onDone={done} />}
+      {histOf && (
+        <Modal title={`이력 · ${histOf.Title}`} onClose={() => setHistOf(null)} wide>
+          <ItHistTable rows={history.filter((h) => h.Kind === "Stock" && (h.StockKey === histOf.Title || String(h.StockId) === String(histOf.id)))} compact />
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// ---- 변경 이력 -----------------------------------------------------------------------------------------
+function ItHistTable({ rows, compact }) {
+  const [page, setPage] = useState(1);
+  const PAGE = compact ? 15 : 50;
+  useEffect(() => { setPage(1); }, [rows.length]);
+  const pages = Math.max(1, Math.ceil(rows.length / PAGE)); const ps = Math.min(page, pages);
+  const view = rows.slice((ps - 1) * PAGE, ps * PAGE);
+  return (
+    <div>
+      <div className="bg-white border rounded-xl overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead className="bg-slate-50 text-xs text-slate-500">
+            <tr><th className="px-3 py-2.5 text-left">일자</th><th className="px-3 py-2.5 text-left">구분</th><th className="px-3 py-2.5 text-left">대상</th><th className="px-3 py-2.5 text-left">사람</th>
+              {!compact && <th className="px-3 py-2.5 text-left">상태</th>}<th className="px-3 py-2.5 text-left">사유 · 메모</th>{!compact && <th className="px-3 py-2.5 text-left">처리</th>}</tr>
+          </thead>
+          <tbody>
+            {view.map((h) => (
+              <tr key={h.id || h.ImportKey} className="border-t border-slate-100 align-top">
+                <td className="px-3 py-2 text-xs whitespace-nowrap tabular-nums">{h.ChangeDate || "-"}</td>
+                <td className="px-3 py-2"><MkItChangeBadge t={h.ChangeType} /></td>
+                <td className="px-3 py-2 text-xs min-w-[10rem]">{h.Kind === "Stock"
+                  ? <span className="inline-flex items-center gap-1.5"><Package size={13} className="text-slate-400" />{h.StockKey || h.ItemType || h.Model}{Math.abs(mkItNum(h.Qty)) > 1 ? <span className="text-slate-500"> × {h.Qty}</span> : null}</span>
+                  : <span className="inline-flex items-start gap-1.5"><MkItTypeIcon type={h.ItemType} size={13} className="text-slate-400 mt-0.5" /><span><span className="font-mono">{h.CICD || h.SerialNo || "-"}</span>{h.CICD && h.SerialNo ? <span className="block text-[10.5px] text-slate-400 font-mono">{h.SerialNo}</span> : null}</span></span>}</td>
+                <td className="px-3 py-2 text-xs min-w-[11rem]"><div className="text-slate-700">{h.Person || "-"}</div>{h.PersonEmail && <div className="text-[10.5px] text-slate-400 break-all">{h.PersonEmail}</div>}{h.Dept && <div className="text-[10.5px] text-slate-400">{h.Dept}</div>}</td>
+                {!compact && <td className="px-3 py-2 text-[11px] whitespace-nowrap text-slate-500">{h.PrevState || h.NewState ? `${(MK_IT_STATES[h.PrevState] || {}).ko || h.PrevState || "-"} → ${(MK_IT_STATES[h.NewState] || {}).ko || h.NewState || "-"}` : ""}</td>}
+                <td className="px-3 py-2 text-xs text-slate-600 min-w-[10rem]">{[h.Reason, h.Note].filter(Boolean).join(" · ") || "-"}{h.TicketNo ? <span className="block text-[10.5px] text-slate-400">Ticket {h.TicketNo}</span> : null}</td>
+                {!compact && <td className="px-3 py-2 text-[11px] text-slate-500 whitespace-nowrap">{h.HandledBy || "-"}{h.Source && h.Source !== "MKQR" ? <span className="block text-[10px] text-slate-400">가져옴</span> : null}</td>}
+              </tr>
+            ))}
+            {!view.length && <tr><td colSpan={7} className="text-center text-slate-400 py-10">기록이 없습니다</td></tr>}
+          </tbody>
+        </table>
+      </div>
+      {pages > 1 && (
+        <div className="flex items-center justify-center gap-2 mt-3 text-sm">
+          <button disabled={ps <= 1} onClick={() => setPage(ps - 1)} className="px-2.5 py-1 border rounded disabled:opacity-40">이전</button>
+          <span className="text-slate-500">{ps} / {pages}</span>
+          <button disabled={ps >= pages} onClick={() => setPage(ps + 1)} className="px-2.5 py-1 border rounded disabled:opacity-40">다음</button>
+        </div>
+      )}
+    </div>
+  );
+}
+function ItHistoryTab({ it }) {
+  const { history = [] } = it;
+  const [days, setDays] = useState(90);
+  const [kind, setKind] = useState("");
+  const [ct, setCt] = useState("");
+  const [q, setQ] = useState("");
+  if (it.histErr) return <MkItSetupNotice list={MK_LISTS.itHistory} what="변경 이력" />;
+  const since = days ? new Date(Date.now() + 9 * 36e5 - days * 864e5).toISOString().slice(0, 10) : "";
+  const qq = q.trim().toLowerCase();
+  const rows = history.filter((h) => (!since || String(h.ChangeDate || "") >= since) && (!kind || h.Kind === kind) && (!ct || h.ChangeType === ct) &&
+    (!qq || [h.Person, h.PersonEmail, h.CICD, h.SerialNo, h.StockKey, h.ItemType, h.Model, h.Reason, h.Note, h.TicketNo, h.Dept, h.HandledBy].some((v) => String(v || "").toLowerCase().includes(qq))))
+    .sort((x, y) => String(y.ChangeDate).localeCompare(String(x.ChangeDate)) || Number(y.id) - Number(x.id));
+  const byCt = rows.reduce((m, h) => { m[h.ChangeType] = (m[h.ChangeType] || 0) + 1; return m; }, {});
+  function exportXlsx() {
+    const data = rows.map((h) => ({ 일자: h.ChangeDate, 구분: (MK_IT_CHANGE[h.ChangeType] || {}).ko || h.ChangeType, 종류: h.Kind === "Stock" ? "액세서리" : "자산", 분류: h.ItemType, "CI CD": h.CICD || "", 시리얼: h.SerialNo || "",
+      품목: h.StockKey || "", 수량: h.Qty, 사람: h.Person, 메일: h.PersonEmail, 부서: h.Dept, "이전 상태": h.PrevState, "이후 상태": h.NewState, 사유: h.Reason, 메모: h.Note, 티켓: h.TicketNo, 요청: h.RequestedBy, 승인: h.ApprovedBy, 처리: h.HandledBy, 출처: h.Source }));
+    const ws = XLSX.utils.json_to_sheet(data); const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, "IT History");
+    XLSX.writeFile(wb, `MKQR_IT변경이력_${mkTodayKst()}.xlsx`);
+    mkLog("IT 자산", "변경 이력 Excel", `이력 ${data.length}건`, { info: { 건수: data.length, 기간: days ? `최근 ${days}일` : "전체" } });
+  }
+  return (
+    <div className="w-full">
+      <div className="flex flex-wrap gap-1.5 mb-3">
+        {["Issue", "Return", "Replace", "Transfer", "Repair", "Retire", "Receive"].map((k) => (
+          <button key={k} onClick={() => setCt(ct === k ? "" : k)} className={`text-[11.5px] rounded-full px-2.5 py-1 border ${ct === k ? "border-slate-500 bg-slate-800 text-white" : "bg-white border-slate-200 text-slate-600"}`}>{MK_IT_CHANGE[k].ko} <span className="opacity-60">{byCt[k] || 0}</span></button>
+        ))}
+      </div>
+      <div className="mb-3 flex items-center justify-between flex-wrap gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
+          <select value={days} onChange={(e) => setDays(Number(e.target.value))} className="border border-slate-300 rounded-lg px-2 py-2 text-sm">{[30, 90, 365, 0].map((d) => <option key={d} value={d}>{d ? `최근 ${d}일` : "전체 기간"}</option>)}</select>
+          <select value={kind} onChange={(e) => setKind(e.target.value)} className="border border-slate-300 rounded-lg px-2 py-2 text-sm"><option value="">자산 + 액세서리</option><option value="Asset">자산</option><option value="Stock">액세서리</option></select>
+          <div className="relative w-full sm:w-auto"><Search size={15} className="absolute left-2.5 top-2.5 text-slate-400" />
+            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="사람 · 시리얼 · CI CD · 품목 · 티켓 검색" className="pl-8 pr-3 py-2 border border-slate-300 rounded-lg text-sm w-full sm:w-80" /></div>
+        </div>
+        <button onClick={exportXlsx} disabled={!rows.length} className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm border border-slate-300 disabled:opacity-40"><Download size={14} /> Excel</button>
+      </div>
+      <ItHistTable rows={rows} />
+      <div className="text-xs text-slate-400 mt-2">{rows.length}건 · 지급 · 반납 · 교체는 IT 자산 관리 · 사용자별 자산 · 재고 화면에서 처리하면 자동으로 남습니다</div>
+    </div>
+  );
+}
+
+// ---- CMDB Excel 가져오기 — 표준 파일(Assets · Stock · History 시트) ------------------------------------------
+// 자산은 시리얼(없으면 SourceKey), 재고는 품목 이름, 이력은 ImportKey 로 맞춰 같은 파일을 다시 넣어도 겹치지 않는다.
+// 기본은 「빈 칸만 채우기」 — MKQR 에서 바꾼 사용자 · 상태를 예전 파일이 되돌리지 않게. 「파일 값으로 덮어쓰기」 는 고를 때만.
+const MK_IT_IMP_ASSET = ["SourceKey", "AssetType", "Title", "Model", "SerialNo", "Hostname", "State", "Assignee", "AssigneeEmail", "AssignedDate", "Location", "PhoneNo",
+  "CriticalApps", "SecurityApp", "ExtCiId", "ExtObjectId", "WarrantyStart", "IsRental", "RentalVendor", "RentalEndDate", "AssetCode", "Note"];
+const MK_IT_IMP_STOCK = ["Title", "Category", "Qty", "PoolQty", "Threshold", "Entity", "IsAsset", "Ownership", "Note"];
+const MK_IT_IMP_HIST = ["ChangeDate", "Kind", "ItemType", "Model", "SerialNo", "StockKey", "ChangeType", "Person", "PersonEmail", "Dept", "Qty", "PrevState", "NewState",
+  "Reason", "RequestedBy", "ApprovedBy", "HandledBy", "TicketNo", "Note", "Source", "ImportKey"];
+const mkItYes = (v) => /^(y|yes|true|1|예|o)$/i.test(String(v == null ? "" : v).trim());
+function mkItHash(s) { let h = 0x811c9dc5; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; } return "j" + h.toString(16).padStart(8, "0"); }
+function mkItImpDate(v) {
+  const t = String(v == null ? "" : v).trim(); if (!t) return "";
+  const m = t.match(/^(\d{4})[.\-/](\d{1,2})[.\-/](\d{1,2})/); if (m) return `${m[1]}-${m[2].padStart(2, "0")}-${m[3].padStart(2, "0")}`;
+  return /^\d{5}$/.test(t) ? new Date(Date.UTC(1899, 11, 30) + Number(t) * 864e5).toISOString().slice(0, 10) : t;
+}
+function mkItImpAsset(r) {
+  const s = (k) => String(r[k] == null ? "" : r[k]).trim();
+  const f = {};
+  MK_IT_IMP_ASSET.forEach((k) => { const v = s(k); if (v !== "") f[k] = v; });
+  if (f.SerialNo) f.SerialNo = f.SerialNo.toUpperCase();
+  if (f.AssigneeEmail) { f.AssigneeEmail = f.AssigneeEmail.toLowerCase(); if (!MK_IT_EMAIL_RE.test(f.AssigneeEmail)) delete f.AssigneeEmail; }   // 메일 형식이 아니면 넣지 않는다
+  ["AssignedDate", "WarrantyStart", "RentalEndDate"].forEach((k) => { if (f[k]) f[k] = mkItImpDate(f[k]); });
+  if ("IsRental" in f) { if (mkItYes(f.IsRental)) f.IsRental = true; else delete f.IsRental; }
+  if (f.State && !MK_IT_STATES[f.State]) { const k = MK_IT_STATE_KEYS.find((x) => x.toLowerCase() === f.State.toLowerCase()); if (k) f.State = k; else delete f.State; }
+  return f;
+}
+// 계획 — 쓰기 전에 무엇이 생기고 바뀌는지
+function mkItImportPlan(book, it, mode) {
+  const plan = { assets: { create: [], update: [], same: 0, skip: [] }, stock: { create: [], update: [], same: 0, skip: [] }, hist: { create: [], skip: 0, bad: [] }, issues: book.issues || [] };
+  const bySn = new Map(), byKey = new Map();
+  it.assets.forEach((a) => { if (a.SerialNo) bySn.set(String(a.SerialNo).trim().toUpperCase(), a); if (a.SourceKey) byKey.set(String(a.SourceKey).trim(), a); });
+  const seen = new Set();
+  (book.assets || []).forEach((r, i) => {
+    const f = mkItImpAsset(r); const row = i + 2;
+    const id = f.SerialNo ? "S:" + f.SerialNo : f.SourceKey ? "K:" + f.SourceKey : "";
+    if (!id || !f.Title) { plan.assets.skip.push({ row, why: !f.Title ? "Title(설명) 없음" : "시리얼 · SourceKey 둘 다 없음" }); return; }
+    if (seen.has(id)) { plan.assets.skip.push({ row, why: `파일 안 중복(${f.SerialNo || f.SourceKey})` }); return; }
+    seen.add(id);
+    const ex = (f.SerialNo && bySn.get(f.SerialNo)) || (f.SourceKey && byKey.get(f.SourceKey));
+    if (!ex) {
+      if (!f.State) f.State = f.Assignee || f.AssigneeEmail ? "Active" : "In Stock";
+      if (f.State !== "Active") { delete f.Assignee; delete f.AssigneeEmail; delete f.AssignedDate; }
+      plan.assets.create.push({ row, f }); return;
+    }
+    const patch = {};
+    const exState = MK_IT_STATES[ex.State] ? ex.State : "";
+    Object.keys(f).forEach((k) => {
+      const cur = k === "State" ? exState : ex[k]; const curEmpty = cur == null || cur === "" || (k === "IsRental" && cur !== true);
+      const same = k === "IsRental" ? (cur === true) === (f[k] === true) : String(cur == null ? "" : cur).trim() === String(f[k]);
+      if (mode === "fill" ? curEmpty && !same : !same) patch[k] = f[k];
+    });
+    // 사용자는 상태와 함께 — 채우기 모드에서 재고 자산에 사용자만 생기지 않게
+    const finalState = patch.State || exState || mkItStateOf(ex);
+    if (finalState !== "Active") { delete patch.Assignee; delete patch.AssigneeEmail; delete patch.AssignedDate; if (patch.State && (ex.Assignee || ex.AssigneeEmail)) Object.assign(patch, { Assignee: "", AssigneeEmail: "", AssignedDate: "" }); }
+    if (Object.keys(patch).length) plan.assets.update.push({ row, ex, patch }); else plan.assets.same++;
+  });
+  const byTitle = new Map((it.stock || []).map((s) => [String(s.Title).trim().toLowerCase(), s]));
+  const seenS = new Set();
+  (book.stock || []).forEach((r, i) => {
+    const t = String(r.Title || "").trim(); const row = i + 2;
+    if (!t) { plan.stock.skip.push({ row, why: "품목 이름 없음" }); return; }
+    if (seenS.has(t.toLowerCase())) { plan.stock.skip.push({ row, why: "파일 안 중복" }); return; } seenS.add(t.toLowerCase());
+    const f = { Title: t, Category: String(r.Category || "").trim(), Threshold: mkItNum(r.Threshold), Entity: String(r.Entity || "").trim(), IsAsset: mkItYes(r.IsAsset), Ownership: String(r.Ownership || "").trim(), Note: String(r.Note || "").trim(), Active: true };
+    const ex = byTitle.get(t.toLowerCase());
+    if (!ex) { plan.stock.create.push({ row, f: { ...f, Qty: Math.max(0, Math.floor(mkItNum(r.Qty))), PoolQty: Math.max(0, Math.floor(mkItNum(r.PoolQty))) } }); return; }
+    const patch = {};
+    ["Category", "Threshold", "Entity", "Ownership", "Note"].forEach((k) => { const cur = ex[k]; const empty = cur == null || cur === "" || (k === "Threshold" && !mkItNum(cur)); if ((mode === "fill" ? empty : true) && String(f[k]) !== String(cur == null ? "" : cur) && f[k] !== "" && f[k] !== 0) patch[k] = f[k]; });
+    if (mode === "overwrite") { ["Qty", "PoolQty"].forEach((k) => { const v = Math.max(0, Math.floor(mkItNum(r[k]))); if (v !== mkItNum(ex[k])) patch[k] = v; }); }
+    if (Object.keys(patch).length) plan.stock.update.push({ row, ex, patch }); else plan.stock.same++;
+  });
+  const have = new Set((it.history || []).map((h) => h.ImportKey).filter(Boolean));
+  (book.hist || []).forEach((r, i) => {
+    const h = {}; MK_IT_IMP_HIST.forEach((k) => { const v = String(r[k] == null ? "" : r[k]).trim(); if (v !== "") h[k] = v; });
+    if (!h.ChangeType || !(h.SerialNo || h.StockKey || h.ItemType || h.Model)) { plan.hist.bad.push({ row: i + 2, why: "구분 또는 대상 없음" }); return; }
+    h.ChangeDate = mkItImpDate(h.ChangeDate); if (h.SerialNo) h.SerialNo = h.SerialNo.toUpperCase(); if (h.PersonEmail) { h.PersonEmail = h.PersonEmail.toLowerCase(); if (!MK_IT_EMAIL_RE.test(h.PersonEmail)) delete h.PersonEmail; }
+    h.Kind = h.Kind === "Stock" ? "Stock" : "Asset"; if (h.Qty != null) h.Qty = mkItNum(h.Qty);
+    if (!h.ImportKey) h.ImportKey = mkItHash(["ChangeDate", "Kind", "ItemType", "Model", "SerialNo", "ChangeType", "Person", "Reason", "Note", "Source"].map((k) => h[k] || "").join("|"));
+    if (have.has(h.ImportKey)) { plan.hist.skip++; return; }
+    have.add(h.ImportKey); plan.hist.create.push(h);
+  });
+  return plan;
+}
+function mkItReadBook(buf) {
+  const wb = XLSX.read(buf, { type: "array" });
+  const rows = (n) => (wb.Sheets[n] ? XLSX.utils.sheet_to_json(wb.Sheets[n], { defval: "", raw: false }) : null);
+  const assets = rows("Assets"), stock = rows("Stock"), hist = rows("History"), issues = rows("Issues");
+  if (!assets && !stock && !hist) throw new Error("Assets · Stock · History 시트가 없습니다 — MKQR CMDB 가져오기 형식의 파일인지 확인해 주세요.");
+  if (wb.SheetNames.some((n) => /bitlocker/i.test(n))) throw new Error("BitLocker 시트가 들어 있는 파일은 가져오지 않습니다 — 복구 키는 MKQR 에 넣지 않습니다.");
+  const miss = assets && assets.length && !("SerialNo" in assets[0] || "SourceKey" in assets[0]) ? "Assets 시트 첫 줄에 SerialNo · SourceKey 열이 없습니다" : "";
+  if (miss) throw new Error(miss);
+  return { assets: assets || [], stock: stock || [], hist: hist || [], issues: issues || [], sheets: wb.SheetNames };
+}
+// 현재 MKQR 데이터를 같은 형식으로 — 고친 뒤 다시 가져오기(덮어쓰기)로 일괄 수정할 수 있다
+function mkItExportBook(it) {
+  const wb = XLSX.utils.book_new();
+  const A = it.assets.map((a) => { const o = { CICD: a.CICD || "" }; MK_IT_IMP_ASSET.forEach((k) => { o[k] = k === "IsRental" ? (a.IsRental === true ? "Y" : "") : k === "State" ? mkItStateOf(a) : a[k] == null ? "" : a[k]; }); return o; });
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(A.length ? A : [{ CICD: "", ...Object.fromEntries(MK_IT_IMP_ASSET.map((k) => [k, ""])) }]), "Assets");
+  const S = (it.stock || []).map((s) => Object.fromEntries(MK_IT_IMP_STOCK.map((k) => [k, k === "IsAsset" ? (s.IsAsset === true ? "Y" : "") : s[k] == null ? "" : s[k]])));
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(S.length ? S : [Object.fromEntries(MK_IT_IMP_STOCK.map((k) => [k, ""]))]), "Stock");
+  const H = (it.history || []).map((h) => Object.fromEntries(MK_IT_IMP_HIST.map((k) => [k, h[k] == null ? "" : h[k]])));
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(H.length ? H : [Object.fromEntries(MK_IT_IMP_HIST.map((k) => [k, ""]))]), "History");
+  XLSX.writeFile(wb, `MKQR_CMDB_내보내기_${mkTodayKst()}.xlsx`);
+  mkLog("IT 자산", "CMDB 내보내기", `자산 ${A.length} · 재고 ${S.length} · 이력 ${H.length}`, { info: { 자산: A.length, 재고: S.length, 이력: H.length } });
+}
+async function mkItPool(tasks, n, onTick, stopRef) {
+  let i = 0; const errs = [];
+  const worker = async () => {
+    while (i < tasks.length && !(stopRef && stopRef.current)) {
+      const t = tasks[i++];
+      try { await mkItRetry(t.run); } catch (e) { errs.push(`${t.label}: ${mkErrText(e)}`); }
+      onTick(errs);
+    }
+  };
+  await Promise.all(Array.from({ length: n }, worker));
+  return errs;
+}
+function ItImportModal({ it, onClose, onDone }) {
+  const [book, setBook] = useState(null);
+  const [fileName, setFileName] = useState("");
+  const [err, setErr] = useState("");
+  const [mode, setMode] = useState("fill");
+  const [use, setUse] = useState({ assets: true, stock: !it.stockErr, hist: !it.histErr });
+  const [run, setRun] = useState(null);       // { phase, done, total, errs }
+  const [result, setResult] = useState(null);
+  const [showIssues, setShowIssues] = useState(false);
+  const stop = useRef(false);
+  const plan = useMemo(() => (book ? mkItImportPlan(book, it, mode) : null), [book, mode, it]);
+  async function onFile(e) {
+    const file = e.target.files && e.target.files[0]; if (!file) return;
+    setErr(""); setBook(null); setFileName(file.name);
+    try { setBook(mkItReadBook(new Uint8Array(await file.arrayBuffer()))); }
+    catch (x) { setErr(/password|encrypt|CFB|Unsupported/i.test(String(x.message)) ? "암호가 걸린 파일은 읽을 수 없습니다 — 암호를 푼 뒤 다시 넣어 주세요." : x.message); }
+    e.target.value = "";
+  }
+  async function go() {
+    stop.current = false;
+    const P = plan; const errsAll = []; const created = {}; const stockIds = {};
+    const total = (use.assets ? P.assets.create.length + P.assets.update.length : 0) + (use.stock ? P.stock.create.length + P.stock.update.length : 0) + (use.hist ? P.hist.create.length : 0);
+    let done = 0; const tick = (phase) => (errs) => { done++; setRun({ phase, done, total, errs: [...errsAll, ...errs] }); };
+    setRun({ phase: "자산", done: 0, total, errs: [] });
+    if (use.assets) {
+      const tasks = P.assets.create.map((x) => ({ label: `자산 ${x.row}행`, run: async () => {
+        const f = { ...x.f, QrToken: randomToken(12), VerifyRadiusM: MK_IT_RADIUS_DEFAULT, Active: x.f.State !== "Retired" };
+        const r = await mkCreateItem(MK_LISTS.itAssets, await mkItFields(MK_LISTS.itAssets, f));
+        const cicd = mkItCicd(r.id);
+        await mkItRetry(async () => mkUpdateItem(MK_LISTS.itAssets, r.id, await mkItFields(MK_LISTS.itAssets, { CICD: cicd })));
+        if (f.SerialNo) created["S:" + f.SerialNo] = { id: r.id, CICD: cicd };
+      } })).concat(P.assets.update.map((x) => ({ label: `자산 ${x.row}행(${x.ex.CICD || x.ex.SerialNo})`, run: async () => { await mkItAssetSave(x.ex.id, x.patch); } })));
+      errsAll.push(...(await mkItPool(tasks, 4, tick("자산"), stop)));
+    }
+    if (use.stock && !stop.current) {
+      const tasks = P.stock.create.map((x) => ({ label: `재고 ${x.row}행`, run: async () => { const r = await mkCreateItem(MK_LISTS.itStock, await mkItFields(MK_LISTS.itStock, x.f)); stockIds[x.f.Title] = r.id; } }))
+        .concat(P.stock.update.map((x) => ({ label: `재고 ${x.row}행`, run: async () => { await mkUpdateItem(MK_LISTS.itStock, x.ex.id, await mkItFields(MK_LISTS.itStock, x.patch)); } })));
+      errsAll.push(...(await mkItPool(tasks, 4, tick("재고"), stop)));
+    }
+    if (use.hist && !stop.current) {
+      const sn = new Map(); it.assets.forEach((a) => { if (a.SerialNo) sn.set(String(a.SerialNo).toUpperCase(), { id: a.id, CICD: a.CICD }); });
+      Object.entries(created).forEach(([k, v]) => sn.set(k.slice(2), v));
+      const st = new Map((it.stock || []).map((s) => [s.Title, s.id])); Object.entries(stockIds).forEach(([k, v]) => st.set(k, v));
+      const tasks = P.hist.create.map((h, i) => ({ label: `이력 ${i + 1}`, run: async () => {
+        const a = h.Kind === "Asset" && h.SerialNo ? sn.get(h.SerialNo) : null;
+        const f = { ...h, AssetId: a ? String(a.id) : "", CICD: a ? a.CICD || "" : "", StockId: h.Kind === "Stock" && h.StockKey && st.get(h.StockKey) ? String(st.get(h.StockKey)) : "" };
+        f.Title = `${(MK_IT_CHANGE[f.ChangeType] || {}).ko || f.ChangeType} · ${f.CICD || f.SerialNo || f.StockKey || f.ItemType || ""} · ${f.Person || ""}`.slice(0, 250);
+        await mkCreateItem(MK_LISTS.itHistory, await mkItFields(MK_LISTS.itHistory, f));
+      } }));
+      errsAll.push(...(await mkItPool(tasks, 4, tick("이력"), stop)));
+    }
+    const summary = { 자산생성: use.assets ? P.assets.create.length : 0, 자산갱신: use.assets ? P.assets.update.length : 0, 재고생성: use.stock ? P.stock.create.length : 0, 재고갱신: use.stock ? P.stock.update.length : 0, 이력: use.hist ? P.hist.create.length : 0, 실패: errsAll.length, 중단: stop.current, 방식: mode === "fill" ? "빈 칸만 채우기" : "덮어쓰기", 파일: fileName };
+    mkLog("IT 자산", "CMDB 가져오기", fileName, { info: summary });
+    setRun(null); setResult({ ...summary, errs: errsAll });
+    await onDone();
+  }
+  const Card = ({ k, title, a, b, c, extra, disabled, why }) => (
+    <label className={`block rounded-xl border p-3 ${disabled ? "opacity-50 bg-slate-50" : use[k] ? "border-slate-400 bg-white" : "bg-white"}`}>
+      <div className="flex items-center gap-2 mb-1.5"><input type="checkbox" disabled={disabled} checked={!disabled && use[k]} onChange={(e) => setUse((u) => ({ ...u, [k]: e.target.checked }))} /><span className="text-sm font-semibold text-slate-800">{title}</span></div>
+      {disabled ? <div className="text-[11px] text-slate-500">{why}</div> : (
+        <div className="grid grid-cols-3 gap-1 text-center">
+          {[["새로", a, "text-emerald-700"], ["갱신", b, "text-sky-700"], ["그대로 · 건너뜀", c, "text-slate-500"]].map(([l, n, cls]) => <div key={l}><div className={`text-lg font-bold tabular-nums ${cls}`}>{n}</div><div className="text-[10.5px] text-slate-400">{l}</div></div>)}
+        </div>
+      )}
+      {extra}
+    </label>
+  );
+  return (
+    <Modal title="CMDB Excel 가져오기" onClose={run ? () => {} : onClose} wide>
+      {!result && !run && (
+        <>
+          <div className="text-xs text-slate-600 leading-relaxed bg-slate-50 border border-slate-200 rounded-lg px-3 py-2.5 mb-3">
+            <b>MKQR CMDB 가져오기 형식</b>(시트 Assets · Stock · History)의 파일을 넣습니다. 자산은 <b>시리얼</b>(없으면 SourceKey), 재고는 <b>품목 이름</b>, 이력은 <b>ImportKey</b> 로 맞춰서 같은 파일을 다시 넣어도 두 번 생기지 않습니다.
+            새 자산에는 CI CD 와 QR 이 자동 발행됩니다. <span className="text-rose-700">BitLocker 복구 키는 가져오지 않습니다.</span>
+            <div className="mt-1.5"><button onClick={() => mkItExportBook(it)} className="underline text-slate-700">현재 데이터를 이 형식으로 내보내기</button> — 내려받아 고친 뒤 「파일 값으로 덮어쓰기」 로 넣으면 일괄 수정이 됩니다.</div>
+          </div>
+          <label className="flex items-center justify-center gap-2 border-2 border-dashed border-slate-300 rounded-xl py-6 cursor-pointer hover:bg-slate-50 mb-3">
+            <FileSpreadsheet size={20} className="text-slate-400" /><span className="text-sm text-slate-600">{fileName || "파일 고르기 (.xlsx)"}</span>
+            <input type="file" accept=".xlsx,.xlsm" className="hidden" onChange={onFile} />
+          </label>
+          {err && <div className="text-xs text-rose-700 bg-rose-50 border border-rose-200 rounded-lg px-3 py-2 mb-3">{err}</div>}
+          {plan && (
+            <>
+              <div className="flex gap-2 mb-3">
+                {[["fill", "빈 칸만 채우기 (권장)", "MKQR 에 이미 있는 값은 그대로 둡니다"], ["overwrite", "파일 값으로 덮어쓰기", "파일에 값이 있으면 MKQR 값을 바꿉니다(재고 수량 포함)"]].map(([k, l, d]) => (
+                  <label key={k} className={`flex-1 rounded-lg border px-3 py-2 cursor-pointer ${mode === k ? "border-slate-500 bg-slate-50" : "border-slate-200"}`}>
+                    <div className="flex items-center gap-2 text-sm"><input type="radio" checked={mode === k} onChange={() => setMode(k)} /> {l}</div><div className="text-[11px] text-slate-500 mt-0.5 ml-5">{d}</div>
+                  </label>
+                ))}
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 mb-3">
+                <Card k="assets" title={`자산 ${book.assets.length}행`} a={plan.assets.create.length} b={plan.assets.update.length} c={plan.assets.same + plan.assets.skip.length} />
+                <Card k="stock" title={`재고 ${book.stock.length}행`} a={plan.stock.create.length} b={plan.stock.update.length} c={plan.stock.same + plan.stock.skip.length} disabled={!!it.stockErr} why={`${MK_LISTS.itStock} 목록이 없어 건너뜁니다`} />
+                <Card k="hist" title={`이력 ${book.hist.length}행`} a={plan.hist.create.length} b={0} c={plan.hist.skip + plan.hist.bad.length} disabled={!!it.histErr} why={`${MK_LISTS.itHistory} 목록이 없어 건너뜁니다`} />
+              </div>
+              {plan.assets.update.length > 0 && (
+                <div className="text-[11px] text-slate-500 mb-2">갱신 예: {plan.assets.update.slice(0, 3).map((x) => `${x.ex.CICD || x.ex.SerialNo} (${Object.keys(x.patch).map((k) => MK_IT_ASSET_LABELS[k] || k).join(", ")})`).join(" · ")}{plan.assets.update.length > 3 ? " …" : ""}</div>
+              )}
+              {[...plan.assets.skip, ...plan.stock.skip].length > 0 && <div className="text-[11px] text-amber-700 mb-2">건너뜀: {[...plan.assets.skip, ...plan.stock.skip].slice(0, 5).map((x) => `${x.row}행 ${x.why}`).join(" · ")}{[...plan.assets.skip, ...plan.stock.skip].length > 5 ? " …" : ""}</div>}
+              {plan.issues.length > 0 && (
+                <div className="mb-2">
+                  <button onClick={() => setShowIssues((v) => !v)} className="text-xs text-amber-800 flex items-center gap-1"><AlertTriangle size={12} /> 파일의 확인 필요 항목 {plan.issues.length}건 {showIssues ? "접기" : "보기"}</button>
+                  {showIssues && <div className="mt-1.5 max-h-48 overflow-y-auto mk-scroll rounded-lg border border-amber-200 bg-amber-50/60 divide-y divide-amber-100">
+                    {plan.issues.map((x, i) => <div key={i} className="px-3 py-1.5 text-[11.5px] text-amber-900"><b>{x["구분"]}</b> · {x["위치"]} — {x["내용"]}</div>)}</div>}
+                </div>
+              )}
+            </>
+          )}
+          <div className="flex justify-end gap-2 mt-4">
+            <button onClick={onClose} className="px-4 py-2 text-sm border border-slate-300 rounded-lg">닫기</button>
+            <button disabled={!plan || !((use.assets && plan.assets.create.length + plan.assets.update.length) || (use.stock && !it.stockErr && plan.stock.create.length + plan.stock.update.length) || (use.hist && !it.histErr && plan.hist.create.length))}
+              onClick={go} className="px-4 py-2 text-sm rounded-lg text-white disabled:opacity-50" style={{ background: BRAND.accent }}>가져오기 시작</button>
+          </div>
+        </>
+      )}
+      {run && (
+        <div className="py-4">
+          <div className="text-sm text-slate-700 mb-2">{run.phase} 저장 중… <span className="tabular-nums text-slate-500">{run.done} / {run.total}</span></div>
+          <div className="h-2.5 rounded-full bg-slate-100 overflow-hidden"><div className="h-full transition-all" style={{ width: `${run.total ? (run.done / run.total) * 100 : 0}%`, background: MK_GROUP_TONE.it.main }} /></div>
+          {run.errs.length > 0 && <div className="text-[11px] text-rose-700 mt-2">실패 {run.errs.length}건 — {run.errs[run.errs.length - 1]}</div>}
+          <div className="text-[11px] text-slate-400 mt-3">창을 닫지 마세요. 많은 경우 몇 분 걸립니다(SharePoint 가 잠시 늦추면 자동으로 다시 시도합니다).</div>
+          <div className="flex justify-end mt-3"><button onClick={() => { stop.current = true; }} className="px-3 py-1.5 text-xs border border-slate-300 rounded-lg">중단</button></div>
+        </div>
+      )}
+      {result && (
+        <div className="py-2">
+          <div className="flex items-center gap-2 mb-3"><CheckCircle2 size={22} className={result.실패 ? "text-amber-500" : "text-emerald-500"} /><div className="text-sm font-semibold text-slate-800">{result.중단 ? "중단했습니다" : "가져오기를 마쳤습니다"}</div></div>
+          <div className="grid grid-cols-3 sm:grid-cols-6 gap-2 text-center mb-3">
+            {[["자산 새로", result.자산생성], ["자산 갱신", result.자산갱신], ["재고 새로", result.재고생성], ["재고 갱신", result.재고갱신], ["이력", result.이력], ["실패", result.실패]].map(([l, n]) => <div key={l} className="rounded-lg bg-slate-50 border border-slate-200 py-2"><div className={`text-lg font-bold tabular-nums ${l === "실패" && n ? "text-rose-600" : "text-slate-800"}`}>{n}</div><div className="text-[10.5px] text-slate-500">{l}</div></div>)}
+          </div>
+          {result.errs.length > 0 && <div className="max-h-40 overflow-y-auto mk-scroll text-[11px] text-rose-700 bg-rose-50 border border-rose-200 rounded-lg px-3 py-2 mb-2">{result.errs.slice(0, 50).map((e, i) => <div key={i}>{e}</div>)}</div>}
+          <div className="text-xs text-slate-500">같은 파일을 다시 넣으면 실패한 것만 새로 들어갑니다. 다음 순서: 「위치 좌표」 로 사무실 좌표 지정 → 「IT 자산 QR 라벨」 에서 라벨 출력 · 부착 → 스캔으로 확인.</div>
+          <div className="flex justify-end mt-4"><button onClick={onClose} className="px-4 py-2 text-sm rounded-lg text-white" style={{ background: BRAND.accent }}>닫기</button></div>
+        </div>
+      )}
+    </Modal>
   );
 }
 
 // ---- IT 자산 QR 라벨 -------------------------------------------------------------------------------
 function ItLabelTab({ it }) {
-  const { assets, err } = it;
+  const { assets, err, scans = [] } = it;
   const [q, setQ] = useState("");
   const [sel, setSel] = useState(() => new Set());
+  const [typeF, setTypeF] = useState("");
+  const [locF, setLocF] = useState("");
+  const [noScan, setNoScan] = useState(false);
+  const scanned = useMemo(() => new Set(scans.map((s) => String(s.AssetId))), [scans]);
+  const types = useMemo(() => [...new Set(assets.map((a) => a.AssetType).filter(Boolean))].sort(), [assets]);
+  const locs = useMemo(() => [...new Set(assets.map((a) => a.Location).filter(Boolean))].sort(), [assets]);
   const qq = q.trim().toLowerCase();
-  const list = assets.filter((a) => a.Active !== false && a.QrToken && (!qq || [a.Title, a.SerialNo, a.AssetCode, a.CICD, a.Assignee, a.AssigneeEmail].some((v) => String(v || "").toLowerCase().includes(qq))))
+  const list = assets.filter((a) => mkItStateOf(a) !== "Retired" && a.QrToken && (!typeF || a.AssetType === typeF) && (!locF || a.Location === locF) && (!noScan || !scanned.has(String(a.id))) &&
+    (!qq || [a.Title, a.SerialNo, a.AssetCode, a.CICD, a.Assignee, a.AssigneeEmail, a.Model, a.Hostname].some((v) => String(v || "").toLowerCase().includes(qq))))
     .sort((x, y) => Number(y.id) - Number(x.id));
   const [page, setPage] = useState(1);
   const PAGE = 8;
-  useEffect(() => { setPage(1); }, [q]);
+  useEffect(() => { setPage(1); }, [q, typeF, locF, noScan]);
   const pages = Math.max(1, Math.ceil(list.length / PAGE));
   const pageSafe = Math.min(page, pages);
   const rows = list.slice((pageSafe - 1) * PAGE, pageSafe * PAGE);
@@ -4359,6 +5790,11 @@ function ItLabelTab({ it }) {
         <div className="relative w-full sm:w-auto">
           <Search size={15} className="absolute left-2.5 top-2.5 text-slate-400" />
           <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="CI CD · 설명 · 시리얼 · 자산코드 검색" title="Description · Serial No. · CI CD · Asset Code 로 검색" className="pl-8 pr-3 py-2 border border-slate-300 rounded-lg text-sm w-full sm:w-80 text-ellipsis" />
+        </div>
+        <div className="flex items-center gap-2 flex-wrap">
+          <select value={typeF} onChange={(e) => setTypeF(e.target.value)} className="border border-slate-300 rounded-lg px-2 py-2 text-sm" aria-label="분류"><option value="">모든 분류</option>{types.map((t) => <option key={t} value={t}>{mkItTypeKo(t)}</option>)}</select>
+          <select value={locF} onChange={(e) => setLocF(e.target.value)} className="border border-slate-300 rounded-lg px-2 py-2 text-sm max-w-[11rem]" aria-label="위치"><option value="">모든 위치</option>{locs.map((l) => <option key={l} value={l}>{l}</option>)}</select>
+          <label className="flex items-center gap-1.5 text-xs text-slate-500" title="스캔 기록이 없는 자산 — 아직 라벨을 붙이지 않았거나 붙인 뒤 확인 스캔을 안 한 자산"><input type="checkbox" checked={noScan} onChange={(e) => setNoScan(e.target.checked)} /> 스캔 기록 없는 자산만</label>
         </div>
         <div className="flex items-center gap-2">
           <button onClick={() => setSel(new Set(list.map((a) => a.id)))} disabled={!list.length} className="px-3 py-2 rounded-lg text-sm border border-slate-300 disabled:opacity-40">검색 결과 전체 선택 ({list.length})</button>
@@ -4518,6 +5954,7 @@ function ItScanModal({ token, onClose, canEditAssets, onDone, userEmail, userNam
           <div className="text-[11px] font-semibold tracking-wide text-slate-400 mb-1">PROPERTY OF STAR TRUCK KOREA</div>
           {a.Active === false && <div className="mb-2 text-xs rounded-lg px-3 py-2 bg-slate-100 text-slate-600">비활성(폐기 · 반납) 으로 표시된 자산입니다.</div>}
           {row("Description", a.Title)}{row("Serial No.", a.SerialNo)}{row("CI CD", a.CICD, true)}{row("Asset Code", a.AssetCode)}
+          {row("상태", <MkItStateBadge a={a} />)}{a.Model && row("모델", a.Model)}{a.PhoneNo && row("전화번호", a.PhoneNo)}
           {row("사용자 · 담당", a.AssigneeEmail ? <span>{a.Assignee || ""} <span className="text-slate-500">{a.AssigneeEmail}</span></span> : a.Assignee)}{row("위치", a.Location)}
           {a.IsRental === true && row("렌탈", (() => { const r = mkItRental(a); return <span><span className={`text-[11px] rounded-full px-2 py-0.5 mr-1.5 ${r.cls}`}>{r.text}</span>{a.RentalVendor || ""}</span>; })())}
           <div className="mt-4 rounded-xl border px-4 py-3 bg-slate-50">
@@ -4544,6 +5981,7 @@ function ItScanModal({ token, onClose, canEditAssets, onDone, userEmail, userNam
   );
 }
 
+const MK_IT_TABS = ["itAssets", "itQr", "itScans", "itPeople", "itStock", "itHistory"];
 function App({ userEmail, userName }) {
   const [tab, setTab] = useState("overview");
   const [centers, setCenters] = useState([]);
@@ -4564,7 +6002,7 @@ function App({ userEmail, userName }) {
   const [permDeniedPopup, setPermDeniedPopup] = useState(false); // 권한 없는 카테고리 클릭 시 안내 팝업
   const [uiContent, setUiContent] = useState(DEFAULT_UI_CONTENT); // mkqr_ui_content.xlsx에서 불러온 화면 문구 (Overview 소개글, 판정 기준 표)
   // IT 자산(10-23 · mkqr-it) — IT 화면을 열 때만 읽는다(Marketing · HR 사용자는 읽지 않음)
-  const [it, setIt] = useState({ assets: [], scans: [], err: "", scanErr: "", loaded: false });
+  const [it, setIt] = useState({ assets: [], scans: [], history: [], stock: [], err: "", scanErr: "", histErr: "", stockErr: "", loaded: false });
   const [itLoading, setItLoading] = useState(false);
   async function reloadIt() { setItLoading(true); try { const r = await mkItLoad(); setIt({ ...r, loaded: true }); } finally { setItLoading(false); } }
   const [scanToken, setScanToken] = useState(null);
@@ -4675,6 +6113,9 @@ function App({ userEmail, userName }) {
   ];
   const itNav = [          // IT 전용 — IT 자산 QR 라벨 · 스캔 위치 기록(10-23 · mkqr-it)
     { id: "itAssets", label: "IT 자산 관리", icon: Laptop, cat: "itAssets" },
+    { id: "itPeople", label: "사용자별 자산", icon: Users, cat: "itAssets" },       // CMDB(10-23) — 계정별 관리 · 권한은 IT 자산 관리와 같다
+    { id: "itStock", label: "재고 · 액세서리", icon: Package, cat: "itAssets" },
+    { id: "itHistory", label: "IT 변경 이력", icon: History, cat: "itAssets" },
     { id: "itQr", label: "IT 자산 QR 라벨", icon: Printer, cat: "itQr" },
     { id: "itScans", label: "IT 자산 스캔 기록", icon: ScanLine, cat: "itScans" },
   ];
@@ -4726,7 +6167,7 @@ function App({ userEmail, userName }) {
     if (!loading && accessibleNav.length && !accessibleNav.some((n) => n.id === tab)) setTab(accessibleNav[0].id);
   }, [loading, myAccessRow]);
   const canIt = !loading && ["itAssets", "itQr", "itScans"].some((k) => canAccess(k));
-  useEffect(() => { if ((["itAssets", "itQr", "itScans"].includes(tab) || (tab === "overview" && canIt)) && !it.loaded && !itLoading) reloadIt(); }, [tab, canIt]);
+  useEffect(() => { if ((MK_IT_TABS.includes(tab) || (tab === "overview" && canIt)) && !it.loaded && !itLoading) reloadIt(); }, [tab, canIt]);
   // QR 스캔으로 들어온 경우(?asset=) — 첫 로딩이 끝나면 한 번 연다. IT 권한이 없으면 안내만.
   useEffect(() => {
     if (!hasLoadedOnce) return;
@@ -4890,7 +6331,10 @@ function App({ userEmail, userName }) {
             agentCheckins: [ListChecks, "영업직원 명함(Agent) QR 스캔 기록을 조회합니다"],
             accessLog: [LogIn, "계정별 로그인 · 로그아웃 시각과 세션 종료(추정)를 조회하고 Excel 로 내보냅니다"],
             activityLog: [History, "권한 부여 · 센터 · Agent · 체크인 처리 이력을 날짜별로 조회합니다 (기본 최근 3일)"],
-            itAssets: [Laptop, "IT 자산을 등록하고 CI CD 를 자동 발행합니다. 설치 위치(GPS 좌표 · 허용 반경)를 넣으면 스캔 위치로 정상 · 검증필요를 판정합니다"],
+            itAssets: [Laptop, "시리얼 단위 IT 자산(CMDB) — 상태 · 사용자 · 위치를 관리하고 지급 · 반납 · 교체를 이력으로 남깁니다. CI CD · QR 은 자동 발행"],
+            itPeople: [Users, "사람(계정)별로 가진 자산 · 액세서리 · 이력을 보고, 지급 · 반납 · 퇴사 일괄 반납을 처리합니다"],
+            itStock: [Package, "수량으로 관리하는 액세서리 재고 — 신품 · 회수 재고 · 최소 기준, 지급 · 반납 · 입고 · 실사 조정"],
+            itHistory: [History, "IT 자산 · 액세서리 지급 · 반납 · 교체 · 고장 · 폐기 이력을 조회하고 Excel 로 내보냅니다"],
             itQr: [Printer, "IT 자산 라벨(가로 10cm × 세로 5cm, QR 오른쪽)을 미리 보고 출력합니다"],
             itScans: [ScanLine, "IT 자산 QR 스캔 기록 — 누가 · 언제 · 어디서(GPS) 스캔했는지와 등록 위치 대비 판정을 조회합니다"],
             categoryAccess: [KeyRound, "등록된 사용자별로 화면마다 「보기」 · 「편집」 권한을 부여 · 변경합니다. 사용자 추가 · 삭제와 「반영」 내용은 활동 이력에 남습니다."],
@@ -4914,10 +6358,13 @@ function App({ userEmail, userName }) {
             {tab === "agentQr" && (agentsError ? <AgentListMissing error={agentsError} /> : <QrTab items={agents} kind="agent" highlightId={agentHighlightId} readOnly={!canEdit("agentQr")} />)}
             {tab === "checkins" && <CheckInsTab key="center" kind="center" checkins={checkins} reload={reload} checkinRange={checkinRange} onRangeChange={changeCheckinRange} verifyRules={uiContent.verifyRules} readOnly={!canEdit("checkins")} />}
             {tab === "agentCheckins" && <CheckInsTab key="agent" kind="agent" checkins={checkins} reload={reload} checkinRange={checkinRange} onRangeChange={changeCheckinRange} readOnly={!canEdit("agentCheckins")} />}
-            {["itAssets", "itQr", "itScans"].includes(tab) && !it.loaded && <div className="text-slate-400 text-sm">IT 자산을 불러오는 중...</div>}
+            {MK_IT_TABS.includes(tab) && !it.loaded && <div className="text-slate-400 text-sm">IT 자산을 불러오는 중...</div>}
             {tab === "itAssets" && it.loaded && <ItAssetsTab it={it} reloadIt={reloadIt} readOnly={!canEdit("itAssets")} canLabel={canAccess("itQr")} onLabelTab={() => setTab("itQr")} />}
             {tab === "itQr" && it.loaded && <ItLabelTab it={it} />}
             {tab === "itScans" && it.loaded && <ItScansTab it={it} />}
+            {tab === "itPeople" && it.loaded && <ItPeopleTab it={it} reloadIt={reloadIt} readOnly={!canEdit("itAssets")} canLabel={canAccess("itQr")} />}
+            {tab === "itStock" && it.loaded && <ItStockTab it={it} reloadIt={reloadIt} readOnly={!canEdit("itAssets")} />}
+            {tab === "itHistory" && it.loaded && <ItHistoryTab it={it} />}
             {tab === "accessLog" && <AccessLogTab />}
             {tab === "activityLog" && <ActivityLogTab />}
             {tab === "categoryAccess" && <CategoryAccessTab admins={admins} categoryAccess={categoryAccess} reload={reload} readOnly={!canEdit("admins")} />}

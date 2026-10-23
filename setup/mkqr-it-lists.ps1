@@ -1,10 +1,13 @@
 <#
-  MKQR IT 자산 QR(10-23 · mkqr-it) — SharePoint 목록 · 열 준비 (한 번만 실행)
+  MKQR IT 자산 QR · CMDB(10-23 · mkqr-it · mkqr-cmdb) — SharePoint 목록 · 열 준비 (한 번만 실행)
   ---------------------------------------------------------------------------
   만드는 것 (STK-DB 사이트):
     1) mkqr_ITAssets  — IT 자산 (Description=제목, Serial No., Asset Code, CI CD, QR 토큰, 위치 좌표 · 허용 반경 등)
     2) mkqr_ITScans   — QR 스캔 기록 (스캔한 사람 · GPS · 거리 · 판정)
     3) mkqr_CategoryAccess 에 권한 열 3개 — Access_itAssets · Access_itQr · Access_itScans (예/아니요)
+    4) mkqr_ITStock   — 수량으로 관리하는 액세서리 재고 (신품 · 회수 재고 · 최소 기준)
+    5) mkqr_ITHistory — 지급 · 반납 · 교체 · 고장 · 폐기 이력 (자산 · 액세서리 공용)
+  ※ 목록을 새로 만들면 사이트 권한을 그대로 이어받는다(권한 상속을 끊지 않는다). 상속을 끊으면 IT 담당자에게 「편집」 을 따로 줘야 한다.
   이미 있는 목록 · 열은 건너뛴다(다시 실행해도 안전).
 
   사용:
@@ -39,12 +42,14 @@ function Ensure-Index([string]$list, [string]$name) {
 # 1) IT 자산
 $A = "mkqr_ITAssets"; Ensure-List $A | Out-Null
 foreach ($n in "SerialNo", "AssetCode", "CICD", "QrToken", "AssetType", "Location", "AddressKr", "Assignee", "AssigneeEmail", "RentalEndDate", "RentalVendor") { Ensure-Field $A $n "Text" }   # Assignee = 이름, AssigneeEmail = 메일(직원 명부 또는 직접 입력)
+# CMDB(10-23) — 상태 · 모델 · 호스트 · 지급일 · 전화번호 · 프로그램 · DaaS CI · 보증 · 가져오기 키(날짜도 한국 날짜 YYYY-MM-DD 글자)
+foreach ($n in "State", "Model", "Hostname", "AssignedDate", "PhoneNo", "CriticalApps", "SecurityApp", "ExtCiId", "ExtObjectId", "WarrantyStart", "SourceKey") { Ensure-Field $A $n "Text" }
 Ensure-Field $A "IsRental" "Boolean"   # 렌탈 장비 여부 — 종료일은 한국 날짜 YYYY-MM-DD 글자로 저장
 foreach ($n in "Lat", "Lng", "VerifyRadiusM") { Ensure-Field $A $n "Number" }
 Ensure-Field $A "Note" "Note"
 Ensure-Field $A "Active" "Boolean"
 Set-PnPField -List $A -Identity "Active" -Values @{ DefaultValue = "1" } | Out-Null
-Ensure-Index $A "QrToken"; Ensure-Index $A "CICD"
+Ensure-Index $A "QrToken"; Ensure-Index $A "CICD"; Ensure-Index $A "SerialNo"; Ensure-Index $A "AssigneeEmail"
 
 # 2) 스캔 기록
 $S = "mkqr_ITScans"; Ensure-List $S | Out-Null
@@ -55,5 +60,21 @@ Ensure-Index $S "AssetId"; Ensure-Index $S "Created"
 # 3) 권한 열 — 비어 있으면 관리자(Access_admins) 값을 따르고, 그것도 없으면 「없음」
 $C = "mkqr_CategoryAccess"
 foreach ($n in "Access_itAssets", "Access_itQr", "Access_itScans") { Ensure-Field $C $n "Boolean" }
+
+# 4) 재고(액세서리)
+$K = "mkqr_ITStock"; Ensure-List $K | Out-Null
+foreach ($n in "Category", "Entity", "Ownership") { Ensure-Field $K $n "Text" }
+foreach ($n in "Qty", "PoolQty", "Threshold") { Ensure-Field $K $n "Number" }
+foreach ($n in "IsAsset", "Active") { Ensure-Field $K $n "Boolean" }
+Set-PnPField -List $K -Identity "Active" -Values @{ DefaultValue = "1" } | Out-Null
+Ensure-Field $K "Note" "Note"
+
+# 5) 변경 이력 — 사람(PersonEmail) · 자산(AssetId) · 날짜로 찾는다
+$H = "mkqr_ITHistory"; Ensure-List $H | Out-Null
+foreach ($n in "ChangeDate", "Kind", "AssetId", "CICD", "StockId", "StockKey", "ItemType", "Model", "SerialNo", "ChangeType", "Person", "PersonEmail", "Dept",
+  "PrevState", "NewState", "Reason", "RequestedBy", "ApprovedBy", "HandledBy", "TicketNo", "Source", "ImportKey") { Ensure-Field $H $n "Text" }
+Ensure-Field $H "Qty" "Number"
+Ensure-Field $H "Note" "Note"
+Ensure-Index $H "PersonEmail"; Ensure-Index $H "AssetId"; Ensure-Index $H "ChangeDate"; Ensure-Index $H "ImportKey"
 
 Write-Host "`n완료 — MKQR 를 새로고침한 뒤 「카테고리 접근 권한」 에서 IT 담당자에게 IT 전용 칸을 체크하고 「반영」 하세요."
