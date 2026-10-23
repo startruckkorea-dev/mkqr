@@ -38,7 +38,8 @@ function Ensure-Index([string]$list, [string]$name) {
 
 # 1) IT 자산
 $A = "mkqr_ITAssets"; Ensure-List $A | Out-Null
-foreach ($n in "SerialNo", "AssetCode", "CICD", "QrToken", "AssetType", "Location", "AddressKr", "Assignee") { Ensure-Field $A $n "Text" }
+foreach ($n in "SerialNo", "AssetCode", "CICD", "QrToken", "AssetType", "Location", "AddressKr", "Assignee", "RentalEndDate", "RentalVendor") { Ensure-Field $A $n "Text" }
+Ensure-Field $A "IsRental" "Boolean"   # 렌탈 장비 여부 — 종료일은 한국 날짜 YYYY-MM-DD 글자로 저장
 foreach ($n in "Lat", "Lng", "VerifyRadiusM") { Ensure-Field $A $n "Number" }
 Ensure-Field $A "Note" "Note"
 Ensure-Field $A "Active" "Boolean"

@@ -3690,7 +3690,19 @@ function CategoryAccessTab({ admins, categoryAccess, reload, readOnly }) {
 const MK_IT_RADIUS_DEFAULT = 300;   // 자산 위치 허용 반경(m) — 사무실 · 층 단위라 센터(10km)보다 좁게
 const MK_IT_TYPES = ["Notebook", "Desktop", "Monitor", "Server", "Network", "Printer", "Mobile", "기타"];
 const MK_IT_ASSET_LABELS = { Title: "Description", SerialNo: "Serial No.", AssetCode: "Asset Code", AssetType: "분류", Location: "위치", AddressKr: "주소",
-  Lat: "위도", Lng: "경도", VerifyRadiusM: "허용 반경(m)", Assignee: "사용자 · 담당", Note: "비고", Active: "활성" };
+  Lat: "위도", Lng: "경도", VerifyRadiusM: "허용 반경(m)", Assignee: "사용자 · 담당", Note: "비고", Active: "활성",
+  IsRental: "렌탈 장비", RentalEndDate: "렌탈 종료일", RentalVendor: "렌탈 업체" };
+const MK_IT_RENTAL_COLS = ["IsRental", "RentalEndDate", "RentalVendor"];   // 10-23 추가 열 — 목록에 없으면 저장 때 알려 준다
+// 렌탈 남은 기간 표시 — 종료일이 지났으면 빨강, 30일 이내면 주황(한국 날짜 기준)
+function mkItRental(a) {
+  if (!a || a.IsRental !== true) return null;
+  const end = String(a.RentalEndDate || "").slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(end)) return { end: "", days: null, cls: "bg-violet-50 text-violet-700", text: "렌탈 · 종료일 미입력" };
+  const days = Math.round((Date.parse(end + "T00:00:00Z") - Date.parse(mkTodayKst() + "T00:00:00Z")) / 864e5);
+  const cls = days < 0 ? "bg-red-50 text-red-700" : days <= 30 ? "bg-amber-50 text-amber-800" : "bg-violet-50 text-violet-700";
+  const text = days < 0 ? `렌탈 만료 (${end})` : `렌탈 ~${end}${days <= 30 ? ` · D-${days}` : ""}`;
+  return { end, days, cls, text };
+}
 function mkItCicd(id) { return "STK-CI-" + String(id).padStart(5, "0"); }
 function mkItScanUrl(token) { return window.location.origin + window.location.pathname.replace(/index\.html$/, "") + "?asset=" + encodeURIComponent(token); }
 function mkItDistanceM(lat1, lng1, lat2, lng2) {
@@ -3895,12 +3907,21 @@ function ItAssetEditModal({ asset, onClose, onSave, busy, readOnly }) {
             <span className="text-xs text-slate-500">{locMsg || "스캔 위치가 이 좌표에서 허용 반경 안이면 「정상」, 밖이면 「검증필요」 입니다"}</span>
           </div>
         )}
+        <div className="rounded-lg border border-slate-200 px-3 pt-3 pb-1 mb-3">
+          <label className="flex items-center gap-2 text-sm text-slate-700 mb-2"><input type="checkbox" checked={form.IsRental === true} onChange={(e) => setForm((f) => ({ ...f, IsRental: e.target.checked }))} /> 렌탈 장비 <span className="text-xs text-slate-400">— 회사 소유가 아니라 업체에서 빌린 장비</span></label>
+          {form.IsRental === true && (
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="렌탈 종료일" required><input type="date" className={inputCls} value={String(form.RentalEndDate || "").slice(0, 10)} onChange={set("RentalEndDate")} /></Field>
+              <Field label="렌탈 업체" required><input className={inputCls} value={form.RentalVendor || ""} onChange={set("RentalVendor")} placeholder="예: ○○렌탈" /></Field>
+            </div>
+          )}
+        </div>
         <Field label="비고"><textarea className={inputCls} rows={2} value={form.Note || ""} onChange={set("Note")} /></Field>
         <label className="flex items-center gap-2 text-sm text-slate-700 mb-2"><input type="checkbox" checked={form.Active !== false} onChange={set("Active")} /> 사용 중(활성) — 끄면 폐기 · 반납 자산으로 표시합니다</label>
       </fieldset>
       <div className="flex justify-end gap-2 mt-4">
         <button onClick={onClose} className="px-4 py-2 text-sm border border-slate-300 rounded-lg">닫기</button>
-        {!readOnly && <button disabled={busy || !String(form.Title || "").trim()} onClick={() => onSave(form)} className="px-4 py-2 text-sm rounded-lg text-white disabled:opacity-50" style={{ background: BRAND.accent }}>{busy ? "저장 중…" : "저장"}</button>}
+        {!readOnly && <button disabled={busy || !String(form.Title || "").trim() || (form.IsRental === true && (!String(form.RentalEndDate || "").trim() || !String(form.RentalVendor || "").trim()))} onClick={() => onSave(form)} className="px-4 py-2 text-sm rounded-lg text-white disabled:opacity-50" style={{ background: BRAND.accent }}>{busy ? "저장 중…" : "저장"}</button>}
       </div>
     </Modal>
   );
@@ -3912,15 +3933,16 @@ function ItAssetsTab({ it, reloadIt, readOnly, canLabel, onLabelTab }) {
   const [busy, setBusy] = useState(false);
   const [q, setQ] = useState("");
   const [showInactive, setShowInactive] = useState(false);
+  const [rentalOnly, setRentalOnly] = useState(false);
   const [sel, setSel] = useState(() => new Set());
   const lastScan = useMemo(() => { const m = {}; scans.forEach((s) => { const k = String(s.AssetId); if (!m[k]) m[k] = s; }); return m; }, [scans]);
   const qq = q.trim().toLowerCase();
-  const filtered = assets.filter((a) => (showInactive || a.Active !== false) &&
-    (!qq || [a.Title, a.SerialNo, a.AssetCode, a.CICD, a.Assignee, a.Location, a.AssetType].some((v) => String(v || "").toLowerCase().includes(qq))))
+  const filtered = assets.filter((a) => (showInactive || a.Active !== false) && (!rentalOnly || a.IsRental === true) &&
+    (!qq || [a.Title, a.SerialNo, a.AssetCode, a.CICD, a.Assignee, a.Location, a.AssetType, a.RentalVendor].some((v) => String(v || "").toLowerCase().includes(qq))))
     .sort((x, y) => Number(y.id) - Number(x.id));
   const [page, setPage] = useState(1);
   const PAGE = 20;
-  useEffect(() => { setPage(1); }, [q, showInactive]);
+  useEffect(() => { setPage(1); }, [q, showInactive, rentalOnly]);
   const pages = Math.max(1, Math.ceil(filtered.length / PAGE));
   const pageSafe = Math.min(page, pages);
   const rows = filtered.slice((pageSafe - 1) * PAGE, pageSafe * PAGE);
@@ -3936,12 +3958,21 @@ function ItAssetsTab({ it, reloadIt, readOnly, canLabel, onLabelTab }) {
         Title: String(form.Title || "").trim(), SerialNo: form.SerialNo || "", AssetCode: form.AssetCode || "", AssetType: form.AssetType || "",
         Location: form.Location || "", AddressKr: form.AddressKr || "", Lat: num(form.Lat), Lng: num(form.Lng),
         VerifyRadiusM: num(form.VerifyRadiusM) || MK_IT_RADIUS_DEFAULT, Assignee: form.Assignee || "", Note: form.Note || "", Active: form.Active !== false,
+        IsRental: form.IsRental === true,
+        RentalEndDate: form.IsRental === true ? String(form.RentalEndDate || "").slice(0, 10) : "",
+        RentalVendor: form.IsRental === true ? String(form.RentalVendor || "").trim() : "",
       };
+      // 렌탈 열이 목록에 아직 없으면 그 값은 저장되지 않는다 — 렌탈로 표시한 경우에만 미리 알려 준다
+      if (fields.IsRental) {
+        let cols = null; try { cols = await getMkListColumnNames(MK_LISTS.itAssets); } catch (e) {}
+        const miss = cols ? MK_IT_RENTAL_COLS.filter((c) => !cols.has(c)) : [];
+        if (miss.length && !confirm(`SharePoint 목록 ${MK_LISTS.itAssets} 에 렌탈 열(${miss.join(", ")})이 아직 없어 렌탈 정보는 저장되지 않습니다.\n나머지 정보만 저장할까요?`)) { setBusy(false); return; }
+      }
       if (editing && editing.id) {
         if (!editing.CICD) fields.CICD = mkItCicd(editing.id);          // 예전 저장에서 발행이 빠진 건 이번에 채운다
         if (!editing.QrToken) fields.QrToken = randomToken(12);
         await mkUpdateItem(MK_LISTS.itAssets, editing.id, await mkItFields(MK_LISTS.itAssets, fields));
-        mkLog("IT 자산", "수정", editing.CICD || fields.Title, { id: editing.id, changes: mkDiff(editing, fields, MK_IT_ASSET_LABELS) });
+        mkLog("IT 자산", "수정", editing.CICD || fields.Title, { id: editing.id, changes: mkDiff({ ...editing, IsRental: editing.IsRental === true, RentalEndDate: editing.RentalEndDate || "", RentalVendor: editing.RentalVendor || "" }, fields, MK_IT_ASSET_LABELS) });
       } else {
         fields.QrToken = randomToken(12);
         const created = await mkCreateItem(MK_LISTS.itAssets, await mkItFields(MK_LISTS.itAssets, fields));
@@ -3968,6 +3999,7 @@ function ItAssetsTab({ it, reloadIt, readOnly, canLabel, onLabelTab }) {
       const s = lastScan[String(a.id)];
       return { "CI CD": a.CICD, Description: a.Title, "Serial No.": a.SerialNo, "Asset Code": a.AssetCode, 분류: a.AssetType, "사용자 · 담당": a.Assignee,
         위치: a.Location, 주소: a.AddressKr, 위도: a.Lat, 경도: a.Lng, "허용 반경(m)": a.VerifyRadiusM, 상태: a.Active === false ? "비활성" : "사용 중",
+        렌탈: a.IsRental === true ? "렌탈" : "자산", "렌탈 종료일": a.IsRental === true ? a.RentalEndDate || "" : "", "렌탈 업체": a.IsRental === true ? a.RentalVendor || "" : "",
         "최근 스캔(KST)": s ? mkItKst(s.Created) : "", "최근 스캔 판정": s ? s.VerifyStatus : "", 비고: a.Note };
     });
     const ws = XLSX.utils.json_to_sheet(data); const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, "IT Assets");
@@ -3981,11 +4013,14 @@ function ItAssetsTab({ it, reloadIt, readOnly, canLabel, onLabelTab }) {
       {busy && <BlockingOverlay message="저장하는 중입니다…" />}
       <div className="mb-4 flex items-center justify-between flex-wrap gap-2">
         <div className="flex items-center gap-3 flex-wrap">
-          <div className="relative">
+          <div className="relative w-full sm:w-auto">
             <Search size={15} className="absolute left-2.5 top-2.5 text-slate-400" />
-            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Description · Serial · CI CD · Asset Code · 사용자 검색" className="pl-8 pr-3 py-2 border border-slate-300 rounded-lg text-sm w-80 max-w-full" />
+            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="CI CD · 설명 · 시리얼 · 자산코드 · 사용자 검색" title="Description · Serial No. · CI CD · Asset Code · 사용자 · 렌탈 업체로 검색" className="pl-8 pr-3 py-2 border border-slate-300 rounded-lg text-sm w-full sm:w-96 text-ellipsis" />
           </div>
           <label className="flex items-center gap-1.5 text-xs text-slate-500"><input type="checkbox" checked={showInactive} onChange={(e) => setShowInactive(e.target.checked)} /> 비활성 포함</label>
+          <label className="flex items-center gap-1.5 text-xs text-slate-500"><input type="checkbox" checked={rentalOnly} onChange={(e) => setRentalOnly(e.target.checked)} /> 렌탈만</label>
+          {(() => { const soon = assets.filter((a) => { const r = mkItRental(a); return a.Active !== false && r && r.days != null && r.days <= 30; }).length;
+            return soon ? <button onClick={() => setRentalOnly(true)} className="text-xs rounded-full px-2.5 py-1 bg-amber-50 text-amber-800 border border-amber-200">렌탈 만료 · 30일 이내 {soon}건</button> : null; })()}
         </div>
         <div className="flex items-center gap-2">
           {canLabel && <button onClick={() => mkItPrintLabels(assets.filter((a) => sel.has(a.id)))} disabled={!sel.size}
@@ -4011,7 +4046,9 @@ function ItAssetsTab({ it, reloadIt, readOnly, canLabel, onLabelTab }) {
                 <tr key={a.id} className="border-t border-slate-100 hover:bg-slate-50/60">
                   {canLabel && <td className="px-3 py-2"><input type="checkbox" checked={sel.has(a.id)} onChange={() => toggle(a.id)} aria-label={`${a.CICD || a.Title} 선택`} /></td>}
                   <td className="px-3 py-2 font-mono text-xs whitespace-nowrap">{a.CICD || <span className="text-amber-600">미발행</span>}</td>
-                  <td className="px-3 py-2"><div className="font-medium text-slate-800">{a.Title}</div>{a.AssetType && <div className="text-[11px] text-slate-400">{a.AssetType}</div>}</td>
+                  <td className="px-3 py-2"><div className="font-medium text-slate-800">{a.Title}</div>
+                    <div className="flex items-center gap-1.5 flex-wrap mt-0.5">{a.AssetType && <span className="text-[11px] text-slate-400">{a.AssetType}</span>}
+                      {(() => { const r = mkItRental(a); return r ? <span className={`text-[11px] rounded-full px-2 py-0.5 whitespace-nowrap ${r.cls}`} title={a.RentalVendor ? `렌탈 업체: ${a.RentalVendor}` : undefined}>{r.text}{a.RentalVendor ? ` · ${a.RentalVendor}` : ""}</span> : null; })()}</div></td>
                   <td className="px-3 py-2 text-xs">{a.SerialNo || "-"}</td>
                   <td className="px-3 py-2 text-xs">{a.AssetCode || "-"}</td>
                   <td className="px-3 py-2 text-xs"><div>{a.Assignee || "-"}</div><div className="text-slate-400">{a.Location || ""}{a.Lat == null || a.Lat === "" ? " · 좌표 없음" : ""}</div></td>
@@ -4066,9 +4103,9 @@ function ItLabelTab({ it }) {
         QR 을 스캔하면 MKQR 로그인 후 자산 정보와 스캔 위치(GPS)가 기록됩니다 — 로그인하지 않은 사람에게는 「Property of Star Truck Korea」 안내만 보입니다.
       </div>
       <div className="mb-4 flex items-center justify-between flex-wrap gap-2">
-        <div className="relative">
+        <div className="relative w-full sm:w-auto">
           <Search size={15} className="absolute left-2.5 top-2.5 text-slate-400" />
-          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Description · Serial · CI CD · Asset Code 검색" className="pl-8 pr-3 py-2 border border-slate-300 rounded-lg text-sm w-80 max-w-full" />
+          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="CI CD · 설명 · 시리얼 · 자산코드 검색" title="Description · Serial No. · CI CD · Asset Code 로 검색" className="pl-8 pr-3 py-2 border border-slate-300 rounded-lg text-sm w-full sm:w-80 text-ellipsis" />
         </div>
         <div className="flex items-center gap-2">
           <button onClick={() => setSel(new Set(list.map((a) => a.id)))} disabled={!list.length} className="px-3 py-2 rounded-lg text-sm border border-slate-300 disabled:opacity-40">검색 결과 전체 선택 ({list.length})</button>
@@ -4134,9 +4171,9 @@ function ItScansTab({ it }) {
           <select value={days} onChange={(e) => setDays(Number(e.target.value))} className="border border-slate-300 rounded-lg px-2 py-2 text-sm">
             {[7, 30, 90].map((d) => <option key={d} value={d}>최근 {d}일</option>)}
           </select>
-          <div className="relative">
+          <div className="relative w-full sm:w-auto">
             <Search size={15} className="absolute left-2.5 top-2.5 text-slate-400" />
-            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="CI CD · Description · 스캔한 사람" className="pl-8 pr-3 py-2 border border-slate-300 rounded-lg text-sm w-72 max-w-full" />
+            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="CI CD · 설명 · 스캔한 사람 검색" className="pl-8 pr-3 py-2 border border-slate-300 rounded-lg text-sm w-full sm:w-72 text-ellipsis" />
           </div>
         </div>
         <button onClick={exportXlsx} disabled={!list.length} className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm border border-slate-300 disabled:opacity-40"><Download size={14} /> Excel</button>
@@ -4229,6 +4266,7 @@ function ItScanModal({ token, onClose, canEditAssets, onDone, userEmail, userNam
           {a.Active === false && <div className="mb-2 text-xs rounded-lg px-3 py-2 bg-slate-100 text-slate-600">비활성(폐기 · 반납) 으로 표시된 자산입니다.</div>}
           {row("Description", a.Title)}{row("Serial No.", a.SerialNo)}{row("CI CD", a.CICD, true)}{row("Asset Code", a.AssetCode)}
           {row("사용자 · 담당", a.Assignee)}{row("위치", a.Location)}
+          {a.IsRental === true && row("렌탈", (() => { const r = mkItRental(a); return <span><span className={`text-[11px] rounded-full px-2 py-0.5 mr-1.5 ${r.cls}`}>{r.text}</span>{a.RentalVendor || ""}</span>; })())}
           <div className="mt-4 rounded-xl border px-4 py-3 bg-slate-50">
             {state.phase === "gps" ? <div className="text-sm text-slate-600 flex items-center gap-2"><Navigation size={15} className="text-slate-400" /> 위치(GPS)를 확인하고 기록하는 중… <span className="text-xs text-slate-400">위치 권한을 허용해 주세요</span></div> : (
               <div className="text-sm">
