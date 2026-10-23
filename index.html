@@ -5753,7 +5753,10 @@ function mkItImpAsset(r) {
 }
 // 계획 — 쓰기 전에 무엇이 생기고 바뀌는지
 function mkItImportPlan(book, it, mode) {
-  const plan = { assets: { create: [], update: [], same: 0, skip: [] }, stock: { create: [], update: [], same: 0, skip: [] }, hist: { create: [], skip: 0, bad: [] }, issues: [...(book.issues || [])] };
+  const plan = { assets: { create: [], update: [], same: 0, skip: [] }, stock: { create: [], update: [], same: 0, skip: [] }, hist: { create: [], update: [], skip: 0, bad: [] }, issues: [...(book.issues || [])] };
+  plan.assets.kept = 0;
+  // MKQR 에서 지급 · 반납 등을 처리한 자산 — 덮어쓰기여도 상태 · 사용자는 파일 값으로 되돌리지 않는다(MKQR 기록이 더 최신)
+  const touched = new Set((it.history || []).filter((h) => h.Source === "MKQR" && h.AssetId).map((h) => String(h.AssetId)));
   // 회사 메일 도메인 오타(hyoung.com · yosung.com 등)는 고쳐서 넣고, 확인 필요 항목에 남긴다
   const fixMail = (e, where) => { const fx = mkItMailFix(e, null); if (!fx) return e; plan.issues.push({ 구분: "메일 오타 고침", 위치: where, 내용: `${e} → ${fx}` }); return fx; };
   const bySn = new Map(), byKey = new Map();
@@ -5779,6 +5782,11 @@ function mkItImportPlan(book, it, mode) {
       const same = k === "IsRental" ? (cur === true) === (f[k] === true) : String(cur == null ? "" : cur).trim() === String(f[k]);
       if (mode === "fill" ? curEmpty && !same : !same) patch[k] = f[k];
     });
+    if (mode === "overwrite" && touched.has(String(ex.id))) {
+      const same = String(ex.AssigneeEmail || "").trim().toLowerCase() === String(f.AssigneeEmail || "").trim().toLowerCase() && !!f.AssigneeEmail;   // 같은 사람이면 이름 표기만 맞춘다
+      const drop = ["State", "AssignedDate", ...(same ? [] : ["Assignee", "AssigneeEmail"])].filter((k) => k in patch);
+      drop.forEach((k) => delete patch[k]); if (drop.length) plan.assets.kept++;
+    }
     // 사용자는 상태와 함께 — 채우기 모드에서 재고 자산에 사용자만 생기지 않게
     const finalState = patch.State || exState || mkItStateOf(ex);
     if (finalState !== "Active") { delete patch.Assignee; delete patch.AssigneeEmail; delete patch.AssignedDate; if (patch.State && (ex.Assignee || ex.AssigneeEmail)) Object.assign(patch, { Assignee: "", AssigneeEmail: "", AssignedDate: "" }); }
@@ -5801,13 +5809,23 @@ function mkItImportPlan(book, it, mode) {
     if (Object.keys(patch).length) plan.stock.update.push({ row, ex, patch }); else plan.stock.same++;
   });
   const have = new Set((it.history || []).map((h) => h.ImportKey).filter(Boolean));
+  const haveMap = new Map((it.history || []).filter((h) => h.ImportKey).map((h) => [h.ImportKey, h]));
+  const MK_IT_HIST_PEOPLE = ["Person", "PersonEmail", "RequestedBy", "ApprovedBy", "HandledBy"];
   (book.hist || []).forEach((r, i) => {
     const h = {}; MK_IT_IMP_HIST.forEach((k) => { const v = String(r[k] == null ? "" : r[k]).trim(); if (v !== "") h[k] = v; });
     if (!h.ChangeType || !(h.SerialNo || h.StockKey || h.ItemType || h.Model)) { plan.hist.bad.push({ row: i + 2, why: "구분 또는 대상 없음" }); return; }
     h.ChangeDate = mkItImpDate(h.ChangeDate); if (h.SerialNo) h.SerialNo = h.SerialNo.toUpperCase(); if (h.PersonEmail) { h.PersonEmail = h.PersonEmail.toLowerCase(); if (!MK_IT_EMAIL_RE.test(h.PersonEmail)) delete h.PersonEmail; else h.PersonEmail = fixMail(h.PersonEmail, `History ${i + 2}행`); }
     h.Kind = h.Kind === "Stock" ? "Stock" : "Asset"; if (h.Qty != null) h.Qty = mkItNum(h.Qty);
     if (!h.ImportKey) h.ImportKey = mkItHash(["ChangeDate", "Kind", "ItemType", "Model", "SerialNo", "ChangeType", "Person", "Reason", "Note", "Source"].map((k) => h[k] || "").join("|"));
-    if (have.has(h.ImportKey)) { plan.hist.skip++; return; }
+    if (have.has(h.ImportKey)) {
+      // 덮어쓰기 — 이미 들어간 이력은 사람 이름 · 메일(요청 · 승인 · 처리자 포함)만 파일 값으로 맞춘다. MKQR 에서 남긴 이력은 건드리지 않는다
+      const ex = haveMap.get(h.ImportKey);
+      if (mode === "overwrite" && ex && ex.Source !== "MKQR") {
+        const patch = {}; MK_IT_HIST_PEOPLE.forEach((k) => { if (h[k] != null && h[k] !== "" && String(ex[k] == null ? "" : ex[k]).trim() !== String(h[k])) patch[k] = h[k]; });
+        if (Object.keys(patch).length) { plan.hist.update.push({ row: i + 2, ex, patch }); haveMap.delete(h.ImportKey); return; }
+      }
+      plan.hist.skip++; return;
+    }
     have.add(h.ImportKey); plan.hist.create.push(h);
   });
   return plan;
@@ -5871,7 +5889,7 @@ function ItImportModal({ it, onClose, onDone }) {
     stop.current = false;
     const P = plan; const errsAll = []; const created = {}; const stockIds = {};
     const K = use.keys && keyPlan ? keyPlan : null;
-    const total = (use.assets ? P.assets.create.length + P.assets.update.length : 0) + (use.stock ? P.stock.create.length + P.stock.update.length : 0) + (use.hist ? P.hist.create.length : 0) + (K ? K.create.length + K.update.length : 0);
+    const total = (use.assets ? P.assets.create.length + P.assets.update.length : 0) + (use.stock ? P.stock.create.length + P.stock.update.length : 0) + (use.hist ? P.hist.create.length + P.hist.update.length : 0) + (K ? K.create.length + K.update.length : 0);
     let done = 0; const tick = (phase) => (errs) => { done++; setRun({ phase, done, total, errs: [...errsAll, ...errs] }); };
     setRun({ phase: "자산", done: 0, total, errs: [] });
     if (use.assets) {
@@ -5898,7 +5916,11 @@ function ItImportModal({ it, onClose, onDone }) {
         const f = { ...h, AssetId: a ? String(a.id) : "", CICD: a ? a.CICD || "" : "", StockId: h.Kind === "Stock" && h.StockKey && st.get(h.StockKey) ? String(st.get(h.StockKey)) : "" };
         f.Title = `${(MK_IT_CHANGE[f.ChangeType] || {}).ko || f.ChangeType} · ${f.CICD || f.SerialNo || f.StockKey || f.ItemType || ""} · ${f.Person || ""}`.slice(0, 250);
         await mkCreateItem(MK_LISTS.itHistory, await mkItFields(MK_LISTS.itHistory, f));
-      } }));
+      } })).concat(P.hist.update.map((x) => ({ label: `이력 ${x.row}행`, run: async () => {
+        const p = { ...x.patch };
+        if (p.Person) p.Title = `${(MK_IT_CHANGE[x.ex.ChangeType] || {}).ko || x.ex.ChangeType || ""} · ${x.ex.CICD || x.ex.SerialNo || x.ex.StockKey || x.ex.ItemType || ""} · ${p.Person}`.slice(0, 250);
+        await mkItRetry(async () => mkUpdateItem(MK_LISTS.itHistory, x.ex.id, await mkItFields(MK_LISTS.itHistory, p)));
+      } })));
       errsAll.push(...(await mkItPool(tasks, 4, tick("이력"), stop)));
     }
     if (K && !stop.current) {
@@ -5910,7 +5932,7 @@ function ItImportModal({ it, onClose, onDone }) {
       } })).concat(K.update.map((x) => ({ label: `복구 키 ${x.ex.SerialNo}`, run: async () => { await mkUpdateItem(MK_LISTS.itSecrets, x.ex.id, await mkItFields(MK_LISTS.itSecrets, x.patch)); } })));
       errsAll.push(...(await mkItPool(tasks, 4, tick("복구 키"), stop)));
     }
-    const summary = { 복구키: K ? K.create.length + K.update.length : 0, 자산생성: use.assets ? P.assets.create.length : 0, 자산갱신: use.assets ? P.assets.update.length : 0, 재고생성: use.stock ? P.stock.create.length : 0, 재고갱신: use.stock ? P.stock.update.length : 0, 이력: use.hist ? P.hist.create.length : 0, 실패: errsAll.length, 중단: stop.current, 방식: mode === "fill" ? "빈 칸만 채우기" : "덮어쓰기", 파일: fileName };
+    const summary = { 복구키: K ? K.create.length + K.update.length : 0, 자산생성: use.assets ? P.assets.create.length : 0, 자산갱신: use.assets ? P.assets.update.length : 0, 재고생성: use.stock ? P.stock.create.length : 0, 재고갱신: use.stock ? P.stock.update.length : 0, 이력: use.hist ? P.hist.create.length : 0, 이력갱신: use.hist ? P.hist.update.length : 0, 실패: errsAll.length, 중단: stop.current, 방식: mode === "fill" ? "빈 칸만 채우기" : "덮어쓰기", 파일: fileName };
     mkLog("IT 자산", "CMDB 가져오기", fileName, { info: summary });
     setRun(null); setResult({ ...summary, errs: errsAll });
     await onDone();
@@ -5943,7 +5965,7 @@ function ItImportModal({ it, onClose, onDone }) {
           {plan && (
             <>
               <div className="flex gap-2 mb-3">
-                {[["fill", "빈 칸만 채우기 (권장)", "MKQR 에 이미 있는 값은 그대로 둡니다"], ["overwrite", "파일 값으로 덮어쓰기", "파일에 값이 있으면 MKQR 값을 바꿉니다(재고 수량 포함)"]].map(([k, l, d]) => (
+                {[["fill", "빈 칸만 채우기 (권장)", "MKQR 에 이미 있는 값은 그대로 둡니다"], ["overwrite", "파일 값으로 덮어쓰기", "파일에 값이 있으면 MKQR 값을 바꿉니다(재고 수량 · 이력의 사람 이름 · 메일 포함, MKQR 에서 처리한 자산의 상태 · 사용자는 제외)"]].map(([k, l, d]) => (
                   <label key={k} className={`flex-1 rounded-lg border px-3 py-2 cursor-pointer ${mode === k ? "border-slate-500 bg-slate-50" : "border-slate-200"}`}>
                     <div className="flex items-center gap-2 text-sm"><input type="radio" checked={mode === k} onChange={() => setMode(k)} /> {l}</div><div className="text-[11px] text-slate-500 mt-0.5 ml-5">{d}</div>
                   </label>
@@ -5951,9 +5973,10 @@ function ItImportModal({ it, onClose, onDone }) {
               </div>
               {(book.has.assets || book.has.stock || book.has.hist) && <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 mb-3">
                 <Card k="assets" title={`자산 ${book.assets.length}행`} a={plan.assets.create.length} b={plan.assets.update.length} c={plan.assets.same + plan.assets.skip.length} />
-                <Card k="stock" title={`재고 ${book.stock.length}행`} a={plan.stock.create.length} b={plan.stock.update.length} c={plan.stock.same + plan.stock.skip.length} disabled={!!it.stockErr} why={`${MK_LISTS.itStock} 목록이 없어 건너뜁니다`} />
-                <Card k="hist" title={`이력 ${book.hist.length}행`} a={plan.hist.create.length} b={0} c={plan.hist.skip + plan.hist.bad.length} disabled={!!it.histErr} why={`${MK_LISTS.itHistory} 목록이 없어 건너뜁니다`} />
+                <Card k="stock" title={`재고 ${book.stock.length}행`} a={plan.stock.create.length} b={plan.stock.update.length} c={plan.stock.same + plan.stock.skip.length} disabled={!!it.stockErr || !book.has.stock} why={!book.has.stock ? "파일에 Stock 시트가 없어 재고는 바꾸지 않습니다" : `${MK_LISTS.itStock} 목록이 없어 건너뜁니다`} />
+                <Card k="hist" title={`이력 ${book.hist.length}행`} a={plan.hist.create.length} b={plan.hist.update.length} c={plan.hist.skip + plan.hist.bad.length} disabled={!!it.histErr} why={`${MK_LISTS.itHistory} 목록이 없어 건너뜁니다`} />
               </div>}
+              {plan.assets.kept > 0 && <div className="text-[11px] text-slate-500 -mt-1 mb-3">MKQR 에서 지급 · 반납 등을 처리한 자산 {plan.assets.kept}대는 상태 · 사용자를 파일 값으로 되돌리지 않습니다.</div>}
               {book.has.keys && (
                 <div className="mb-3">
                   <Card k="keys" title={<span className="inline-flex items-center gap-1.5"><LockKeyhole size={13} /> BitLocker 복구 키 {book.keys.length}대 <span className="font-normal text-[11px] text-slate-500">→ {MK_LISTS.itSecrets} (IT 전용)</span></span>}
@@ -5978,7 +6001,7 @@ function ItImportModal({ it, onClose, onDone }) {
           )}
           <div className="flex justify-end gap-2 mt-4">
             <button onClick={onClose} className="px-4 py-2 text-sm border border-slate-300 rounded-lg">닫기</button>
-            <button disabled={!plan || !((use.assets && plan.assets.create.length + plan.assets.update.length) || (use.stock && !it.stockErr && plan.stock.create.length + plan.stock.update.length) || (use.hist && !it.histErr && plan.hist.create.length) || (use.keys && keyPlan && keyPlan.create.length + keyPlan.update.length))}
+            <button disabled={!plan || !((use.assets && plan.assets.create.length + plan.assets.update.length) || (use.stock && !it.stockErr && plan.stock.create.length + plan.stock.update.length) || (use.hist && !it.histErr && plan.hist.create.length + plan.hist.update.length) || (use.keys && keyPlan && keyPlan.create.length + keyPlan.update.length))}
               onClick={go} className="px-4 py-2 text-sm rounded-lg text-white disabled:opacity-50" style={{ background: BRAND.accent }}>가져오기 시작</button>
           </div>
         </>
@@ -5995,8 +6018,8 @@ function ItImportModal({ it, onClose, onDone }) {
       {result && (
         <div className="py-2">
           <div className="flex items-center gap-2 mb-3"><CheckCircle2 size={22} className={result.실패 ? "text-amber-500" : "text-emerald-500"} /><div className="text-sm font-semibold text-slate-800">{result.중단 ? "중단했습니다" : "가져오기를 마쳤습니다"}</div></div>
-          <div className="grid grid-cols-4 sm:grid-cols-7 gap-2 text-center mb-3">
-            {[["복구 키", result.복구키], ["자산 새로", result.자산생성], ["자산 갱신", result.자산갱신], ["재고 새로", result.재고생성], ["재고 갱신", result.재고갱신], ["이력", result.이력], ["실패", result.실패]].map(([l, n]) => <div key={l} className="rounded-lg bg-slate-50 border border-slate-200 py-2"><div className={`text-lg font-bold tabular-nums ${l === "실패" && n ? "text-rose-600" : "text-slate-800"}`}>{n}</div><div className="text-[10.5px] text-slate-500">{l}</div></div>)}
+          <div className="grid grid-cols-4 sm:grid-cols-8 gap-2 text-center mb-3">
+            {[["복구 키", result.복구키], ["자산 새로", result.자산생성], ["자산 갱신", result.자산갱신], ["재고 새로", result.재고생성], ["재고 갱신", result.재고갱신], ["이력 새로", result.이력], ...(result.이력갱신 ? [["이력 갱신", result.이력갱신]] : []), ["실패", result.실패]].map(([l, n]) => <div key={l} className="rounded-lg bg-slate-50 border border-slate-200 py-2"><div className={`text-lg font-bold tabular-nums ${l === "실패" && n ? "text-rose-600" : "text-slate-800"}`}>{n}</div><div className="text-[10.5px] text-slate-500">{l}</div></div>)}
           </div>
           {result.errs.length > 0 && <div className="max-h-40 overflow-y-auto mk-scroll text-[11px] text-rose-700 bg-rose-50 border border-rose-200 rounded-lg px-3 py-2 mb-2">{result.errs.slice(0, 50).map((e, i) => <div key={i}>{e}</div>)}</div>}
           <div className="text-xs text-slate-500">같은 파일을 다시 넣으면 실패한 것만 새로 들어갑니다. 다음 순서: 「위치 좌표」 로 사무실 좌표 지정 → 「IT 자산 QR 라벨」 에서 라벨 출력 · 부착 → 스캔으로 확인.</div>
