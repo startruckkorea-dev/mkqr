@@ -4181,6 +4181,8 @@ async function mkItHistAdd(h) {
   try { await mkItRetry(async () => mkCreateItem(MK_LISTS.itHistory, await mkItFields(MK_LISTS.itHistory, f))); return true; }
   catch (e) { console.warn("[MKQR] 이력 저장 실패:", e.message); return false; }
 }
+// 티켓 번호 예시 — IT Ticket 변경 요청 번호 형식(오늘 날짜)
+const mkItTicketEg = () => `예: CHG-${mkTodayKst()}_ID-100`;
 const mkItHistOfAsset = (a) => ({ Kind: "Asset", AssetId: String(a.id), CICD: a.CICD || "", ItemType: a.AssetType || "", Model: a.Model || "", SerialNo: a.SerialNo || "" });
 
 // 자산 이동 — Issue(지급) · Transfer(사용자 변경) · Return(반납) · Replace(교체) · Repair(고장) · Restore(수리 완료) · Retire(폐기) · Unretire(재고로 복구)
@@ -4280,6 +4282,26 @@ function mkItHoldings(history) {
   return out;
 }
 // 사람 목록 — 자산 사용자 · 이력 속 사람 · (선택) 직원 명부. 이름만 있는 사람은 같은 이름의 메일 있는 사람에 합친다.
+// 메일 오타 의심 — 회사 도메인(직원 명부에 있는 도메인)과 1~2글자만 다른 도메인(예: hyoung.com · yosung.com)이면 고친 주소를 돌려준다
+function mkItLev(a, b) {
+  const m = a.length, n = b.length; if (Math.abs(m - n) > 2) return 9;
+  let p = Array.from({ length: n + 1 }, (_, j) => j);
+  for (let i = 1; i <= m; i++) { const c = [i]; for (let j = 1; j <= n; j++) c[j] = Math.min(p[j] + 1, c[j - 1] + 1, p[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1)); p = c; }
+  return p[n];
+}
+// 회사 도메인 = 직원 명부에 3명 이상 있는 도메인(명부에 한두 건 섞인 오타 도메인은 제외) + 기본 hyosung.com
+function mkItMailDomains(dir) {
+  const c = new Map();
+  ((dir && dir.list) || []).forEach((d) => { const i = String(d.email || "").lastIndexOf("@"); if (i > 0) { const k = d.email.slice(i + 1).toLowerCase(); c.set(k, (c.get(k) || 0) + 1); } });
+  return new Set(["hyosung.com", ...[...c].filter(([, n]) => n >= 3).map(([k]) => k)]);
+}
+function mkItMailFix(email, dir) {
+  const e = String(email || "").trim().toLowerCase(); const at = e.lastIndexOf("@"); if (at < 1) return "";
+  if (dir && dir.map && dir.map.get(e)) return "";   // 명부에 그대로 있는 메일은 건드리지 않는다
+  const dom = e.slice(at + 1), doms = mkItMailDomains(dir); if (doms.has(dom)) return "";
+  for (const d of doms) if (mkItLev(dom, d) <= 2) return `${e.slice(0, at)}@${d}`;
+  return "";
+}
 function mkItPeople(assets, history, dir) {
   const P = new Map();
   const get = (email, name) => {
@@ -4306,18 +4328,21 @@ function mkItPeople(assets, history, dir) {
     p.dept = d ? d.dept : ""; p.dirName = d ? d.name : "";
     p.missing = !!(dir && dir.ready && p.email && !d);
     p.noMail = !p.email;
+    p.mailFix = mkItMailFix(p.email, dir);
+    p.fixInDir = !!(p.mailFix && dir && dir.map.get(p.mailFix));
     p.hist.sort((x, y) => String(y.ChangeDate).localeCompare(String(x.ChangeDate)) || Number(y.id) - Number(x.id));
     p.count = (t) => p.assets.filter((a) => a.AssetType === t).length;
     p.holdQty = p.hold.reduce((s, x) => s + x.qty, 0);
   });
   return P;
 }
-function MkItPersonChip({ name, email, missing }) {
+function MkItPersonChip({ name, email, missing, fix }) {
   return (
     <span className="min-w-0">
       <span className="text-slate-800">{name || email || "-"}</span>
       {email && name && <span className="block text-[11px] text-slate-500 break-all">{email}</span>}
       {missing && <span className="inline-block mt-0.5 text-[10px] px-1.5 py-0.5 rounded-full bg-red-50 text-red-600 leading-none font-medium" title="직원 명부(employee_search.xlsx)에 없는 메일 — 퇴사 · 이동 여부 확인">명부 없음</span>}
+      {fix && <span className="inline-block mt-0.5 ml-1 text-[10px] px-1.5 py-0.5 rounded-full bg-amber-50 text-amber-800 leading-none font-medium" title={`메일 도메인 오타 의심 — ${fix} 일 수 있습니다`}>메일 오타?</span>}
     </span>
   );
 }
@@ -4556,7 +4581,7 @@ function ItMoveModal({ kind, asset, person, assets, onClose, onDone }) {
       )}
       <div className="grid grid-cols-2 gap-3">
         <Field label="처리일" required><input type="date" className={inputCls} value={f.date} onChange={(e) => setF((x) => ({ ...x, date: e.target.value }))} /></Field>
-        <Field label="티켓 번호 (IT Ticket)"><input className={inputCls} value={f.ticket} onChange={(e) => setF((x) => ({ ...x, ticket: e.target.value }))} placeholder="예: 396" /></Field>
+        <Field label="티켓 번호 (IT Ticket)"><input className={inputCls} value={f.ticket} onChange={(e) => setF((x) => ({ ...x, ticket: e.target.value }))} placeholder={mkItTicketEg()} /></Field>
       </div>
       <Field label="사유">
         <input className={inputCls} value={f.reason} onChange={(e) => setF((x) => ({ ...x, reason: e.target.value }))} list={`mk-it-reason-${kind}`} placeholder="선택하거나 직접 입력" />
@@ -4580,6 +4605,12 @@ function ItAssetDrawer({ asset, it, readOnly, canLabel, dir, onClose, onEdit, on
   const tl = [...hist.map((h) => ({ t: "h", d: h.ChangeDate || "", h })), ...scans.map((s) => ({ t: "s", d: mkItKst(s.Created).slice(0, 10), s }))].sort((x, y) => String(y.d).localeCompare(String(x.d)));
   const d = dir && a.AssigneeEmail ? dir.map.get(String(a.AssigneeEmail).toLowerCase()) : null;
   const missing = !!(dir && dir.ready && a.AssigneeEmail && !d);
+  const mailFix = mkItMailFix(a.AssigneeEmail, dir);
+  // 지금 사용자의 지급 이력이 없으면(가져온 원장에만 있는 지급) 원장의 지급일을 회색으로 보여 준다 — 기록이 아니라 표시만
+  const curPk = mkItPk(a.AssigneeEmail, a.Assignee);
+  const hasIssue = hist.some((h) => ["Issue", "Replace", "Transfer"].includes(h.ChangeType) && mkItPk(h.PersonEmail, h.Person) === curPk);
+  const ledger = st === "Active" && curPk && !hasIssue ? { t: "l", d: a.AssignedDate || "" } : null;
+  if (ledger) { tl.push(ledger); tl.sort((x, y) => String(y.d).localeCompare(String(x.d))); }
   const rent = mkItRental(a);
   const actions = readOnly ? [] : st === "Active" ? [["Return", "반납", Undo2], ["Replace", "교체", ArrowLeftRight], ["Transfer", "사용자 변경", Users], ["Repair", "고장", Wrench]]
     : MK_IT_POOL.includes(st) ? [["Issue", "지급", PackagePlus], ["Repair", "고장", Wrench], ["Retire", "폐기", Archive]]
@@ -4609,7 +4640,7 @@ function ItAssetDrawer({ asset, it, readOnly, canLabel, dir, onClose, onEdit, on
           {st === "Active" && (a.Assignee || a.AssigneeEmail) ? (
             <div className="flex items-start gap-3">
               <div className="w-9 h-9 rounded-full flex items-center justify-center text-xs font-bold text-white shrink-0" style={{ background: MK_GROUP_TONE.it.main }}>{mkItInitials(a.Assignee || a.AssigneeEmail)}</div>
-              <div className="min-w-0 text-sm"><MkItPersonChip name={a.Assignee} email={a.AssigneeEmail} missing={missing} />
+              <div className="min-w-0 text-sm"><MkItPersonChip name={a.Assignee} email={a.AssigneeEmail} missing={missing} fix={mailFix} />
                 <div className="text-[11px] text-slate-400 mt-0.5">{[d && d.dept, a.AssignedDate && `지급 ${a.AssignedDate}`].filter(Boolean).join(" · ")}</div></div>
             </div>
           ) : <div className="text-sm text-slate-400">{MK_IT_STATES[st].ko} — 사용자 없음</div>}
@@ -4639,8 +4670,13 @@ function ItAssetDrawer({ asset, it, readOnly, canLabel, dir, onClose, onEdit, on
           <ol className="relative border-l border-slate-200 ml-1.5">
             {tl.map((x, i) => (
               <li key={i} className="ml-4 pb-3 last:pb-0">
-                <span className="absolute -left-[5px] mt-1.5 w-2.5 h-2.5 rounded-full border-2 border-white" style={{ background: x.t === "s" ? "#94A3B8" : (MK_IT_STATES[x.h.NewState] || {}).dot || MK_GROUP_TONE.it.main }} />
-                {x.t === "h" ? (
+                <span className="absolute -left-[5px] mt-1.5 w-2.5 h-2.5 rounded-full border-2 border-white" style={{ background: x.t !== "h" ? "#CBD5E1" : (MK_IT_STATES[x.h.NewState] || {}).dot || MK_GROUP_TONE.it.main }} />
+                {x.t === "l" ? (
+                  <div className="text-sm">
+                    <div className="flex items-center gap-2 flex-wrap"><span className="text-[11.5px] text-slate-400 tabular-nums">{x.d || "날짜 없음"}</span><span className="text-[10.5px] px-1.5 py-0.5 rounded border border-dashed border-slate-300 text-slate-500 leading-none">지급 · 원장 기준</span><span className="text-slate-500">{a.Assignee || a.AssigneeEmail}</span></div>
+                    <div className="text-[11px] text-slate-400 mt-0.5">가져온 자산 원장의 사용자 · 지급일입니다. 지급 이력 기록은 없습니다(이후 지급 · 반납 · 사용자 변경은 이력으로 남습니다).</div>
+                  </div>
+                ) : x.t === "h" ? (
                   <div className="text-sm">
                     <div className="flex items-center gap-2 flex-wrap"><span className="text-[11.5px] text-slate-400 tabular-nums">{x.h.ChangeDate}</span><MkItChangeBadge t={x.h.ChangeType} />
                       {x.h.Person && <span className="text-slate-700">{x.h.Person}</span>}{x.h.TicketNo && <span className="text-[11px] text-slate-400">Ticket {x.h.TicketNo}</span>}</div>
@@ -4722,6 +4758,9 @@ function ItAssetsTab({ it, reloadIt, readOnly, canLabel, onLabelTab }) {
         RentalEndDate: form.IsRental === true ? String(form.RentalEndDate || "").slice(0, 10) : "",
         RentalVendor: form.IsRental === true ? String(form.RentalVendor || "").trim() : "",
       };
+      // 수정 화면에서 사용자만 바꾸고 지급일을 그대로 두면 오늘을 지급일로(이전 사용자의 지급일이 남지 않게)
+      if (editing && assigned && mkItPk(fields.AssigneeEmail, fields.Assignee) && mkItPk(fields.AssigneeEmail, fields.Assignee) !== mkItPk(editing.AssigneeEmail, editing.Assignee)
+        && (!fields.AssignedDate || fields.AssignedDate === String(editing.AssignedDate || "").slice(0, 10))) fields.AssignedDate = mkTodayKst();
       if (fields.SerialNo) {
         const dup = assets.find((a) => String(a.SerialNo || "").toUpperCase() === fields.SerialNo.toUpperCase() && (!editing || String(a.id) !== String(editing.id)));
         if (dup && !confirm(`같은 시리얼(${fields.SerialNo})의 자산이 이미 있습니다 — ${dup.CICD || dup.Title}\n그래도 저장할까요?`)) { setBusy(false); return; }
@@ -4865,7 +4904,7 @@ function ItAssetsTab({ it, reloadIt, readOnly, canLabel, onLabelTab }) {
                       <div className="flex items-center gap-1.5 flex-wrap mt-0.5 text-[11px] text-slate-400">{[mkItTypeKo(a.AssetType), a.Hostname || a.PhoneNo].filter(Boolean).join(" · ")}
                         {r && <span className={`rounded-full px-2 py-0.5 whitespace-nowrap ${r.cls}`} title={a.RentalVendor ? `렌탈 업체: ${a.RentalVendor}` : undefined}>{r.text}{a.RentalVendor ? ` · ${a.RentalVendor}` : ""}</span>}</div></div></div></td>
                   <td className="px-3 py-2 text-xs font-mono">{a.SerialNo || <span className="text-slate-300">-</span>}</td>
-                  <td className="px-3 py-2 text-xs min-w-[10rem]">{a.Assignee || a.AssigneeEmail ? <MkItPersonChip name={a.Assignee} email={a.AssigneeEmail} missing={miss} /> : <span className="text-slate-300">-</span>}</td>
+                  <td className="px-3 py-2 text-xs min-w-[10rem]">{a.Assignee || a.AssigneeEmail ? <MkItPersonChip name={a.Assignee} email={a.AssigneeEmail} missing={miss} fix={mkItMailFix(a.AssigneeEmail, dir)} /> : <span className="text-slate-300">-</span>}</td>
                   <td className="px-3 py-2 text-xs"><div>{a.Location || "-"}</div>{(a.Lat == null || a.Lat === "") && <div className="text-[10.5px] text-slate-400">좌표 없음</div>}</td>
                   <td className="px-3 py-2 text-center"><MkItStateBadge a={a} /></td>
                   <td className="px-3 py-2 text-xs whitespace-nowrap">{s ? <><div className="text-slate-500">{mkItKst(s.Created).slice(0, 10)}</div><MkItStatus s={s.VerifyStatus} /></> : <span className="text-slate-300">없음</span>}</td>
@@ -5025,7 +5064,7 @@ function ItStockMoveModal({ kind, item, person, stock, holdings, onClose, onDone
       {kind === "Issue" && cur && mkItNum(f.qty) > avail && <div className="text-xs text-rose-600 -mt-2 mb-3">{f.source === "pool" ? "회수 재고" : "신품"}가 {avail}개뿐입니다</div>}
       <div className="grid grid-cols-2 gap-3">
         <Field label="처리일" required><input type="date" className={inputCls} value={f.date} onChange={(e) => setF((x) => ({ ...x, date: e.target.value }))} /></Field>
-        <Field label="티켓 번호"><input className={inputCls} value={f.ticket} onChange={(e) => setF((x) => ({ ...x, ticket: e.target.value }))} placeholder="선택" /></Field>
+        <Field label="티켓 번호"><input className={inputCls} value={f.ticket} onChange={(e) => setF((x) => ({ ...x, ticket: e.target.value }))} placeholder={mkItTicketEg()} /></Field>
       </div>
       <Field label="사유"><input className={inputCls} value={f.reason} onChange={(e) => setF((x) => ({ ...x, reason: e.target.value }))} list={`mk-it-sreason-${kind}`} placeholder="선택하거나 직접 입력" />
         <datalist id={`mk-it-sreason-${kind}`}>{(MK_IT_REASONS[kind] || []).map((r) => <option key={r} value={r} />)}</datalist></Field>
@@ -5091,8 +5130,9 @@ function ItOffboardModal({ person, stock, onClose, onDone }) {
         {!person.hold.length && <div className="text-xs text-slate-400 px-3 py-3">없음</div>}
       </div>
       {noStock.length > 0 && <div className="text-[11px] text-slate-400 -mt-2 mb-3">재고 품목과 이어지지 않은 기록({noStock.map((h) => h.key).join(", ")})은 「재고 · 액세서리」 에서 품목을 만든 뒤 반납할 수 있습니다.</div>}
-      <div className="grid grid-cols-3 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         <Field label="사유"><input className={inputCls} value={f.reason} onChange={(e) => setF((x) => ({ ...x, reason: e.target.value }))} list="mk-it-reason-Return" /></Field>
+        <Field label="티켓 번호"><input className={inputCls} value={f.ticket} onChange={(e) => setF((x) => ({ ...x, ticket: e.target.value }))} placeholder={mkItTicketEg()} /></Field>
         <Field label="처리일"><input type="date" className={inputCls} value={f.date} onChange={(e) => setF((x) => ({ ...x, date: e.target.value }))} /></Field>
         <Field label="자산 반납 후"><select className={inputCls} value={f.toState} onChange={(e) => setF((x) => ({ ...x, toState: e.target.value }))}><option value="In Pool">회수 재고</option><option value="Inoperable">고장</option></select></Field>
       </div>
@@ -5101,6 +5141,51 @@ function ItOffboardModal({ person, stock, onClose, onDone }) {
       <div className="flex justify-end gap-2 mt-4">
         <button onClick={onClose} className="px-4 py-2 text-sm border border-slate-300 rounded-lg">닫기</button>
         <button disabled={(!selA.size && !selH.size) || !!prog} onClick={go} className="px-4 py-2 text-sm rounded-lg text-white disabled:opacity-50" style={{ background: BRAND.accent }}>일괄 반납 ({selA.size + selH.size})</button>
+      </div>
+    </Modal>
+  );
+}
+
+// ---- 메일 주소 고치기 — 이 사람의 자산(사용자 메일) · 이력(사람 메일)을 한 번에 바꾼다 ----
+function ItMailFixModal({ person, dir, onClose, onDone }) {
+  const [mail, setMail] = useState(person.mailFix || person.email || "");
+  const [prog, setProg] = useState(null);
+  const nm = mail.trim().toLowerCase();
+  const valid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(nm) && nm !== person.email;
+  const inDir = dir && dir.ready ? dir.map.get(nm) : null;
+  const A = person.assets.filter((a) => String(a.AssigneeEmail || "").toLowerCase() === person.email);
+  const H = person.hist.filter((h) => String(h.PersonEmail || "").toLowerCase() === person.email);
+  async function go() {
+    const tasks = [...A.map((a) => ({ t: "a", x: a })), ...H.map((h) => ({ t: "h", x: h }))];
+    setProg({ done: 0, total: tasks.length, fail: [] }); const fail = [];
+    for (let i = 0; i < tasks.length; i++) {
+      const { t, x } = tasks[i];
+      try {
+        if (t === "a") await mkItAssetSave(x.id, { AssigneeEmail: nm });
+        else await mkItRetry(async () => mkUpdateItem(MK_LISTS.itHistory, x.id, await mkItFields(MK_LISTS.itHistory, { PersonEmail: nm })));
+      } catch (e) { fail.push(`${t === "a" ? x.CICD || x.Title : `이력 ${x.ChangeDate || x.id}`}: ${e.message}`); }
+      setProg({ done: i + 1, total: tasks.length, fail: [...fail] });
+    }
+    mkLog("IT 자산", "메일 수정", person.name || person.email, { info: { "이전 메일": person.email, "바꾼 메일": nm, 자산: A.length, 이력: H.length, 실패: fail.length } });
+    if (fail.length) alert(`일부 실패 ${fail.length}건:\n` + fail.slice(0, 8).join("\n"));
+    onDone(nm);
+  }
+  return (
+    <Modal title={`메일 주소 고치기 · ${person.name || person.email}`} onClose={onClose}>
+      <p className="text-xs text-slate-500 -mt-1 mb-3 leading-relaxed">원장에 잘못 적힌 메일을 바로잡습니다. 이 사람에게 지급된 자산의 사용자 메일과 변경 이력의 사람 메일이 함께 바뀌어, 직원 명부 · 사용자별 묶음이 맞게 이어집니다.</p>
+      <div className="grid grid-cols-1 gap-3">
+        <Field label="지금 메일"><div className="text-sm font-mono text-slate-600 break-all px-1">{person.email}</div></Field>
+        <Field label="바른 메일"><input className={inputCls} value={mail} onChange={(e) => setMail(e.target.value)} placeholder="name@hyosung.com" /></Field>
+      </div>
+      <div className="mt-2 text-[11.5px] min-h-[1.2em]">
+        {nm && !valid && nm !== person.email && <span className="text-red-600">메일 형식을 확인해 주세요</span>}
+        {valid && (inDir ? <span className="text-emerald-700">직원 명부에 있음 — {inDir.name}{inDir.dept ? ` · ${inDir.dept}` : ""}</span> : <span className="text-amber-700">직원 명부에 없는 메일입니다(외주 · 협력사라면 그대로 진행)</span>)}
+      </div>
+      <div className="mt-3 rounded-lg bg-slate-50 border border-slate-200 px-3 py-2 text-xs text-slate-600">바뀌는 것: 자산 {A.length}대 · 이력 {H.length}건</div>
+      {prog && <div className="mt-3"><div className="h-2 rounded-full bg-slate-100 overflow-hidden"><div className="h-full" style={{ width: `${(prog.done / Math.max(1, prog.total)) * 100}%`, background: MK_GROUP_TONE.it.main }} /></div><div className="text-[11px] text-slate-500 mt-1">{prog.done} / {prog.total}{prog.fail.length ? ` · 실패 ${prog.fail.length}` : ""}</div></div>}
+      <div className="flex justify-end gap-2 mt-4">
+        <button onClick={onClose} className="px-4 py-2 text-sm border border-slate-300 rounded-lg">닫기</button>
+        <button disabled={!valid || !!prog || !(A.length + H.length)} onClick={go} className="px-4 py-2 text-sm rounded-lg text-white disabled:opacity-50" style={{ background: BRAND.accent }}>메일 바꾸기</button>
       </div>
     </Modal>
   );
@@ -5117,6 +5202,7 @@ function ItPeopleTab({ it, reloadIt, readOnly, canLabel }) {
   const [move, setMove] = useState(null);     // { kind, asset? , person }
   const [smove, setSmove] = useState(null);   // { kind, person, item? }
   const [offb, setOffb] = useState(null);
+  const [mailFix, setMailFix] = useState(null);
   const [detailAsset, setDetailAsset] = useState(null);
   const list = useMemo(() => {
     let l = [...people.values()].filter((p) => p.assets.length || p.holdQty);
@@ -5126,11 +5212,12 @@ function ItPeopleTab({ it, reloadIt, readOnly, canLabel }) {
     }
     if (flt === "missing") l = l.filter((p) => p.missing);
     if (flt === "nomail") l = l.filter((p) => p.noMail);
+    if (flt === "typo") l = l.filter((p) => p.mailFix);
     const qq = q.trim().toLowerCase();
     if (qq) l = l.filter((p) => [p.name, p.email, p.dept, p.dirName, ...p.assets.map((a) => `${a.CICD} ${a.SerialNo} ${a.Title}`)].some((v) => String(v || "").toLowerCase().includes(qq)));
     return l.sort((x, y) => (y.missing - x.missing) || String(x.name || x.email).localeCompare(String(y.name || y.email)));
   }, [people, q, flt, dir.list]);
-  const cnt = useMemo(() => { const all = [...people.values()].filter((p) => p.assets.length || p.holdQty); return { all: all.length, missing: all.filter((p) => p.missing).length, nomail: all.filter((p) => p.noMail).length }; }, [people]);
+  const cnt = useMemo(() => { const all = [...people.values()].filter((p) => p.assets.length || p.holdQty); return { all: all.length, missing: all.filter((p) => p.missing).length, nomail: all.filter((p) => p.noMail).length, typo: all.filter((p) => p.mailFix).length }; }, [people]);
   const sel = selKey ? (people.get(selKey) || list.find((p) => p.key === selKey)) : null;
   const done = async (r) => { setMove(null); setSmove(null); setOffb(null); await reloadIt(); if (r && r.histOk === false && !it.histErr) alert("처리했습니다. 다만 변경 이력은 남기지 못했습니다(이력 목록 확인)."); };
   const typeCount = (p) => [["Notebook", Laptop], ["Docking Station", Cable], ["Mobile", Smartphone]].map(([t, I]) => [t, I, p.count(t)]).filter((x) => x[2]);
@@ -5143,7 +5230,8 @@ function ItPeopleTab({ it, reloadIt, readOnly, canLabel }) {
           <div className="min-w-0 flex-1">
             <div className="text-lg font-semibold text-slate-800 flex items-center gap-2 flex-wrap">{p.name || p.email}
               {p.missing && <span className="text-[11px] px-2 py-0.5 rounded-full bg-red-50 text-red-600 font-medium">명부 없음 · 퇴사 · 이동 확인</span>}
-              {p.noMail && <span className="text-[11px] px-2 py-0.5 rounded-full bg-amber-50 text-amber-800 font-medium">메일 미확인</span>}</div>
+              {p.noMail && <span className="text-[11px] px-2 py-0.5 rounded-full bg-amber-50 text-amber-800 font-medium">메일 미확인</span>}
+              {p.mailFix && <span className="text-[11px] px-2 py-0.5 rounded-full bg-amber-50 text-amber-800 font-medium" title="회사 메일 도메인과 1~2글자 다릅니다">메일 오타? → {p.mailFix}{p.fixInDir ? " (명부에 있음)" : ""}</span>}</div>
             <div className="text-xs text-slate-500 break-all">{[p.email, p.dept, p.dirName && p.dirName !== p.name ? `명부 이름 ${p.dirName}` : ""].filter(Boolean).join(" · ") || "메일 없음 — 기록의 이름으로만 묶었습니다"}</div>
           </div>
         </div>
@@ -5152,6 +5240,7 @@ function ItPeopleTab({ it, reloadIt, readOnly, canLabel }) {
             <button onClick={() => setMove({ kind: "Issue", person: { name: p.name, email: p.email } })} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm text-white" style={{ background: BRAND.accent }}><PackagePlus size={14} /> 자산 지급</button>
             <button disabled={it.stockErr || !stock.length} onClick={() => setSmove({ kind: "Issue", person: { name: p.name, email: p.email } })} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm border border-slate-300 bg-white hover:bg-slate-50 disabled:opacity-40"><Package size={14} /> 액세서리 지급</button>
             {(p.assets.length > 0 || p.hold.length > 0) && <button onClick={() => setOffb(p)} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm border border-slate-300 bg-white hover:bg-slate-50"><UserX size={14} /> 퇴사 · 일괄 반납</button>}
+            {p.email && <button onClick={() => setMailFix(p)} className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm border bg-white hover:bg-slate-50 ${p.mailFix ? "border-amber-400 text-amber-800" : "border-slate-300"}`}><Pencil size={14} /> 메일 고치기</button>}
             {canLabel && p.assets.some((a) => a.QrToken) && <button onClick={() => mkItPrintLabels(p.assets)} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm border border-slate-300 bg-white hover:bg-slate-50"><Printer size={14} /> 라벨 {p.assets.length}장</button>}
           </div>
         )}
@@ -5221,7 +5310,7 @@ function ItPeopleTab({ it, reloadIt, readOnly, canLabel }) {
             <div className="relative mb-2"><Search size={14} className="absolute left-2.5 top-2.5 text-slate-400" />
               <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="이름 · 메일 · 부서 · 시리얼 검색" className="w-full pl-8 pr-3 py-2 border border-slate-300 rounded-lg text-sm" /></div>
             <div className="flex flex-wrap gap-1.5">
-              {[["all", "전체", cnt.all], ["missing", "명부 없음", cnt.missing], ["nomail", "메일 미확인", cnt.nomail], ["nolaptop", "노트북 없는 직원", null]].map(([k, l, n]) => (
+              {[["all", "전체", cnt.all], ["missing", "명부 없음", cnt.missing], ["nomail", "메일 미확인", cnt.nomail], ...(cnt.typo ? [["typo", "메일 오타?", cnt.typo]] : []), ["nolaptop", "노트북 없는 직원", null]].map(([k, l, n]) => (
                 <button key={k} onClick={() => setFlt(k)} disabled={k === "nolaptop" && !dir.ready} className={`text-[11.5px] rounded-full px-2.5 py-1 border disabled:opacity-40 ${flt === k ? "text-white" : "bg-white text-slate-600 border-slate-200"}`}
                   style={flt === k ? { background: k === "missing" ? "#DC2626" : MK_GROUP_TONE.it.main, borderColor: "transparent" } : {}}>{l}{n != null ? ` ${n}` : ""}</button>
               ))}
@@ -5239,7 +5328,7 @@ function ItPeopleTab({ it, reloadIt, readOnly, canLabel }) {
                   {typeCount(p).map(([t, I, n]) => <span key={t} className="inline-flex items-center gap-0.5" title={mkItTypeKo(t)}><I size={12} />{n}</span>)}
                   {others(p) > 0 && <span className="inline-flex items-center gap-0.5" title="기타 자산"><Boxes size={12} />{others(p)}</span>}
                   {p.holdQty > 0 && <span className="inline-flex items-center gap-0.5" title="액세서리"><Package size={12} />{p.holdQty}</span>}
-                  {p.missing && <span className="w-1.5 h-1.5 rounded-full bg-red-500" title="명부 없음" />}
+                  {p.missing && <span className={`w-1.5 h-1.5 rounded-full ${p.mailFix ? "bg-amber-500" : "bg-red-500"}`} title={p.mailFix ? "메일 오타 의심" : "명부 없음"} />}
                 </div>
               </button>
             ))}
@@ -5263,6 +5352,7 @@ function ItPeopleTab({ it, reloadIt, readOnly, canLabel }) {
       {move && <ItMoveModal kind={move.kind} asset={move.asset} person={move.person} assets={assets} onClose={() => setMove(null)} onDone={done} />}
       {smove && <ItStockMoveModal kind={smove.kind} item={smove.item} person={smove.person} stock={stock} holdings={sel ? sel.hold : null} onClose={() => setSmove(null)} onDone={done} />}
       {offb && <ItOffboardModal person={offb} stock={stock} onClose={() => setOffb(null)} onDone={done} />}
+      {mailFix && <ItMailFixModal person={mailFix} dir={dir} onClose={() => setMailFix(null)} onDone={async (nm) => { setMailFix(null); await reloadIt(); setSelKey(nm); }} />}
       {detailAsset && <ItAssetDrawer asset={assets.find((a) => a.id === detailAsset.id) || detailAsset} it={it} readOnly={readOnly} canLabel={canLabel} dir={dir} onClose={() => setDetailAsset(null)} onEdit={null} onDelete={null}
         onMove={(k, a) => { setDetailAsset(null); setMove({ kind: k, asset: a }); }} />}
     </div>
@@ -5663,12 +5753,15 @@ function mkItImpAsset(r) {
 }
 // 계획 — 쓰기 전에 무엇이 생기고 바뀌는지
 function mkItImportPlan(book, it, mode) {
-  const plan = { assets: { create: [], update: [], same: 0, skip: [] }, stock: { create: [], update: [], same: 0, skip: [] }, hist: { create: [], skip: 0, bad: [] }, issues: book.issues || [] };
+  const plan = { assets: { create: [], update: [], same: 0, skip: [] }, stock: { create: [], update: [], same: 0, skip: [] }, hist: { create: [], skip: 0, bad: [] }, issues: [...(book.issues || [])] };
+  // 회사 메일 도메인 오타(hyoung.com · yosung.com 등)는 고쳐서 넣고, 확인 필요 항목에 남긴다
+  const fixMail = (e, where) => { const fx = mkItMailFix(e, null); if (!fx) return e; plan.issues.push({ 구분: "메일 오타 고침", 위치: where, 내용: `${e} → ${fx}` }); return fx; };
   const bySn = new Map(), byKey = new Map();
   it.assets.forEach((a) => { if (a.SerialNo) bySn.set(String(a.SerialNo).trim().toUpperCase(), a); if (a.SourceKey) byKey.set(String(a.SourceKey).trim(), a); });
   const seen = new Set();
   (book.assets || []).forEach((r, i) => {
     const f = mkItImpAsset(r); const row = i + 2;
+    if (f.AssigneeEmail) f.AssigneeEmail = fixMail(f.AssigneeEmail, `Assets ${row}행`);
     const id = f.SerialNo ? "S:" + f.SerialNo : f.SourceKey ? "K:" + f.SourceKey : "";
     if (!id || !f.Title) { plan.assets.skip.push({ row, why: !f.Title ? "Title(설명) 없음" : "시리얼 · SourceKey 둘 다 없음" }); return; }
     if (seen.has(id)) { plan.assets.skip.push({ row, why: `파일 안 중복(${f.SerialNo || f.SourceKey})` }); return; }
@@ -5711,7 +5804,7 @@ function mkItImportPlan(book, it, mode) {
   (book.hist || []).forEach((r, i) => {
     const h = {}; MK_IT_IMP_HIST.forEach((k) => { const v = String(r[k] == null ? "" : r[k]).trim(); if (v !== "") h[k] = v; });
     if (!h.ChangeType || !(h.SerialNo || h.StockKey || h.ItemType || h.Model)) { plan.hist.bad.push({ row: i + 2, why: "구분 또는 대상 없음" }); return; }
-    h.ChangeDate = mkItImpDate(h.ChangeDate); if (h.SerialNo) h.SerialNo = h.SerialNo.toUpperCase(); if (h.PersonEmail) { h.PersonEmail = h.PersonEmail.toLowerCase(); if (!MK_IT_EMAIL_RE.test(h.PersonEmail)) delete h.PersonEmail; }
+    h.ChangeDate = mkItImpDate(h.ChangeDate); if (h.SerialNo) h.SerialNo = h.SerialNo.toUpperCase(); if (h.PersonEmail) { h.PersonEmail = h.PersonEmail.toLowerCase(); if (!MK_IT_EMAIL_RE.test(h.PersonEmail)) delete h.PersonEmail; else h.PersonEmail = fixMail(h.PersonEmail, `History ${i + 2}행`); }
     h.Kind = h.Kind === "Stock" ? "Stock" : "Asset"; if (h.Qty != null) h.Qty = mkItNum(h.Qty);
     if (!h.ImportKey) h.ImportKey = mkItHash(["ChangeDate", "Kind", "ItemType", "Model", "SerialNo", "ChangeType", "Person", "Reason", "Note", "Source"].map((k) => h[k] || "").join("|"));
     if (have.has(h.ImportKey)) { plan.hist.skip++; return; }
