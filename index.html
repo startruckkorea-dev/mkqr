@@ -3885,11 +3885,79 @@ const MK_IT_STATUS = {
   "GPS거부": "bg-slate-200 text-slate-600", "위치미등록": "bg-blue-50 text-blue-700",
 };
 // 목록에 없는 열은 빼고 쓴다 — 열이 하나 빠져 있어도 저장 전체가 실패하지 않게(기존 규칙과 같음)
-async function mkItFields(listName, fields) {
-  let cols = null; try { cols = await getMkListColumnNames(listName); } catch (e) {}
-  if (!cols) return fields;
-  const out = {}; Object.keys(fields).forEach((k) => { if (cols.has(k)) out[k] = fields[k]; });
+// 10-23: 열 형식까지 맞춰 쓴다 — SharePoint 에서 손으로 만든 열이 기대와 다른 형식(예: 숫자 칸을 텍스트로, 날짜 칸을 날짜로)이면
+// Graph 가 500 generalException 으로 저장 전체를 거절하므로, 실제 열 형식에 맞게 값을 바꿔 보낸다.
+// 사람 · 조회 · 계산 열처럼 글자로 쓸 수 없는 열은 빼고(_skipped 에 남김), 화면이 기대하는 형식과 다르면 IT 자산 관리 화면에 안내한다.
+const _mkColDefs = {};
+async function getMkListColumnDefs(listName) {
+  if (_mkColDefs[listName]) return _mkColDefs[listName];
+  const token = await getGraphToken();
+  const listId = await getMkListId(listName);
+  const res = await apiGet(`/sites/${_siteId}/lists/${listId}/columns`, token);
+  const m = new Map();
+  (res.value || []).forEach((c) => {
+    const type = c.text ? "text" : c.number ? "number" : c.boolean ? "boolean" : c.dateTime ? "dateTime" : c.choice ? "choice"
+      : c.personOrGroup ? "person" : c.lookup ? "lookup" : c.calculated ? "calculated" : c.currency ? "number" : "other";
+    m.set(c.name, { type, readOnly: !!c.readOnly, display: c.displayName || c.name });
+  });
+  _mkColDefs[listName] = m;
+  return m;
+}
+const MK_IT_COL_EXPECT = {   // 화면이 기대하는 열 형식 — 이 밖의 열은 한 줄 텍스트
+  mkqr_ITAssets: { Lat: "number", Lng: "number", VerifyRadiusM: "number", Active: "boolean", IsRental: "boolean", Note: "text", RentalEndDate: "text" },
+  mkqr_ITScans: { GpsLat: "number", GpsLng: "number", GpsAccuracy: "number", DistanceM: "number" },
+};
+const MK_COL_TYPE_KO = { text: "텍스트", number: "숫자", boolean: "예/아니요", dateTime: "날짜", choice: "선택", person: "사람", lookup: "조회", calculated: "계산", other: "기타" };
+// 기대와 다른 형식의 열 — [{ name, now, want }]. 텍스트를 기대하는 칸에 선택(choice) 열은 괜찮은 것으로 본다.
+async function mkItColumnIssues(listName) {
+  let defs; try { defs = await getMkListColumnDefs(listName); } catch (e) { return []; }
+  const exp = MK_IT_COL_EXPECT[listName] || {};
+  const names = listName === MK_LISTS.itAssets ? Object.keys(MK_IT_ASSET_LABELS).concat(["SerialNo", "AssetCode", "CICD", "QrToken"]) : Object.keys(exp);
+  const out = [];
+  [...new Set(names)].forEach((n) => {
+    const d = defs.get(n); if (!d) return;
+    const want = exp[n] || "text";
+    const ok = d.type === want || (want === "text" && d.type === "choice") || (n === "RentalEndDate" && d.type === "dateTime") || (n === "Note" && d.type === "text");
+    if (!ok) out.push({ name: n, now: d.type, want });
+  });
   return out;
+}
+function mkCoerce(v, type) {
+  const empty = v === "" || v == null;
+  if (type === "number") { if (empty) return null; const n = Number(v); return isFinite(n) ? n : null; }
+  if (type === "boolean") return v === true || v === 1 || v === "1" || String(v).toLowerCase() === "true";
+  if (type === "dateTime") {   // 한국 날짜 YYYY-MM-DD → 그날 00:00 KST
+    if (empty) return null; const d = String(v).slice(0, 10);
+    return /^\d{4}-\d{2}-\d{2}$/.test(d) ? new Date(Date.parse(d + "T00:00:00Z") - 9 * 36e5).toISOString() : null;
+  }
+  if (type === "choice") return empty ? null : String(v);
+  if (typeof v === "boolean") return v ? "Yes" : "No";
+  return empty ? "" : String(v);
+}
+async function mkItFields(listName, fields) {
+  let defs = null; try { defs = await getMkListColumnDefs(listName); } catch (e) {}
+  if (!defs) {   // 열 정보를 못 읽으면 예전처럼 이름만 걸러 본다
+    let cols = null; try { cols = await getMkListColumnNames(listName); } catch (e) {}
+    if (!cols) return fields;
+    const out = {}; Object.keys(fields).forEach((k) => { if (cols.has(k)) out[k] = fields[k]; });
+    return out;
+  }
+  const out = {}; const skipped = [];
+  Object.keys(fields).forEach((k) => {
+    const d = defs.get(k); if (!d) return;
+    if (d.readOnly || ["person", "lookup", "calculated", "other"].includes(d.type)) { if (fields[k] !== "" && fields[k] != null) skipped.push(`${k}(${MK_COL_TYPE_KO[d.type]})`); return; }
+    out[k] = mkCoerce(fields[k], d.type);
+  });
+  if (skipped.length) Object.defineProperty(out, "_skipped", { value: skipped, enumerable: false });
+  return out;
+}
+// 읽을 때 — 날짜 열로 만든 렌탈 종료일(UTC 시각)을 한국 날짜로, 텍스트 열로 만든 예/아니요 · 숫자를 화면이 쓰는 형식으로
+function mkItNormAsset(a) {
+  const o = { ...a };
+  if (o.RentalEndDate && String(o.RentalEndDate).includes("T")) o.RentalEndDate = new Date(Date.parse(o.RentalEndDate) + 9 * 36e5).toISOString().slice(0, 10);
+  ["IsRental", "Active"].forEach((k) => { if (typeof o[k] === "string") o[k] = /^(true|yes|1|예)$/i.test(o[k].trim()) ? true : /^(false|no|0|아니요)$/i.test(o[k].trim()) ? false : o[k]; });
+  ["Lat", "Lng", "VerifyRadiusM"].forEach((k) => { if (typeof o[k] === "string" && o[k].trim() !== "" && isFinite(Number(o[k]))) o[k] = Number(o[k]); });
+  return o;
 }
 // 화면 탭과 상관없이 쓰는 저장(스캔 기록 · 스캔 화면에서 위치 등록) — 권한은 부르는 쪽이 먼저 확인한다
 async function mkItWrite(fn) {
@@ -3903,7 +3971,7 @@ async function mkItLoad() {
     mkListAll(MK_LISTS.itScans, `&$filter=fields/Created ge '${since}'`).then((v) => ({ v }), (e) => ({ e })),
   ]);
   return {
-    assets: a.v ? a.v.map((x) => ({ id: x.id, ...x.fields })) : [],
+    assets: a.v ? a.v.map((x) => mkItNormAsset({ id: x.id, ...x.fields })) : [],
     scans: s.v ? s.v.map((x) => ({ id: x.id, ...x.fields, Created: x.fields.Created || x.createdDateTime })).sort((p, q) => String(q.Created).localeCompare(String(p.Created))) : [],
     err: a.e ? (a.e.message || String(a.e)) : "",
     scanErr: s.e ? (s.e.message || String(s.e)) : "",
@@ -4099,6 +4167,8 @@ function ItAssetsTab({ it, reloadIt, readOnly, canLabel, onLabelTab }) {
   const [q, setQ] = useState("");
   const [showInactive, setShowInactive] = useState(false);
   const [rentalOnly, setRentalOnly] = useState(false);
+  const [colIssues, setColIssues] = useState([]);
+  useEffect(() => { mkItColumnIssues(MK_LISTS.itAssets).then(setColIssues).catch(() => {}); }, []);
   const [sel, setSel] = useState(() => new Set());
   const lastScan = useMemo(() => { const m = {}; scans.forEach((s) => { const k = String(s.AssetId); if (!m[k]) m[k] = s; }); return m; }, [scans]);
   const qq = q.trim().toLowerCase();
@@ -4117,6 +4187,7 @@ function ItAssetsTab({ it, reloadIt, readOnly, canLabel, onLabelTab }) {
   async function save(form) {
     if (readOnly) return;
     setBusy(true);
+    let skippedCols = [];
     try {
       const num = (v) => (v === "" || v == null || isNaN(Number(v)) ? null : Number(v));
       const fields = {
@@ -4138,19 +4209,25 @@ function ItAssetsTab({ it, reloadIt, readOnly, canLabel, onLabelTab }) {
       if (editing && editing.id) {
         if (!editing.CICD) fields.CICD = mkItCicd(editing.id);          // 예전 저장에서 발행이 빠진 건 이번에 채운다
         if (!editing.QrToken) fields.QrToken = randomToken(12);
-        await mkUpdateItem(MK_LISTS.itAssets, editing.id, await mkItFields(MK_LISTS.itAssets, fields));
+        const body = await mkItFields(MK_LISTS.itAssets, fields); skippedCols = body._skipped || [];
+        await mkUpdateItem(MK_LISTS.itAssets, editing.id, body);
         mkLog("IT 자산", "수정", editing.CICD || fields.Title, { id: editing.id, changes: mkDiff({ ...editing, IsRental: editing.IsRental === true, RentalEndDate: editing.RentalEndDate || "", RentalVendor: editing.RentalVendor || "", AssigneeEmail: editing.AssigneeEmail || "" }, fields, MK_IT_ASSET_LABELS) });
       } else {
         fields.QrToken = randomToken(12);
-        const created = await mkCreateItem(MK_LISTS.itAssets, await mkItFields(MK_LISTS.itAssets, fields));
+        const body = await mkItFields(MK_LISTS.itAssets, fields); skippedCols = body._skipped || [];
+        const created = await mkCreateItem(MK_LISTS.itAssets, body);
         const cicd = mkItCicd(created.id);
-        try { await mkUpdateItem(MK_LISTS.itAssets, created.id, { CICD: cicd }); }
+        try { await mkUpdateItem(MK_LISTS.itAssets, created.id, await mkItFields(MK_LISTS.itAssets, { CICD: cicd })); }
         catch (e) { alert(`자산은 등록됐지만 CI CD 발행에 실패했습니다 — 다시 열어 저장하면 발행됩니다.\n(${e.message})`); }
         mkLog("IT 자산", "등록", cicd, { id: created.id, info: { Description: fields.Title, "Serial No.": fields.SerialNo, "Asset Code": fields.AssetCode, 위치: fields.Location, "사용자 · 담당": fields.AssigneeEmail ? `${fields.Assignee} (${fields.AssigneeEmail})` : fields.Assignee } });
       }
       setEditing(null);
       await reloadIt();
-    } catch (e) { alert(e.message); } finally { setBusy(false); }
+      if (skippedCols.length) alert(`저장했습니다. 다만 다음 열은 SharePoint 형식이 달라 값을 넣지 못했습니다: ${skippedCols.join(", ")}\n열을 「한 줄 텍스트」로 다시 만들면 저장됩니다.`);
+    } catch (e) {
+      const gen = /generalException|500/.test(e.message);
+      alert(gen ? `저장하지 못했습니다 — SharePoint 목록 ${MK_LISTS.itAssets} 의 열 형식이 맞지 않을 수 있습니다.\nIT 자산 관리 화면 위쪽 「열 형식 점검」 안내를 확인해 주세요.\n\n(${e.message.slice(0, 300)})` : e.message);
+    } finally { setBusy(false); }
   }
   async function remove(a) {
     if (readOnly) return;
@@ -4178,6 +4255,15 @@ function ItAssetsTab({ it, reloadIt, readOnly, canLabel, onLabelTab }) {
   return (
     <div className="w-full">
       {busy && <BlockingOverlay message="저장하는 중입니다…" />}
+      {colIssues.length > 0 && (
+        <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-900">
+          <div className="font-semibold mb-1 flex items-center gap-1.5"><AlertTriangle size={13} /> 열 형식 점검 — {MK_LISTS.itAssets} 목록에 화면이 기대하는 형식과 다른 열이 있습니다</div>
+          <div className="flex flex-wrap gap-1.5 mt-1.5">
+            {colIssues.map((c) => <span key={c.name} className="rounded-md bg-white border border-amber-200 px-2 py-0.5"><b className="font-mono">{c.name}</b> 지금 {MK_COL_TYPE_KO[c.now]} → <b>{MK_COL_TYPE_KO[c.want]}</b> 권장</span>)}
+          </div>
+          <div className="mt-1.5 text-amber-800">저장은 열 형식에 맞춰 바꿔 보내지만, 사람 · 조회 · 계산 열은 값을 넣을 수 없습니다. 열을 지우고 권장 형식으로 같은 이름으로 다시 만들어 주세요.</div>
+        </div>
+      )}
       <div className="mb-4 flex items-center justify-between flex-wrap gap-2">
         <div className="flex items-center gap-3 flex-wrap">
           <div className="relative w-full sm:w-auto">
@@ -4414,7 +4500,7 @@ function ItScanModal({ token, onClose, canEditAssets, onDone, userEmail, userNam
     try {
       const fields = { Lat: Number(gps.lat.toFixed(6)), Lng: Number(gps.lng.toFixed(6)) };
       if (!(Number(asset.VerifyRadiusM) > 0)) fields.VerifyRadiusM = MK_IT_RADIUS_DEFAULT;
-      await mkItWrite(() => mkUpdateItem(MK_LISTS.itAssets, asset.id, fields));
+      await mkItWrite(async () => mkUpdateItem(MK_LISTS.itAssets, asset.id, await mkItFields(MK_LISTS.itAssets, fields)));
       mkLog("IT 자산", "위치 등록(스캔)", asset.CICD || asset.Title, { id: asset.id, changes: mkDiff(asset, fields, MK_IT_ASSET_LABELS) });
       setState((s) => ({ ...s, asset: { ...s.asset, ...fields }, registered: true }));
       if (onDone) onDone();
