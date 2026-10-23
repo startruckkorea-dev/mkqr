@@ -2688,7 +2688,7 @@ function CheckInDetailModal({ row, onClose }) {
 /* ------------------------------------------------------------------ */
 /* Overview 탭                                                         */
 /* ------------------------------------------------------------------ */
-function OverviewTab({ centers, agents, agentsError, checkins, admins, setTab, introText, canAccess, rangeLabel }) {
+function OverviewTab({ centers, agents, agentsError, checkins, admins, setTab, introText, canAccess, rangeLabel, it, itLoading }) {
   // 10-09(mkqr-ui4): 센터(Marketing) · Agent(HR · GA) 를 각자의 구역으로 나눈다 — 구역마다 색 하나(센터 청록 · Agent 남청),
   // 머리(이름 · 담당 · 바로가기) → 숫자 3칸 → 최근 기록 | 순위. 검증필요는 센터에만 있는 판정이라 센터 구역 안에 둔다.
   // 권한에 따라 보일 것만 — 센터/Agent 수(관리) · 체크인 수치와 목록(각 체크인 기록) · 관리자(카테고리 접근 권한)
@@ -2715,15 +2715,15 @@ function OverviewTab({ centers, agents, agentsError, checkins, admins, setTab, i
         <div className="w-6 h-6 rounded-md flex items-center justify-center shrink-0" style={{ background: tint }}><Icon size={13} /></div>
         <span className="font-semibold text-[13px] whitespace-nowrap">{title}</span>
         <span className="text-[10px] px-1.5 py-px rounded-full bg-white/10 text-white/70 whitespace-nowrap">{tag}</span>
-        <span className="ml-auto hidden 2xl:block text-[10.5px] text-white/45 truncate">{chips.join(" · ")}</span>
+        {!showIt && <span className="ml-auto hidden 2xl:block text-[10.5px] text-white/45 truncate">{chips.join(" · ")}</span>}
       </div>
       <p className="text-[12px] text-white/65 leading-snug mt-1.5">{desc}</p>
     </div>
   );
 
   // 구역 하나 — color: 구역 색, links: [탭, 권한, 이름], stats: [이름, 값, 덧붙임, {warn, tab}], left/right: 아래 두 칸
-  const Section = ({ color, soft, icon: Icon, title, group, desc, links, stats, left, right }) => (
-    <section className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden flex flex-col">
+  const Section = ({ color, soft, icon: Icon, title, group, desc, links, stats, left, right, panes, wide }) => (
+    <section className={`bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden flex flex-col ${wide ? "2xl:col-span-2" : ""}`}>
       <div className="h-1" style={{ background: color }} />
       <div className="px-5 pt-4 pb-3 flex items-start gap-3 flex-wrap">
         <div className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0" style={{ background: soft }}><Icon size={19} style={{ color }} /></div>
@@ -2744,10 +2744,10 @@ function OverviewTab({ centers, agents, agentsError, checkins, admins, setTab, i
         </div>
       </div>
       {stats.length > 0 && (
-        <div className={`grid border-y border-slate-100 ${stats.length === 3 ? "grid-cols-3" : stats.length === 2 ? "grid-cols-2" : "grid-cols-1"}`}>
+        <div className={`grid border-y border-slate-100 ${stats.length === 4 ? "grid-cols-2 md:grid-cols-4" : stats.length === 3 ? "grid-cols-3" : stats.length === 2 ? "grid-cols-2" : "grid-cols-1"}`}>
           {stats.map(([label, value, suffix, opt = {}], i) => (
             <button key={label} onClick={() => opt.tab && setTab(opt.tab)} disabled={!opt.tab}
-              className={`text-left px-5 py-3.5 transition-colors ${i ? "border-l border-slate-100" : ""} ${opt.tab ? "hover:bg-slate-50" : "cursor-default"}`}
+              className={`text-left px-5 py-3.5 transition-colors ${stats.length === 4 ? `${i % 2 ? "border-l" : ""} ${i >= 2 ? "border-t md:border-t-0" : ""} ${i === 2 ? "md:border-l" : ""} border-slate-100` : i ? "border-l border-slate-100" : ""} ${opt.tab ? "hover:bg-slate-50" : "cursor-default"}`}
               style={opt.warn ? { background: "#FFFBEB" } : undefined}>
               <div className="text-[11.5px] text-slate-500 flex items-center gap-1">{opt.warn && <AlertTriangle size={12} className="text-amber-500" />}{label}</div>
               <div className="text-2xl font-bold mt-0.5 tabular-nums" style={{ color: opt.warn ? "#B45309" : "#1E293B" }}>
@@ -2755,6 +2755,11 @@ function OverviewTab({ centers, agents, agentsError, checkins, admins, setTab, i
               </div>
             </button>
           ))}
+        </div>
+      )}
+      {panes && (
+        <div className="grid grid-cols-1 lg:grid-cols-3 flex-1">
+          {panes.map((pn, i) => <div key={i} className={`min-w-0 ${i ? "border-t lg:border-t-0 lg:border-l border-slate-100" : ""}`}>{pn}</div>)}
         </div>
       )}
       {(left || right) && (
@@ -2847,31 +2852,115 @@ function OverviewTab({ centers, agents, agentsError, checkins, admins, setTab, i
   const showCenter = ["centers", "qr", "checkins"].some(can);
   const showAgent = ["agents", "agentQr", "agentCheckins"].some(can);
 
+  // 10-23(mkqr-it): IT 자산 QR 구역 — IT 권한이 있는 사람에게만(권한 없는 사람에게는 자리 카드도 두지 않는다 · IT 내부 업무)
+  const IT = MK_GROUP_TONE.it;
+  const showIt = !!it && ["itAssets", "itQr", "itScans"].some(can);
+  const itReady = showIt && it.loaded;
+  const itAssets = itReady ? it.assets : [];
+  const itActive = itAssets.filter((a) => a.Active !== false);
+  const it30 = itReady ? it.scans.filter((r) => Date.now() - new Date(r.Created || 0) <= 30 * 864e5) : [];
+  const itVerify = it30.filter((r) => r.VerifyStatus === "검증필요").length;
+  const itRentSoon = itActive.filter((a) => { const r = mkItRental(a); return r && r.days != null && r.days <= 30; });
+  const itRentals = itActive.filter((a) => a.IsRental === true).length;
+  // 확인이 필요한 자산 — 렌탈 만료(임박) · 마지막 스캔이 검증필요 · 좌표 미등록
+  const lastScanOf = {}; (itReady ? it.scans : []).forEach((r) => { const k = String(r.AssetId); if (!lastScanOf[k]) lastScanOf[k] = r; });   // scans 는 최신순
+  const itWatch = itActive.map((a) => {
+    const why = []; const r = mkItRental(a); const ls = lastScanOf[String(a.id)];
+    if (r && r.days != null && r.days <= 30) why.push({ t: r.days < 0 ? "렌탈 만료" : `렌탈 D-${r.days}`, cls: r.cls, w: r.days < 0 ? 0 : 1 });
+    if (ls && ls.VerifyStatus === "검증필요") why.push({ t: `위치 다름${ls.DistanceM != null ? ` ${Number(ls.DistanceM).toLocaleString()}m` : ""}`, cls: "bg-amber-50 text-amber-800", w: 2 });
+    if (a.Lat == null || a.Lat === "") why.push({ t: "좌표 미등록", cls: "bg-blue-50 text-blue-700", w: 3 });
+    return why.length ? { a, why, w: Math.min(...why.map((x) => x.w)) } : null;
+  }).filter(Boolean).sort((x, y) => x.w - y.w);
+  const itTypes = Object.values(itActive.reduce((m, a) => { const k = a.AssetType || "미분류"; (m[k] = m[k] || { name: k, n: 0, rent: 0 }).n++; if (a.IsRental === true) m[k].rent++; return m; }, {})).sort((x, y) => y.n - x.n).slice(0, 7);
+  const itMsg = !showIt ? "" : !it.loaded ? (itLoading ? "IT 자산 정보를 불러오는 중…" : "") : it.err ? "IT 자산 목록을 읽지 못했습니다 — 목록 설정을 확인해 주세요" : "";
+  const ItRecent = () => itMsg ? <Empty text={itMsg} /> : it.scanErr ? <Empty text="스캔 기록을 읽지 못했습니다" /> : it30.length ? (
+    <div className="pb-2">
+      {it30.slice(0, 8).map((r) => (
+        <div key={r.id} className="px-5 py-2 flex items-center justify-between gap-2 hover:bg-slate-50" title={`${r.ScannedByName || r.ScannedBy || ""}${r.DistanceM != null ? ` · 등록 위치에서 ${r.DistanceM}m` : ""}`}>
+          <div className="flex items-center gap-2 min-w-0">
+            <MkItStatus s={r.VerifyStatus} />
+            <span className="text-[13px] text-slate-700 truncate">{r.AssetTitle || "-"}</span>
+            <span className="hidden 2xl:inline font-mono text-[10.5px] text-slate-400 shrink-0">{r.CICD}</span>
+          </div>
+          <span className="text-[11.5px] text-slate-400 shrink-0 tabular-nums">{fmtDate(r.Created).slice(5)}</span>
+        </div>
+      ))}
+    </div>
+  ) : <Empty text="최근 30일 스캔 기록이 없습니다" />;
+  const ItWatch = () => itMsg ? <Empty text={itMsg} /> : itWatch.length ? (
+    <div className="pb-2">
+      {itWatch.slice(0, 8).map(({ a, why }) => (
+        <button key={a.id} onClick={() => setTab("itAssets")} className="w-full text-left px-5 py-2 flex items-center justify-between gap-2 hover:bg-slate-50">
+          <div className="min-w-0 flex items-center gap-2">
+            <span className="text-[13px] text-slate-700 truncate">{a.Title}</span>
+            <span className="hidden 2xl:inline font-mono text-[10.5px] text-slate-400 shrink-0">{a.CICD}</span>
+          </div>
+          <div className="flex items-center gap-1 shrink-0">{why.map((x) => <span key={x.t} className={`text-[10.5px] font-semibold rounded-full px-2 py-0.5 whitespace-nowrap ${x.cls}`}>{x.t}</span>)}</div>
+        </button>
+      ))}
+      {itWatch.length > 8 && <div className="px-5 pt-1 text-[11.5px] text-slate-400">외 {itWatch.length - 8}건</div>}
+    </div>
+  ) : (
+    <div className="flex flex-col items-center justify-center text-center py-9 px-4">
+      <div className="w-10 h-10 rounded-full flex items-center justify-center" style={{ background: IT.band }}><CheckCircle2 size={18} style={{ color: IT.main }} /></div>
+      <div className="mt-3 text-[13px] font-semibold text-slate-600">확인이 필요한 자산이 없습니다</div>
+      <div className="mt-0.5 text-[11.5px] text-slate-400">렌탈 만료 · 위치 다름 · 좌표 미등록 없음</div>
+    </div>
+  );
+  const ItTypes = () => {
+    if (itMsg) return <Empty text={itMsg} />;
+    if (!itTypes.length) return <Empty text="등록된 자산이 없습니다" />;
+    const max = itTypes[0].n;
+    return (
+      <div className="px-5 pb-4 pt-1 space-y-2.5">
+        {itTypes.map((t) => (
+          <div key={t.name}>
+            <div className="flex items-center justify-between text-[12.5px] mb-1">
+              <span className="text-slate-700 truncate">{t.name}</span>
+              <span className="text-slate-500 font-semibold tabular-nums ml-2">{t.n}대{t.rent ? <span className="font-normal text-slate-400"> · 렌탈 {t.rent}</span> : null}</span>
+            </div>
+            <div className="h-1.5 rounded-full bg-slate-100 overflow-hidden flex">
+              {t.n > t.rent && <div className="h-full" style={{ width: `${Math.max(4, ((t.n - t.rent) / max) * 100)}%`, background: IT.main }} />}
+              {t.rent > 0 && <div className="h-full" style={{ width: `${(t.rent / max) * 100}%`, background: IT.line }} />}
+            </div>
+          </div>
+        ))}
+        {itRentals > 0 && <div className="flex items-center gap-3 pt-1 text-[11px] text-slate-400">
+          <span className="flex items-center gap-1"><span className="w-2.5 h-1.5 rounded-full" style={{ background: IT.main }} />자산</span>
+          <span className="flex items-center gap-1"><span className="w-2.5 h-1.5 rounded-full" style={{ background: IT.line }} />렌탈</span>
+        </div>}
+      </div>
+    );
+  };
+
   return (
     <div className="w-full">
       <div className="rounded-2xl px-6 py-5 mb-6 text-white relative overflow-hidden" style={{ background: `linear-gradient(135deg, ${BRAND.navy}, #1A3A5C)` }}>
-        <div className="relative z-10 grid grid-cols-1 lg:grid-cols-5 gap-5 items-center">
-          <div className="lg:col-span-2">
+        <div className={`relative z-10 grid grid-cols-1 gap-5 items-center ${showIt ? "2xl:grid-cols-5" : "lg:grid-cols-5"}`}>
+          <div className={showIt ? "2xl:col-span-2" : "lg:col-span-2"}>
             <div className="flex items-center gap-2 mb-2">
               <div className="w-8 h-8 rounded-lg bg-white/10 flex items-center justify-center"><QrCode size={16} /></div>
               <h3 className="font-semibold">MKQR이란?</h3>
             </div>
             <p className="text-[13px] text-white/70 leading-relaxed">{introText}</p>
           </div>
-          <div className="lg:col-span-3 grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div className={`grid grid-cols-1 gap-3 ${showIt ? "2xl:col-span-3 sm:grid-cols-3" : "lg:col-span-3 sm:grid-cols-2"}`}>
             <Tile icon={QrCode} title="센터 QR" tag="방문 인증" tab="qr" cat="qr" tint="rgba(47,123,122,.45)"
               desc="캠페인 센터에 붙이는 QR — 시각 · GPS/IP 위치 · 기기를 기록하고 허용 반경 안인지 자동 판정합니다."
               chips={["GPS 반경 판정", "reCAPTCHA", "반복 접근 차단"]} />
             <Tile icon={Contact} title="Agent QR" tag="영업직원 명함" tab="agentQr" cat="agentQr" tint="rgba(99,135,190,.45)"
               desc="영업직원 명함에 넣는 QR — 위치를 묻지 않고 접속만 기록한 뒤 Agent별 링크로 바로 이동합니다."
               chips={["위치 확인 없음", "즉시 이동", "스캔 통계"]} />
+            {showIt && <Tile icon={Laptop} title="IT 자산 QR" tag="자산 라벨" tab="itQr" cat="itQr" tint="rgba(196,146,74,.45)"
+              desc="IT 자산에 붙이는 10×5cm 라벨 QR — CI CD 를 자동 발행하고, 스캔 위치를 등록 위치와 비교해 판정합니다."
+              chips={["CI CD 자동 발행", "GPS 위치 검증", "렌탈 만료 관리"]} />}
           </div>
         </div>
         <div className="absolute -right-6 -bottom-10 w-40 h-40 rounded-full bg-white/5" />
         <div className="absolute right-16 -top-10 w-24 h-24 rounded-full bg-white/5" />
       </div>
 
-      {(showCenter || showAgent) ? (
+      {(showCenter || showAgent || showIt) ? (
         <div className="grid grid-cols-1 gap-5 2xl:grid-cols-2">
           {showCenter ? (
             <Section color={BRAND.accent} soft={BRAND.accentSoft} icon={QrCode} title="센터 방문 인증" group="Marketing 전용"
@@ -2902,6 +2991,22 @@ function OverviewTab({ centers, agents, agentsError, checkins, admins, setTab, i
           ) : (
             <Locked icon={Contact} title="Agent 명함 QR" group="HR · GA 전용" desc="영업직원 명함 QR · 위치 확인 없이 바로 이동"
               need="HR · GA" labels={["활성 Agent", `스캔 · ${rangeLabel}`, "스캔한 기기"]} />
+          )}
+          {showIt && (
+            <Section wide color={IT.main} soft={IT.band} icon={Laptop} title="IT 자산 QR" group="IT 전용"
+              desc="IT 자산 라벨 QR · CI CD 자동 발행 · 스캔 위치 검증 · 렌탈 관리"
+              links={[["itAssets", "itAssets", "자산 관리"], ["itQr", "itQr", "QR 라벨"], ["itScans", "itScans", "스캔 기록"]]}
+              stats={[
+                ["활성 자산", itReady && !it.err ? itActive.length : "–", itReady && !it.err ? ` / ${itAssets.length}` : "", { tab: can("itAssets") ? "itAssets" : null }],
+                ["스캔 · 최근 30일", itReady && !it.scanErr ? it30.length : "–", itReady && !it.scanErr ? "건" : "", { tab: can("itScans") ? "itScans" : null }],
+                ["검증필요 · 최근 30일", itReady && !it.scanErr ? itVerify : "–", itReady && !it.scanErr ? "건" : "", { tab: can("itScans") ? "itScans" : null, warn: itVerify > 0 }],
+                ["렌탈 만료 · 30일 이내", itReady && !it.err ? itRentSoon.length : "–", itReady && !it.err ? "건" : "", { tab: can("itAssets") ? "itAssets" : null, warn: itRentSoon.length > 0 }],
+              ]}
+              panes={[
+                <><SubHead title="최근 스캔 · 30일" onAll={can("itScans") ? () => setTab("itScans") : null} /><ItRecent /></>,
+                <><SubHead title={`확인이 필요한 자산${itWatch.length ? ` · ${itWatch.length}` : ""}`} onAll={can("itAssets") ? () => setTab("itAssets") : null} /><ItWatch /></>,
+                <><SubHead title={`분류별 자산 · 활성 ${itActive.length}대`} /><ItTypes /></>,
+              ]} />
           )}
         </div>
       ) : (
@@ -3822,7 +3927,7 @@ function mkItJudge(asset, gps) {
   return { status: distM <= radius ? "정상" : "검증필요", distM, radius };
 }
 function MkItStatus({ s }) {
-  return <span className={`inline-block text-[11px] font-semibold rounded-full px-2 py-0.5 ${MK_IT_STATUS[s] || "bg-slate-100 text-slate-600"}`}>{s || "-"}</span>;
+  return <span className={`inline-block shrink-0 whitespace-nowrap text-[11px] font-semibold rounded-full px-2 py-0.5 ${MK_IT_STATUS[s] || "bg-slate-100 text-slate-600"}`}>{s || "-"}</span>;
 }
 function MkItListMissing({ error }) {
   return (
@@ -4534,7 +4639,8 @@ function App({ userEmail, userName }) {
   useEffect(() => {
     if (!loading && accessibleNav.length && !accessibleNav.some((n) => n.id === tab)) setTab(accessibleNav[0].id);
   }, [loading, myAccessRow]);
-  useEffect(() => { if (["itAssets", "itQr", "itScans"].includes(tab) && !it.loaded && !itLoading) reloadIt(); }, [tab]);
+  const canIt = !loading && ["itAssets", "itQr", "itScans"].some((k) => canAccess(k));
+  useEffect(() => { if ((["itAssets", "itQr", "itScans"].includes(tab) || (tab === "overview" && canIt)) && !it.loaded && !itLoading) reloadIt(); }, [tab, canIt]);
   // QR 스캔으로 들어온 경우(?asset=) — 첫 로딩이 끝나면 한 번 연다. IT 권한이 없으면 안내만.
   useEffect(() => {
     if (!hasLoadedOnce) return;
@@ -4714,7 +4820,7 @@ function App({ userEmail, userName }) {
         ) : (
           <>
             {canAccess("admins") && ["overview", "checkins", "agentCheckins"].includes(tab) && <CheckinStorageNotice />}
-            {tab === "overview" && <OverviewTab centers={centers} agents={agents} agentsError={agentsError} checkins={checkins} admins={admins} setTab={setTab} introText={uiContent.overviewIntro} canAccess={canAccess}
+            {tab === "overview" && <OverviewTab centers={centers} agents={agents} agentsError={agentsError} checkins={checkins} admins={admins} setTab={setTab} introText={uiContent.overviewIntro} canAccess={canAccess} it={canIt ? it : null} itLoading={itLoading}
               rangeLabel={checkinRange.mode === "custom" && checkinRange.from && checkinRange.to ? `${checkinRange.from.slice(5)}~${checkinRange.to.slice(5)}` : `최근 ${checkinRange.days || 7}일`} />}
             {tab === "centers" && <CentersTab centers={centers} reload={reload} onCreated={handleCenterCreated} readOnly={!canEdit("centers")} />}
             {tab === "qr" && <QrTab items={centers} kind="center" highlightId={highlightId} readOnly={!canEdit("qr")} />}
