@@ -5689,6 +5689,8 @@ function mkItImportPlan(book, it, mode) {
     // 사용자는 상태와 함께 — 채우기 모드에서 재고 자산에 사용자만 생기지 않게
     const finalState = patch.State || exState || mkItStateOf(ex);
     if (finalState !== "Active") { delete patch.Assignee; delete patch.AssigneeEmail; delete patch.AssignedDate; if (patch.State && (ex.Assignee || ex.AssigneeEmail)) Object.assign(patch, { Assignee: "", AssigneeEmail: "", AssignedDate: "" }); }
+    // 렌탈 업체 없이 「렌탈」 로 표시된 자산은 목록의 IsRental 기본값(예)으로 생긴 것으로 보고 해제한다(파일이 렌탈이라고 할 때만 유지)
+    if (ex.IsRental === true && !String(ex.RentalVendor || "").trim() && f.IsRental !== true) patch.IsRental = false;
     if (Object.keys(patch).length) plan.assets.update.push({ row, ex, patch }); else plan.assets.same++;
   });
   const byTitle = new Map((it.stock || []).map((s) => [String(s.Title).trim().toLowerCase(), s]));
@@ -5781,7 +5783,7 @@ function ItImportModal({ it, onClose, onDone }) {
     setRun({ phase: "자산", done: 0, total, errs: [] });
     if (use.assets) {
       const tasks = P.assets.create.map((x) => ({ label: `자산 ${x.row}행`, run: async () => {
-        const f = { ...x.f, QrToken: randomToken(12), VerifyRadiusM: MK_IT_RADIUS_DEFAULT, Active: x.f.State !== "Retired" };
+        const f = { ...x.f, IsRental: x.f.IsRental === true, QrToken: randomToken(12), VerifyRadiusM: MK_IT_RADIUS_DEFAULT, Active: x.f.State !== "Retired" };   // 예/아니요는 늘 값을 넣는다 — 목록 기본값에 맡기지 않음
         const r = await mkCreateItem(MK_LISTS.itAssets, await mkItFields(MK_LISTS.itAssets, f));
         const cicd = mkItCicd(r.id);
         await mkItRetry(async () => mkUpdateItem(MK_LISTS.itAssets, r.id, await mkItFields(MK_LISTS.itAssets, { CICD: cicd })));
