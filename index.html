@@ -5537,14 +5537,14 @@ function mkItReadKeySheets(wb) {
   });
   return { keys: out, keyBad: bad };
 }
-function mkItKeyPlan(rows, secList, assets, mode) {
+function mkItKeyPlan(rows, secList, assets, mode, fileSerials) {
   const p = { create: [], update: [], same: 0, skip: [], noAsset: 0 };
   const bySn = new Map(secList.map((s) => [String(s.SerialNo || s.Title || "").trim().toUpperCase(), s]));
   const asn = new Map(assets.filter((a) => a.SerialNo).map((a) => [String(a.SerialNo).toUpperCase(), a]));
   const seen = new Set();
   rows.forEach((r, i) => {
     if (seen.has(r.SerialNo)) { p.skip.push({ row: i + 1, why: `파일 안 중복(${r.SerialNo})` }); return; } seen.add(r.SerialNo);
-    const a = asn.get(r.SerialNo); if (!a) p.noAsset++;
+    const a = asn.get(r.SerialNo); if (!a && !(fileSerials && fileSerials.has(r.SerialNo))) p.noAsset++;   // 같은 파일의 Assets 에 있으면 가져오며 연결된다
     const ex = bySn.get(r.SerialNo);
     const f = { Title: r.SerialNo, SerialNo: r.SerialNo, AssetId: a ? String(a.id) : "", Hostname: r.Hostname || (a && a.Hostname) || "", Model: r.Model || (a && a.Model) || "", Owner: r.Owner, RecoveryKey: r.RecoveryKey, Note: r.Note, Source: "import" };
     if (!ex) { p.create.push({ f }); return; }
@@ -5759,7 +5759,7 @@ function ItImportModal({ it, onClose, onDone }) {
   const [use, setUse] = useState({ assets: true, stock: !it.stockErr, hist: !it.histErr, keys: true });
   const [sec, setSec] = useState(null);   // 복구 키 목록(IT 전용) — 파일에 키가 있을 때만 읽는다
   useEffect(() => { if (book && book.has.keys && !sec) mkItSecLoad().then(setSec); }, [book]);
-  const keyPlan = useMemo(() => (book && book.has.keys && sec && !sec.err ? mkItKeyPlan(book.keys, sec.list, it.assets, mode) : null), [book, sec, mode, it]);
+  const keyPlan = useMemo(() => (book && book.has.keys && sec && !sec.err ? mkItKeyPlan(book.keys, sec.list, it.assets, mode, new Set((book.assets || []).map((r) => String(r.SerialNo || "").trim().toUpperCase()).filter(Boolean))) : null), [book, sec, mode, it]);
   const [run, setRun] = useState(null);       // { phase, done, total, errs }
   const [result, setResult] = useState(null);
   const [showIssues, setShowIssues] = useState(false);
