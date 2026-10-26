@@ -6386,6 +6386,9 @@ function App({ userEmail, userName }) {
 
   // 상단 바 표시(ICS 와 같은 2줄) — 이름은 「홍길동 스타트럭코리아 IT(Gildong Hong)」 꼴이면 괄호 안 영문만, 없으면 이름 · 메일 순
   const shortName = (() => { const m = /\(([^()]+)\)\s*$/.exec(userName || ""); return (m ? m[1] : userName || userEmail || "").trim(); })();
+  // 내 자산(10-27) — 메일 없이 이름만 적힌 예전 자산을 찾을 때 쓰는 직원 명부의 영문 이름
+  const [myDirName, setMyDirName] = useState("");
+  useEffect(() => { loadEmployeeDirectory().then((d) => { const h = d.find((x) => x.email === (userEmail || "").toLowerCase()); if (h && h.name !== h.email) setMyDirName(h.name); }).catch(() => {}); }, [userEmail]);
   // 권한 — 볼 수 있는 화면 묶음으로 Viewer(개요만) · Operator(센터 · QR · 체크인 중 하나라도) · Admin(카테고리 접근 권한)
   // 10-09: 메뉴 묶음과 같게 Marketing · HR·GA · Admin, 아무것도 없으면 Viewer(개요만)
   const roleLabel = (() => {
@@ -6399,6 +6402,7 @@ function App({ userEmail, userName }) {
 
   const allNav = [
     { id: "overview", label: "Overview", icon: LayoutDashboard, cat: "overview" },
+    { id: "myAssets", label: "내 자산", icon: Laptop, cat: "overview" },   // 10-27 — 누구나(본인에게 지급된 IT 자산)
   ];
   const marketingNav = [   // Marketing 전용 — 캠페인 센터 방문 인증(10-09)
     { id: "centers", label: "센터 관리", icon: Building2, cat: "centers" },
@@ -6674,6 +6678,7 @@ function App({ userEmail, userName }) {
             {tab === "itAssets" && it.loaded && <ItAssetsTab it={it} reloadIt={reloadIt} readOnly={!canEdit("itAssets")} canLabel={canAccess("itQr")} onLabelTab={() => setTab("itQr")} />}
             {tab === "itQr" && it.loaded && <ItLabelTab it={it} />}
             {tab === "itScans" && it.loaded && <ItScansTab it={it} />}
+            {tab === "myAssets" && <MyAssetsPanel userEmail={(userEmail || "").toLowerCase()} userName={myDirName} />}
             {tab === "itPeople" && it.loaded && <ItPeopleTab it={it} reloadIt={reloadIt} readOnly={!canEdit("itAssets")} canLabel={canAccess("itQr")} />}
             {tab === "itStock" && it.loaded && <ItStockTab it={it} reloadIt={reloadIt} readOnly={!canEdit("itAssets")} />}
             {tab === "itHistory" && it.loaded && <ItHistoryTab it={it} />}
@@ -6703,6 +6708,155 @@ function App({ userEmail, userName }) {
           </div>
         </Modal>
       )}
+    </div>
+  );
+}
+
+/* ── 내 자산(10-27 · mkqr-mine) ─────────────────────────────────────────────────────────────
+   직원 누구나 본인에게 지급된 IT 자산을 본다 — mkqr_ITAssets 의 사용자 메일(AssigneeEmail)이 로그인 메일과 같은 자산.
+   메일 없이 이름(Assignee)만 적힌 예전 자산은 직원 명부의 영문 이름이 같을 때만 함께 보인다.
+   조회만 한다(지급 · 반납 · 교체는 IT 가 「사용자별 자산」 에서). 서버에서 내 메일 · 이름으로 걸러 받고, 화면에서도 한 번 더 거른다.
+   ※ 직원에게 mkqr_ITAssets 읽기 권한을 준다(10-27 결정 · 방법 1). BitLocker 복구 키 목록(mkqr_ITSecrets)은 읽지 않는다. */
+const MK_MINE_HIDE_STATES = ["Retired"];
+async function mkLoadMyAssets(email, name) {
+  const me = String(email || "").trim().toLowerCase();
+  const nm = String(name || "").trim();
+  const q = (v) => String(v).replace(/'/g, "''");
+  let rows;
+  try {
+    const parts = [mkListAll(MK_LISTS.itAssets, `&$filter=fields/AssigneeEmail eq '${q(me)}'`)];
+    if (nm) parts.push(mkListAll(MK_LISTS.itAssets, `&$filter=fields/Assignee eq '${q(nm)}'`));
+    const got = await Promise.all(parts);
+    const seen = new Set(); rows = [];
+    got.flat().forEach((it) => { if (!seen.has(it.id)) { seen.add(it.id); rows.push(it); } });
+  } catch (e) {
+    // 거르기 조회가 안 되는 환경(열 이름 · 색인)이면 전체를 읽어 화면에서 거른다(목록이 작아 가능)
+    console.warn("[MKQR] 내 자산 거르기 조회 실패 — 전체를 읽어 거릅니다:", e.message);
+    rows = await mkListAll(MK_LISTS.itAssets);
+  }
+  const nk = (v) => String(v || "").replace(/\s+/g, " ").trim().toLowerCase();
+  return rows.map((it) => ({ id: it.id, ...(it.fields || {}) }))
+    .filter((a) => {
+      const em = String(a.AssigneeEmail || "").trim().toLowerCase();
+      if (em) return em === me;
+      return !!nm && nk(a.Assignee) === nk(nm);
+    })
+    .filter((a) => !MK_MINE_HIDE_STATES.includes(mkItStateOf(a)))
+    .sort((x, y) => { const ti = (t) => { const i = MK_IT_TYPES.indexOf(t); return i < 0 ? 99 : i; };   // 노트북 · 도킹 · 모바일 … 순(IT 분류 순서)
+      return ti(x.AssetType) - ti(y.AssetType) || String(x.CICD || "").localeCompare(String(y.CICD || "")); });
+}
+function mkMineDday(d) {
+  const t = Date.parse(String(d || "").slice(0, 10) + "T00:00:00+09:00");
+  if (isNaN(t)) return null;
+  const today = Date.parse(new Date(Date.now() + 9 * 36e5).toISOString().slice(0, 10) + "T00:00:00+09:00");
+  return Math.round((t - today) / 864e5);
+}
+function MyAssetsPanel({ userEmail, userName }) {
+  const [list, setList] = useState(null);      // null = 읽는 중
+  const [err, setErr] = useState("");
+  const [label, setLabel] = useState(null);    // { a, html }
+  async function load() {
+    setErr(""); setList(null);
+    try { setList(await mkLoadMyAssets(userEmail, userName)); }
+    catch (e) { setErr(/\(403\)|accessDenied/.test(e.message) ? "IT 자산 목록을 읽을 권한이 없습니다 — IT 담당자에게 알려 주세요." : "내 자산을 불러오지 못했습니다: " + e.message); setList([]); }
+  }
+  useEffect(() => { load(); }, [userEmail, userName]);
+  async function showLabel(a) {
+    if (!a.QrToken) { setLabel({ a, html: "" }); return; }
+    try { setLabel({ a, html: mkItLabelHtml(a, await mkItQrData(a)) }); } catch (e) { setLabel({ a, html: "" }); }
+  }
+  const fmtD = (v) => (v ? String(v).slice(0, 10) : "-");
+  const row = (k, v) => (v ? <div className="flex gap-2 text-[12.5px] leading-6"><span className="w-20 shrink-0 text-slate-400">{k}</span><span className="text-slate-700 break-all">{v}</span></div> : null);
+  return (
+    <div data-my-assets>
+      <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
+        <div className="flex items-start gap-3">
+          <div className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0" style={{ background: BRAND.accentSoft }}><Laptop size={20} color={BRAND.accent} /></div>
+          <div>
+            <h1 className="text-xl font-semibold text-slate-800">내 자산</h1>
+            <p className="text-sm text-slate-500 mt-0.5">나에게 지급된 IT 자산입니다 — IT 가 등록한 지급 내역 기준(조회 전용)</p>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <button onClick={load} className="inline-flex items-center gap-1.5 text-xs font-medium px-3 py-2 rounded-lg border border-slate-200 bg-white text-slate-600 hover:border-teal-400 hover:text-teal-700"><RefreshCw size={13} /> 새로고침</button>
+          <a href={MK_ITSM_URL} target="_blank" rel="noreferrer" data-mine-ticket className="inline-flex items-center gap-1.5 text-xs font-semibold px-3 py-2 rounded-lg text-white" style={{ background: BRAND.accent }}><ExternalLink size={13} /> IT Ticket 으로 문의</a>
+        </div>
+      </div>
+      <div className="mb-4 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-xs text-slate-500 leading-relaxed">
+        고장 · 분실 · 교체 · 반납이 필요하거나 목록이 실제와 다르면 <b className="text-slate-700">IT Ticket</b> 으로 접수해 주세요(자산의 <b className="text-slate-700">CI CD</b> 를 함께 적어 주시면 빠릅니다). 충전기 · 케이블 같은 재고 품목은 여기에 나오지 않습니다.
+      </div>
+      {err && <div className="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700" data-mine-err>{err}</div>}
+      {list === null ? (
+        <div className="py-16 text-center text-sm text-slate-400">불러오는 중…</div>
+      ) : list.length === 0 ? (
+        !err && <div className="py-16 text-center text-sm text-slate-500 bg-white rounded-xl border border-slate-200" data-mine-empty>나에게 등록된 IT 자산이 없습니다.<br /><span className="text-xs text-slate-400">실제로 쓰고 있는 장비가 있으면 IT Ticket 으로 알려 주세요.</span></div>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4" data-mine-count={list.length}>
+          {list.map((a) => {
+            const dd = a.IsRental ? mkMineDday(a.RentalEndDate) : null;
+            return (
+              <div key={a.id} className="bg-white rounded-xl border border-slate-200 shadow-sm p-4 flex flex-col" data-mine-card={a.CICD || a.id}>
+                <div className="flex items-start justify-between gap-2 mb-2">
+                  <div className="min-w-0">
+                    <div className="text-[11px] text-slate-400">{a.AssetType || "IT 자산"}</div>
+                    <div className="text-[15px] font-semibold text-slate-800 leading-snug break-words">{a.Title || a.Model || "-"}</div>
+                  </div>
+                  <MkItStateBadge a={a} />
+                </div>
+                <div className="flex-1">
+                  {row("CI CD", a.CICD)}
+                  {row("모델", a.Model)}
+                  {row("시리얼", a.SerialNo)}
+                  {row("자산코드", a.AssetCode)}
+                  {row("Hostname", a.Hostname)}
+                  {row("지급일", a.AssignedDate ? fmtD(a.AssignedDate) : "")}
+                  {a.IsRental && row("렌탈", `${a.RentalVendor || "렌탈"} · 종료 ${fmtD(a.RentalEndDate)}${dd != null ? (dd >= 0 ? ` (D-${dd})` : ` (${-dd}일 지남)`) : ""}`)}
+                </div>
+                <div className="mt-3 pt-3 border-t border-slate-100 flex items-center justify-between gap-2">
+                  {a.IsRental && dd != null && dd <= 30 ? <span className="text-[11px] font-medium text-amber-700">렌탈 종료가 가까워요 — 반납 · 교체를 IT 와 상의해 주세요</span> : <span />}
+                  {a.QrToken && <button onClick={() => showLabel(a)} className="shrink-0 inline-flex items-center gap-1 text-xs text-slate-500 hover:text-slate-800" data-mine-label><QrCode size={13} /> 라벨 보기</button>}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+      {label && (
+        <div className="fixed inset-0 z-[80] flex items-center justify-center p-4" style={{ background: "rgba(15,23,42,.45)" }} onClick={() => setLabel(null)}>
+          <div className="bg-white rounded-2xl shadow-2xl p-5 max-w-[520px] w-full" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-3"><b className="text-sm text-slate-800">자산 라벨 · {label.a.CICD || ""}</b><button onClick={() => setLabel(null)} className="text-slate-400 hover:text-slate-700"><X size={16} /></button></div>
+            {label.html ? (<><style>{MK_IT_LABEL_CSS}</style><div className="flex justify-center bg-slate-100 rounded-lg p-4 overflow-x-auto" dangerouslySetInnerHTML={{ __html: label.html }} /></>)
+              : <div className="text-sm text-slate-500 py-6 text-center">이 자산은 아직 QR 라벨이 발행되지 않았습니다.</div>}
+            <p className="text-[11px] text-slate-400 mt-3">장비에 붙은 라벨과 같은지 확인용입니다. 라벨이 떨어지거나 훼손됐으면 IT Ticket 으로 재발행을 요청해 주세요.</p>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+/* 권한 표에 없는 직원 화면(10-27) — 직원 명부에 있는 사람은 「내 자산」 만 보는 간단한 화면으로 들어온다 */
+function MyAssetsOnlyApp({ userEmail, userName, dirName }) {
+  const nameShort = (() => { const mm = /\(([^()]+)\)\s*$/.exec(userName || ""); return (mm ? mm[1] : userName || userEmail || "").trim(); })();
+  return (
+    <div className="min-h-screen flex flex-col" style={{ background: "#F5F6F8" }} data-mine-only>
+      <div className="h-14 shrink-0 bg-white border-b border-slate-100 flex items-center justify-between gap-2 px-4 md:px-6">
+        <div className="flex items-center gap-2.5 min-w-0">
+          <div className="rounded-md px-2 py-1.5 border border-slate-200 bg-white"><img src={LOGO_SRC} alt="Star Truck Korea" style={{ height: 13, display: "block" }} /></div>
+          <span className="text-sm text-slate-400 hidden sm:inline">MKQR</span>
+          <ChevronRight size={13} className="text-slate-300 hidden sm:block" />
+          <span className="text-sm font-medium text-slate-700 whitespace-nowrap">내 자산</span>
+        </div>
+        <div className="flex items-center gap-2 md:gap-3 shrink-0">
+          <div className="leading-tight text-right hidden sm:block"><div className="text-sm text-slate-600">{nameShort}</div><div className="text-[11px] text-slate-400">{userEmail}</div></div>
+          <a href="https://aps.startruckkorea.com/" target="_self" className="text-xs font-medium text-slate-500 border border-slate-200 rounded-lg px-3 py-1.5 hover:border-teal-400 hover:text-teal-600 whitespace-nowrap">📬 돌아가기</a>
+          <button onClick={mkLogout} className="text-xs font-medium text-slate-500 border border-slate-200 rounded-lg px-3 py-1.5 hover:border-red-300 hover:text-red-500 whitespace-nowrap">로그아웃</button>
+        </div>
+      </div>
+      <div className="flex-1 overflow-y-auto p-4 md:p-6"><div className="max-w-[1200px] mx-auto">
+        {MK_ASSET_PENDING && <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-2.5 text-xs text-amber-800">스캔한 QR 은 Star Truck Korea IT 자산 라벨입니다. 자산 정보와 위치 기록은 IT 담당만 볼 수 있어, 여기서는 내 자산만 보여 드립니다.</div>}
+        <MyAssetsPanel userEmail={userEmail} userName={dirName} />
+      </div></div>
+      <div className="text-center text-[11px] text-slate-400 py-4">© 2026 Star Truck Korea · MKQR · 문의 {MK_IT_MAIL || "IT팀"}</div>
     </div>
   );
 }
@@ -6777,12 +6931,25 @@ async function mkBoot(account) {
   // 접속 기록(10-17) — 통과 · 차단 모두. 기다리지 않는다(기록이 늦거나 실패해도 첫 화면은 바로)
   // 구분: 카테고리 접근 권한(Access_admins) 이 있거나 아직 아무에게도 권한이 없는 처음 상태면 관리자, 그 밖의 통과는 운영자
   const meLower = (account.username || "").trim().toLowerCase();
-  const accRole = !isAdmin ? "" : (adminEmails.includes(meLower) || !_mkAnyAccess) ? "관리자" : "운영자";
+  // 10-27 권한 표에 없는 사람 — 직원 명부(employee_search.xlsx)에 있으면 「내 자산」 만 보는 화면으로 들인다. 명부를 못 읽거나 없으면 예전처럼 차단.
+  let mineOnly = null;
+  if (!isAdmin) {
+    try {
+      const dir = await loadEmployeeDirectory();
+      const hit = dir.find((d) => d.email === meLower);
+      if (hit) mineOnly = hit;
+    } catch (e) { console.warn("[MKQR] 직원 명부 조회 실패 — 내 자산 화면을 열지 않습니다:", e.message); }
+  }
+  const accRole = !isAdmin ? (mineOnly ? "직원(내 자산)" : "") : (adminEmails.includes(meLower) || !_mkAnyAccess) ? "관리자" : "운영자";
   MkSession.begin({ email: meLower, name: _mkLogUser.name || meLower, role: accRole });
-  if (isAdmin) MkSession.startTimers();
+  if (isAdmin || mineOnly) MkSession.startTimers();
   const loadingEl = document.getElementById("loading");
   if (loadingEl) loadingEl.remove();
   const rootEl = document.getElementById("root");
+  if (!isAdmin && mineOnly) {
+    createRoot(rootEl).render(<MyAssetsOnlyApp userEmail={meLower} userName={account.name || ""} dirName={mineOnly.name && mineOnly.name !== mineOnly.email ? mineOnly.name : ""} />);
+    return;
+  }
   if (!isAdmin) {
     createRoot(rootEl).render(<AccessDenied userEmail={account.username} adminEmails={adminEmails} />);
     return;
