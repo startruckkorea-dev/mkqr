@@ -4036,15 +4036,15 @@ const MK_IT_LABEL_CSS = `
 .mkl-v{flex:1;min-width:0;font-size:7.2pt;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .mkl-v.desc{white-space:normal;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;line-height:1.24;max-height:2.48em}
 .mkl-v.cicd{font-family:Consolas,'Courier New',monospace;letter-spacing:.02em}
-.mkl-r{flex:0 0 26mm;display:flex;flex-direction:column;align-items:center;padding-top:.3mm}
-.mkl-qr{width:26mm;height:26mm;display:block;image-rendering:pixelated}
-.mkl-cap{font-size:4.8pt;color:#475569;margin-top:.5mm;white-space:nowrap}
+.mkl-r{flex:0 0 22mm;display:flex;flex-direction:column;align-items:center;padding-top:1.6mm;margin-right:1.8mm}
+.mkl-qr{width:22mm;height:22mm;display:block;image-rendering:pixelated}
+.mkl-cap{font-size:4.6pt;color:#475569;margin-top:.6mm;white-space:nowrap}
 .mkl-ct{flex:0 0 auto;margin-top:.8mm;padding-top:.7mm;border-top:.2mm solid #CBD5E1;font-size:5pt;line-height:1.2;color:#334155;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .mkl-ct b{color:#0F172A;font-weight:700}
 `;
 function mkItLabelHtml(a, qrDataUrl) {
   const e = (s) => String(s == null || s === "" ? "-" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-  // 10-26: QR 을 위로 붙여 26mm 로 줄이고, 분실 · 습득 연락 문구는 라벨 아래 전체 폭 한 줄로
+  // 10-26: QR 을 22mm 로 줄여 위 · 오른쪽 가장자리에서 띄우고(위 약 3.9mm · 오른쪽 약 4.8mm), 분실 · 습득 연락 문구는 라벨 아래 전체 폭 한 줄로
   return `<div class="mkl"><div class="mkl-top"><div class="mkl-l"><img class="mkl-logo" src="${LOGO_SRC}" alt="">` +
     `<div class="mkl-po">Property of Star Truck Korea</div>` +
     `<div class="mkl-row"><span class="mkl-k">Description:</span><span class="mkl-v desc">${e(a.Title)}</span></div>` +
