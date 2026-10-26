@@ -109,7 +109,7 @@ import {
   Download, RefreshCw, MapPin, Search, CheckCircle2, AlertTriangle,
   Upload, ExternalLink, Phone, Navigation, LayoutDashboard, ShieldCheck,
   ArrowUpRight, ImagePlus, KeyRound, Mail, XCircle, Settings, ChevronDown, ChevronUp, Store, Contact, History,
-  ArrowLeftToLine, ArrowRightFromLine, Menu, LockKeyhole, Eye, Check, LogIn,
+  ArrowLeftToLine, ArrowRightFromLine, Menu, LockKeyhole, Eye, Check, LogIn, Home,
   Laptop, Printer, ScanLine, LocateFixed,
   Users, Package, ArrowLeftRight, Undo2, Wrench, FileSpreadsheet, ChevronRight, Smartphone, Cable, Boxes, UserX, Archive, PackagePlus,
 } from "lucide-react";
@@ -6493,7 +6493,8 @@ function App({ userEmail, userName }) {
           : { background: BRAND.navy, width: railCollapsed ? 72 : 256 }}>
         {railCollapsed ? (
           <div className="pt-5 pb-4 flex justify-center">
-            <div className="w-10 h-10 bg-white rounded-lg flex items-center justify-center text-[11px] font-extrabold tracking-tight select-none" style={{ color: BRAND.navy }} title="Star Truck Korea · MKQR">STK</div>
+            <button type="button" onClick={() => { setSideTip(null); setTab("overview"); }} data-home-logo aria-label="Overview 로"
+              className="w-10 h-10 bg-white rounded-lg flex items-center justify-center text-[11px] font-extrabold tracking-tight select-none hover:opacity-90 transition-opacity" style={{ color: BRAND.navy }} title="Star Truck Korea · MKQR — Overview 로">STK</button>
           </div>
         ) : (
           <div className="px-4 pt-5 pb-4 relative" style={{ width: 256, paddingRight: isMobile ? 48 : undefined }}>
@@ -6503,33 +6504,41 @@ function App({ userEmail, userName }) {
                 <X size={16} />
               </button>
             )}
-            <div className="bg-white rounded-lg px-3 py-2 flex items-center justify-center">
+            {/* 10-27 로고를 누르면 Overview 로(Training365 · ICS 와 같게) */}
+            <button type="button" onClick={() => { setTab("overview"); if (isMobile) setDrawerOpen(false); }} data-home-logo title="Overview 로" aria-label="Star Truck Korea — Overview 로"
+              className="w-full bg-white rounded-lg px-3 py-2 flex items-center justify-center hover:opacity-90 transition-opacity">
               <img src={LOGO_SRC} alt="Star Truck Korea" style={{ width: "100%", height: "auto", display: "block" }} />
-            </div>
+            </button>
             <p className="text-[13px] font-medium text-slate-300 tracking-tight mt-3 text-center whitespace-nowrap">MKQR · 방문인증 QR</p>
           </div>
         )}
         <nav className="mk-side-nav flex-1 px-3 py-4 overflow-y-auto overflow-x-hidden" onScroll={() => setSideTip(null)}>
           {navGroups.map(([label, items], gi) => (
-            <div key={label} className="mb-4">
+            <div key={label} className={railCollapsed ? "mb-4" : "mb-3.5"} data-nav-group={label}>
               {railCollapsed
                 ? (gi > 0 && <div className="mx-2 mb-3 border-t border-white/10" />)
-                : <p className="text-[11px] tracking-wider text-slate-500 font-semibold px-3 mb-1.5 whitespace-nowrap">{label}</p>}
+                : <p className="px-3 mb-1 text-[10.5px] font-bold tracking-[0.1em] whitespace-nowrap" style={{ color: "#8592A8" }} data-nav-head>{label}</p>}
+              {/* 10-27 큰 분류(머리) · 소분류(메뉴)를 Training365 · ICS 와 같게 — 메뉴는 한 칸 들여 세로 안내선으로 묶고 글씨를 한 단계 작게(13px),
+                  고른 메뉴는 안내선 위 초록 막대. 접힌 아이콘 줄은 그대로 */}
+              <div className={railCollapsed ? undefined : "ml-[15px] pl-[9px] border-l border-white/[0.09]"}>
               {items.map((n) => {
                 const allowed = canAccess(n.cat);
                 const active = allowed && tab === n.id;
                 return (
                   <button key={n.id} onClick={() => { setSideTip(null); if (allowed) { setTab(n.id); if (isMobile) setDrawerOpen(false); } else setPermDeniedPopup(true); }}
-                    aria-label={n.label}
-                    className="relative w-full flex items-center text-left gap-2.5 px-3 py-2.5 rounded-lg text-sm mb-0.5 transition-colors whitespace-nowrap min-h-[40px]"
+                    aria-label={n.label} aria-current={active ? "page" : undefined} data-nav={n.id}
+                    className={`relative w-full flex items-center text-left rounded-lg transition-colors whitespace-nowrap ${railCollapsed
+                      ? "gap-2.5 px-3 py-2.5 text-sm mb-0.5 min-h-[40px]"
+                      : `gap-2 px-2.5 py-[7px] text-[13px] mb-px min-h-[36px] ${active ? "font-semibold" : ""}`}`}
                     style={{
                       backgroundColor: active ? BRAND.navySoft : "transparent",
                       color: active ? "#fff" : allowed ? "#B7C0D1" : "#5B6472",
-                      borderLeft: active ? `3px solid ${BRAND.accent}` : "3px solid transparent",
+                      borderLeft: railCollapsed ? (active ? `3px solid ${BRAND.accent}` : "3px solid transparent") : undefined,
                     }}
                     onMouseEnter={(e) => { if (!active) e.currentTarget.style.backgroundColor = BRAND.navyHover; showSideTip(e, n.label); }}
                     onMouseLeave={(e) => { if (!active) e.currentTarget.style.backgroundColor = "transparent"; setSideTip(null); }}>
-                    <n.icon size={17} className="shrink-0" />
+                    {active && !railCollapsed && <span aria-hidden="true" className="absolute top-2 bottom-2 w-[3px] rounded-full" style={{ left: -11, background: BRAND.accent }} data-nav-active />}
+                    <n.icon size={railCollapsed ? 17 : 15} className="shrink-0" style={railCollapsed || active ? undefined : { opacity: 0.85 }} />
                     {!railCollapsed && <span className="leading-snug flex-1">{n.label}</span>}
                     {!!n.badge && allowed && (railCollapsed ? (
                       <span className="absolute top-1 left-[26px] text-[9px] leading-none font-bold rounded-full px-1 min-w-[16px] h-[16px] flex items-center justify-center"
@@ -6544,6 +6553,7 @@ function App({ userEmail, userName }) {
                   </button>
                 );
               })}
+              </div>
             </div>
           ))}
         </nav>
@@ -6597,8 +6607,11 @@ function App({ userEmail, userName }) {
               </button>
             )}
             <span className="shrink-0 w-px h-4 bg-slate-200 mr-1 hidden md:block" />
-            <span className="shrink-0 hidden md:inline">Star Truck Korea</span>
-            <span className="hidden md:inline">/</span>
+            {/* 10-27 경로의 「Star Truck Korea」 를 누르면 Overview 로(Training365 · ICS 와 같게) */}
+            <button type="button" onClick={() => setTab("overview")} data-crumb="home" title="Star Truck Korea — Overview 로"
+              className="hidden md:inline-flex shrink-0 items-center gap-1.5 h-7 px-1.5 -ml-1 rounded-md text-slate-400 hover:text-slate-800 hover:bg-slate-100 transition-colors">
+              <Home size={14} /><span className="hidden xl:inline whitespace-nowrap">Star Truck Korea</span></button>
+            <ChevronRight size={13} className="hidden md:block shrink-0 text-slate-300" />
             <span className="text-slate-700 font-medium truncate">{nav.find((n) => n.id === tab)?.label}</span>
           </div>
           <div className="flex items-center gap-2 md:gap-4 shrink-0">
