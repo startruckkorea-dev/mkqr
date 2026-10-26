@@ -4066,14 +4066,15 @@ async function mkItPrintLabels(list) {
   try {
     const parts = [];
     for (const a of ok) parts.push(mkItLabelHtml(a, await mkItQrData(a)));
-    // 용지 두 가지(10-26) — 라벨 프린터(100×40mm 한 장씩) · A4 일반 프린터(한 쪽 2열 × 7행 = 14개, 점선 따라 자르기). 고른 용지는 기억한다
+    // 용지 두 가지(10-26) — 라벨 프린터(100×40mm 한 장씩) · A4 일반 프린터(한 쪽 2열 × 5행 = 10개, 점선 따라 자르기). 고른 용지는 기억한다
+    // A4 는 회사 워터마크(위 · 아래) 자리를 비운다 — 위 28.5mm(기존보다 2cm 아래로) · 아래 40mm 이상 비움
     let mode = "a4"; try { mode = localStorage.getItem("mkqr_label_mode") === "roll" ? "roll" : "a4"; } catch (e) {}
     const html = `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>STK IT Asset Label (${ok.length})</title><style id="pg">@page{size:A4;margin:0}</style><style>
 html,body{margin:0;padding:0;background:#fff}
 ${MK_IT_LABEL_CSS}
 body.roll .mkl{page-break-after:always;break-after:page}
 body.roll .mkl:last-child{page-break-after:auto;break-after:auto}
-body.a4 .sheet{width:210mm;height:297mm;box-sizing:border-box;padding:8.5mm 5mm;display:grid;grid-template-columns:100mm 100mm;grid-template-rows:repeat(7,40mm);overflow:hidden;background:#fff;page-break-after:always;break-after:page}
+body.a4 .sheet{width:210mm;height:297mm;box-sizing:border-box;padding:28.5mm 5mm 0;display:grid;grid-template-columns:100mm 100mm;grid-template-rows:repeat(5,40mm);align-content:start;overflow:hidden;background:#fff;page-break-after:always;break-after:page}
 body.a4 .sheet:last-child{page-break-after:auto;break-after:auto}
 body.a4 .mkl{outline:.2mm dashed #B8C2CC;outline-offset:-.1mm}
 .bar{display:flex;flex-wrap:wrap;align-items:center;gap:8px;max-width:210mm;margin:0 auto 12px;font:12px/1.5 'Segoe UI','Malgun Gothic',sans-serif;color:#334155}
@@ -4084,13 +4085,13 @@ body.a4 .mkl{outline:.2mm dashed #B8C2CC;outline-offset:-.1mm}
 @media screen{body{background:#E2E8F0;padding:12px}body.roll .mkl{margin:0 auto 10px;box-shadow:0 1px 4px rgba(0,0,0,.18)}body.a4 .sheet{margin:0 auto 12px;box-shadow:0 1px 6px rgba(0,0,0,.2)}}
 @media print{.bar{display:none}body{padding:0;background:#fff}}
 </style></head><body class="${mode}"><div class="bar"><b>용지</b>` +
-      `<button type="button" data-m="a4">A4 일반 용지 · 한 쪽 14개</button><button type="button" data-m="roll">라벨 프린터 · 100 × 40 mm</button>` +
+      `<button type="button" data-m="a4">A4 일반 용지 · 한 쪽 10개</button><button type="button" data-m="roll">라벨 프린터 · 100 × 40 mm</button>` +
       `<button type="button" class="go" id="go">🖨 인쇄</button><div class="hint" id="hint"></div></div><div id="out"></div><div id="pool" style="display:none">${parts.join("")}</div>` +
       `<scr` + `ipt>(function(){var L=[].slice.call(document.querySelectorAll('#pool .mkl')),out=document.getElementById('out'),N=${ok.length};
 function lay(m){document.body.className=m;document.getElementById('pg').textContent=m==='a4'?'@page{size:A4;margin:0}':'@page{size:100mm 40mm;margin:0}';out.innerHTML='';
-if(m==='a4'){for(var i=0;i<L.length;i+=14){var sh=document.createElement('div');sh.className='sheet';L.slice(i,i+14).forEach(function(l){sh.appendChild(l);});out.appendChild(sh);}}else{L.forEach(function(l){out.appendChild(l);});}
+if(m==='a4'){for(var i=0;i<L.length;i+=10){var sh=document.createElement('div');sh.className='sheet';L.slice(i,i+10).forEach(function(l){sh.appendChild(l);});out.appendChild(sh);}}else{L.forEach(function(l){out.appendChild(l);});}
 [].forEach.call(document.querySelectorAll('.bar [data-m]'),function(b){b.className=b.getAttribute('data-m')===m?'on':'';});
-document.getElementById('hint').innerHTML=m==='a4'?'인쇄 설정: 용지 <b>A4</b> · 여백 <b>없음</b> · 배율 <b>100%(실제 크기)</b> · 머리글/바닥글 <b>끄기</b> — 라벨 '+N+'개 · '+Math.ceil(N/14)+'쪽. 점선을 따라 자르세요.':'인쇄 설정: 용지 <b>100 × 40 mm</b> · 여백 <b>없음</b> · 배율 <b>100%</b> · 머리글/바닥글 <b>끄기</b> — 라벨 1장 = 1쪽, '+N+'장.';
+document.getElementById('hint').innerHTML=m==='a4'?'인쇄 설정: 용지 <b>A4</b> · 여백 <b>없음</b> · 배율 <b>100%(실제 크기)</b> · 머리글/바닥글 <b>끄기</b> — 라벨 '+N+'개 · '+Math.ceil(N/10)+'쪽(위 · 아래는 워터마크 자리로 비움). 점선을 따라 자르세요.':'인쇄 설정: 용지 <b>100 × 40 mm</b> · 여백 <b>없음</b> · 배율 <b>100%</b> · 머리글/바닥글 <b>끄기</b> — 라벨 1장 = 1쪽, '+N+'장.';
 try{localStorage.setItem('mkqr_label_mode',m);}catch(e){}}
 [].forEach.call(document.querySelectorAll('.bar [data-m]'),function(b){b.onclick=function(){lay(b.getAttribute('data-m'));};});
 document.getElementById('go').onclick=function(){window.print();};lay('${mode}');})();</scr` + `ipt></body></html>`;
@@ -4098,7 +4099,7 @@ document.getElementById('go').onclick=function(){window.print();};lay('${mode}')
     const imgs = [...w.document.images];
     await Promise.all(imgs.map((im) => (im.complete ? 0 : new Promise((r) => { im.onload = im.onerror = r; }))));
     w.focus(); setTimeout(() => { try { w.print(); } catch (e) {} }, 150);
-    mkLog("IT 자산", "라벨 출력", ok.length === 1 ? (ok[0].CICD || ok[0].Title) : `라벨 ${ok.length}개`, { info: { 건수: ok.length, 용지: mode === "a4" ? "A4(14개/쪽)" : "라벨 프린터(100×40mm)", 대상: ok.slice(0, 20).map((a) => a.CICD || a.Title).join(", ") } });
+    mkLog("IT 자산", "라벨 출력", ok.length === 1 ? (ok[0].CICD || ok[0].Title) : `라벨 ${ok.length}개`, { info: { 건수: ok.length, 용지: mode === "a4" ? "A4(10개/쪽)" : "라벨 프린터(100×40mm)", 대상: ok.slice(0, 20).map((a) => a.CICD || a.Title).join(", ") } });
   } catch (e) {
     try { w.close(); } catch (x) {}
     mkLog("IT 자산", "라벨 출력 실패", `라벨 ${ok.length}개`, { info: { 오류: mkErrText(e) } });
@@ -6079,7 +6080,7 @@ function ItLabelTab({ it }) {
     <div className="w-full">
       <style>{MK_IT_LABEL_CSS}</style>
       <div className="mb-4 text-xs text-slate-500 bg-white border rounded-xl px-4 py-3 leading-relaxed">
-        라벨 크기 <b>가로 10cm × 세로 4cm</b>, QR 은 오른쪽. 인쇄 창 위쪽에서 용지를 고르세요 — <b>A4 일반 용지</b>(한 쪽 14개 · 점선 따라 자르기) 또는 <b>라벨 프린터</b>(100 × 40 mm · 1장 = 1페이지). 여백 <b>없음</b> · 배율 <b>100%</b> · 머리글/바닥글 <b>끄기</b>.
+        라벨 크기 <b>가로 10cm × 세로 4cm</b>, QR 은 오른쪽. 인쇄 창 위쪽에서 용지를 고르세요 — <b>A4 일반 용지</b>(한 쪽 10개 · 위 · 아래 워터마크 자리 비움 · 점선 따라 자르기) 또는 <b>라벨 프린터</b>(100 × 40 mm · 1장 = 1페이지). 여백 <b>없음</b> · 배율 <b>100%</b> · 머리글/바닥글 <b>끄기</b>.
         QR 을 스캔하면 MKQR 로그인 후 자산 정보와 스캔 위치(GPS)가 기록됩니다 — 로그인하지 않은 사람에게는 「Property of Star Truck Korea」 안내만 보입니다.
       </div>
       <div className="mb-4 flex items-center justify-between flex-wrap gap-2">
