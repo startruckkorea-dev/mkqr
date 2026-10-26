@@ -4025,8 +4025,9 @@ function MkItListMissing({ error }) {
 // ---- 라벨(가로 10cm × 세로 4cm, QR 오른쪽 · 10-26 세로 5 → 4cm, 맨 아래 분실 · 습득 연락 문구) --------------------------------------------------------------
 // 화면 미리보기와 인쇄가 같은 HTML 을 쓴다. 인쇄는 새 창에서 @page 100mm × 40mm — 라벨 프린터는 용지를 같은 크기로.
 const MK_IT_LABEL_CSS = `
-.mkl{width:100mm;height:40mm;box-sizing:border-box;padding:2.3mm 3mm 2.2mm 4mm;display:flex;gap:3mm;background:#fff;color:#0F172A;
+.mkl{width:100mm;height:40mm;box-sizing:border-box;padding:2.3mm 3mm 2mm 4mm;display:flex;flex-direction:column;background:#fff;color:#0F172A;
   font-family:'Segoe UI',Arial,'Malgun Gothic',sans-serif;overflow:hidden;border-radius:0}
+.mkl-top{flex:1;min-height:0;display:flex;gap:3mm;align-items:flex-start}
 .mkl-l{flex:1;min-width:0;display:flex;flex-direction:column}
 .mkl-logo{height:3.4mm;width:auto;align-self:flex-start;margin-bottom:.8mm}
 .mkl-po{font-size:6.8pt;font-weight:700;letter-spacing:.02em;padding-bottom:.8mm;margin-bottom:1.1mm;border-bottom:.3mm solid #0F172A;white-space:nowrap}
@@ -4035,23 +4036,24 @@ const MK_IT_LABEL_CSS = `
 .mkl-v{flex:1;min-width:0;font-size:7.2pt;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .mkl-v.desc{white-space:normal;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;line-height:1.24;max-height:2.48em}
 .mkl-v.cicd{font-family:Consolas,'Courier New',monospace;letter-spacing:.02em}
-.mkl-ct{margin-top:auto;padding-top:.7mm;border-top:.2mm solid #CBD5E1;font-size:5.2pt;line-height:1.28;color:#334155}
+.mkl-r{flex:0 0 26mm;display:flex;flex-direction:column;align-items:center;padding-top:.3mm}
+.mkl-qr{width:26mm;height:26mm;display:block;image-rendering:pixelated}
+.mkl-cap{font-size:4.8pt;color:#475569;margin-top:.5mm;white-space:nowrap}
+.mkl-ct{flex:0 0 auto;margin-top:.8mm;padding-top:.7mm;border-top:.2mm solid #CBD5E1;font-size:5pt;line-height:1.2;color:#334155;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .mkl-ct b{color:#0F172A;font-weight:700}
-.mkl-r{flex:0 0 31mm;display:flex;flex-direction:column;align-items:center;justify-content:center}
-.mkl-qr{width:31mm;height:31mm;display:block;image-rendering:pixelated}
-.mkl-cap{font-size:5pt;color:#475569;margin-top:.6mm;white-space:nowrap}
 `;
 function mkItLabelHtml(a, qrDataUrl) {
   const e = (s) => String(s == null || s === "" ? "-" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-  return `<div class="mkl"><div class="mkl-l"><img class="mkl-logo" src="${LOGO_SRC}" alt="">` +
+  // 10-26: QR 을 위로 붙여 26mm 로 줄이고, 분실 · 습득 연락 문구는 라벨 아래 전체 폭 한 줄로
+  return `<div class="mkl"><div class="mkl-top"><div class="mkl-l"><img class="mkl-logo" src="${LOGO_SRC}" alt="">` +
     `<div class="mkl-po">Property of Star Truck Korea</div>` +
     `<div class="mkl-row"><span class="mkl-k">Description:</span><span class="mkl-v desc">${e(a.Title)}</span></div>` +
     `<div class="mkl-row"><span class="mkl-k">Serial No.:</span><span class="mkl-v">${e(a.SerialNo)}</span></div>` +
     `<div class="mkl-row"><span class="mkl-k">CI CD:</span><span class="mkl-v cicd">${e(a.CICD)}</span></div>` +
     `<div class="mkl-row"><span class="mkl-k">Asset Code:</span><span class="mkl-v">${e(a.AssetCode)}</span></div>` +
-    `<div class="mkl-ct">If lost or found, please contact Star Truck Korea IT ${MK_IT_MAIL ? `at <b>${e(MK_IT_MAIL)}</b>` : "team"}. ` +
-    `Unauthorized use or removal of this device is prohibited.</div>` +
-    `</div><div class="mkl-r"><img class="mkl-qr" src="${qrDataUrl}" alt="QR"><div class="mkl-cap">IT Asset · Scan to verify</div></div></div>`;
+    `</div><div class="mkl-r"><img class="mkl-qr" src="${qrDataUrl}" alt="QR"><div class="mkl-cap">IT Asset · Scan to verify</div></div></div>` +
+    `<div class="mkl-ct">If lost or found, please contact ${MK_IT_MAIL ? `IT at <b>${e(MK_IT_MAIL)}</b>` : "the Star Truck Korea IT team"}. ` +
+    `Unauthorized use or removal is prohibited.</div></div>`;
 }
 async function mkItQrData(a) {
   // 라벨 프린터(흑백)용 — 순검정 · 여백 0 · 오류 정정 M(작은 라벨에서도 읽히게)
