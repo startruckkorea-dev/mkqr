@@ -2956,7 +2956,7 @@ function OverviewTab({ centers, agents, agentsError, checkins, admins, setTab, i
               desc="영업직원 명함에 넣는 QR — 위치를 묻지 않고 접속만 기록한 뒤 Agent별 링크로 바로 이동합니다."
               chips={["위치 확인 없음", "즉시 이동", "스캔 통계"]} />
             {showIt && <Tile icon={Laptop} title="IT 자산 QR" tag="자산 라벨" tab="itQr" cat="itQr" tint="rgba(196,146,74,.45)"
-              desc="IT 자산에 붙이는 10×5cm 라벨 QR — CI CD 를 자동 발행하고, 스캔 위치를 등록 위치와 비교해 판정합니다."
+              desc="IT 자산에 붙이는 10×4cm 라벨 QR — CI CD 를 자동 발행하고, 스캔 위치를 등록 위치와 비교해 판정합니다."
               chips={["CI CD 자동 발행", "GPS 위치 검증", "렌탈 만료 관리"]} />}
           </div>
         </div>
@@ -4022,22 +4022,24 @@ function MkItListMissing({ error }) {
   );
 }
 
-// ---- 라벨(가로 10cm × 세로 5cm, QR 오른쪽) --------------------------------------------------------------
-// 화면 미리보기와 인쇄가 같은 HTML 을 쓴다. 인쇄는 새 창에서 @page 100mm × 50mm — 라벨 프린터는 용지를 같은 크기로.
+// ---- 라벨(가로 10cm × 세로 4cm, QR 오른쪽 · 10-26 세로 5 → 4cm, 맨 아래 분실 · 습득 연락 문구) --------------------------------------------------------------
+// 화면 미리보기와 인쇄가 같은 HTML 을 쓴다. 인쇄는 새 창에서 @page 100mm × 40mm — 라벨 프린터는 용지를 같은 크기로.
 const MK_IT_LABEL_CSS = `
-.mkl{width:100mm;height:50mm;box-sizing:border-box;padding:3mm 3mm 3mm 4mm;display:flex;gap:3mm;background:#fff;color:#0F172A;
+.mkl{width:100mm;height:40mm;box-sizing:border-box;padding:2.3mm 3mm 2.2mm 4mm;display:flex;gap:3mm;background:#fff;color:#0F172A;
   font-family:'Segoe UI',Arial,'Malgun Gothic',sans-serif;overflow:hidden;border-radius:0}
 .mkl-l{flex:1;min-width:0;display:flex;flex-direction:column}
-.mkl-logo{height:4.6mm;width:auto;align-self:flex-start;margin-bottom:1.2mm}
-.mkl-po{font-size:7.6pt;font-weight:700;letter-spacing:.02em;padding-bottom:1.3mm;margin-bottom:1.6mm;border-bottom:.3mm solid #0F172A;white-space:nowrap}
-.mkl-row{display:flex;align-items:baseline;gap:1.5mm;margin-bottom:2.1mm;min-width:0}
-.mkl-k{flex:0 0 17mm;font-size:6pt;color:#475569;white-space:nowrap}
-.mkl-v{flex:1;min-width:0;font-size:7.8pt;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.mkl-v.desc{white-space:normal;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;line-height:1.15}
+.mkl-logo{height:3.4mm;width:auto;align-self:flex-start;margin-bottom:.8mm}
+.mkl-po{font-size:6.8pt;font-weight:700;letter-spacing:.02em;padding-bottom:.8mm;margin-bottom:1.1mm;border-bottom:.3mm solid #0F172A;white-space:nowrap}
+.mkl-row{display:flex;align-items:baseline;gap:1.5mm;margin-bottom:.75mm;min-width:0}
+.mkl-k{flex:0 0 15mm;font-size:5.6pt;color:#475569;white-space:nowrap}
+.mkl-v{flex:1;min-width:0;font-size:7.2pt;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mkl-v.desc{white-space:normal;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;line-height:1.24;max-height:2.48em}
 .mkl-v.cicd{font-family:Consolas,'Courier New',monospace;letter-spacing:.02em}
-.mkl-r{flex:0 0 38mm;display:flex;flex-direction:column;align-items:center;justify-content:center}
-.mkl-qr{width:38mm;height:38mm;display:block;image-rendering:pixelated}
-.mkl-cap{font-size:5.4pt;color:#475569;margin-top:.8mm;white-space:nowrap}
+.mkl-ct{margin-top:auto;padding-top:.7mm;border-top:.2mm solid #CBD5E1;font-size:5.2pt;line-height:1.28;color:#334155}
+.mkl-ct b{color:#0F172A;font-weight:700}
+.mkl-r{flex:0 0 31mm;display:flex;flex-direction:column;align-items:center;justify-content:center}
+.mkl-qr{width:31mm;height:31mm;display:block;image-rendering:pixelated}
+.mkl-cap{font-size:5pt;color:#475569;margin-top:.6mm;white-space:nowrap}
 `;
 function mkItLabelHtml(a, qrDataUrl) {
   const e = (s) => String(s == null || s === "" ? "-" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -4047,6 +4049,8 @@ function mkItLabelHtml(a, qrDataUrl) {
     `<div class="mkl-row"><span class="mkl-k">Serial No.:</span><span class="mkl-v">${e(a.SerialNo)}</span></div>` +
     `<div class="mkl-row"><span class="mkl-k">CI CD:</span><span class="mkl-v cicd">${e(a.CICD)}</span></div>` +
     `<div class="mkl-row"><span class="mkl-k">Asset Code:</span><span class="mkl-v">${e(a.AssetCode)}</span></div>` +
+    `<div class="mkl-ct">If lost or found, please contact Star Truck Korea IT ${MK_IT_MAIL ? `at <b>${e(MK_IT_MAIL)}</b>` : "team"}. ` +
+    `Unauthorized use or removal of this device is prohibited.</div>` +
     `</div><div class="mkl-r"><img class="mkl-qr" src="${qrDataUrl}" alt="QR"><div class="mkl-cap">IT Asset · Scan to verify</div></div></div>`;
 }
 async function mkItQrData(a) {
@@ -4063,7 +4067,7 @@ async function mkItPrintLabels(list) {
     const parts = [];
     for (const a of ok) parts.push(mkItLabelHtml(a, await mkItQrData(a)));
     const html = `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>STK IT Asset Label (${ok.length})</title><style>
-@page{size:100mm 50mm;margin:0}
+@page{size:100mm 40mm;margin:0}
 html,body{margin:0;padding:0;background:#fff}
 ${MK_IT_LABEL_CSS}
 .mkl{page-break-after:always;break-after:page}
@@ -4071,7 +4075,7 @@ ${MK_IT_LABEL_CSS}
 @media screen{body{background:#E2E8F0;padding:12px}.mkl{margin:0 auto 10px;box-shadow:0 1px 4px rgba(0,0,0,.18)}
 .hint{max-width:100mm;margin:0 auto 10px;font:12px/1.5 'Segoe UI',sans-serif;color:#334155}}
 @media print{.hint{display:none}}
-</style></head><body><div class="hint">인쇄 설정: 용지 <b>100 × 50 mm</b> · 여백 <b>없음</b> · 배율 <b>100%</b> · 머리글/바닥글 <b>끄기</b></div>${parts.join("")}</body></html>`;
+</style></head><body><div class="hint">인쇄 설정: 용지 <b>100 × 40 mm</b> · 여백 <b>없음</b> · 배율 <b>100%</b> · 머리글/바닥글 <b>끄기</b></div>${parts.join("")}</body></html>`;
     w.document.open(); w.document.write(html); w.document.close();
     const imgs = [...w.document.images];
     await Promise.all(imgs.map((im) => (im.complete ? 0 : new Promise((r) => { im.onload = im.onerror = r; }))));
@@ -4087,8 +4091,8 @@ function MkItLabelPreview({ asset, scale = 1 }) {
   const [src, setSrc] = useState("");
   useEffect(() => { let on = true; if (asset.QrToken) mkItQrData(asset).then((u) => on && setSrc(u)).catch(() => {}); return () => { on = false; }; }, [asset.QrToken]);
   return (
-    <div style={{ width: `calc(100mm * ${scale})`, height: `calc(50mm * ${scale})`, overflow: "hidden" }}>
-      <div style={{ transform: `scale(${scale})`, transformOrigin: "0 0", width: "100mm", height: "50mm", outline: "1px solid #CBD5E1" }}
+    <div style={{ width: `calc(100mm * ${scale})`, height: `calc(40mm * ${scale})`, overflow: "hidden" }}>
+      <div style={{ transform: `scale(${scale})`, transformOrigin: "0 0", width: "100mm", height: "40mm", outline: "1px solid #CBD5E1" }}
         dangerouslySetInnerHTML={{ __html: src ? mkItLabelHtml(asset, src) : "" }} />
     </div>
   );
@@ -6057,7 +6061,7 @@ function ItLabelTab({ it }) {
     <div className="w-full">
       <style>{MK_IT_LABEL_CSS}</style>
       <div className="mb-4 text-xs text-slate-500 bg-white border rounded-xl px-4 py-3 leading-relaxed">
-        라벨 크기 <b>가로 10cm × 세로 5cm</b>, QR 은 오른쪽. 인쇄 창에서 용지 <b>100 × 50 mm</b> · 여백 <b>없음</b> · 배율 <b>100%</b> · 머리글/바닥글 <b>끄기</b> 로 출력하세요(라벨 프린터는 라벨 1장 = 1페이지).
+        라벨 크기 <b>가로 10cm × 세로 4cm</b>, QR 은 오른쪽. 인쇄 창에서 용지 <b>100 × 40 mm</b> · 여백 <b>없음</b> · 배율 <b>100%</b> · 머리글/바닥글 <b>끄기</b> 로 출력하세요(라벨 프린터는 라벨 1장 = 1페이지).
         QR 을 스캔하면 MKQR 로그인 후 자산 정보와 스캔 위치(GPS)가 기록됩니다 — 로그인하지 않은 사람에게는 「Property of Star Truck Korea」 안내만 보입니다.
       </div>
       <div className="mb-4 flex items-center justify-between flex-wrap gap-2">
@@ -6609,7 +6613,7 @@ function App({ userEmail, userName }) {
             itPeople: [Users, "사람(계정)별로 가진 자산 · 액세서리 · 이력을 보고, 지급 · 반납 · 퇴사 일괄 반납을 처리합니다"],
             itStock: [Package, "수량으로 관리하는 액세서리 재고 — 신품 · 회수 재고 · 최소 기준, 지급 · 반납 · 입고 · 실사 조정"],
             itHistory: [History, "IT 자산 · 액세서리 지급 · 반납 · 교체 · 고장 · 폐기 이력을 조회하고 Excel 로 내보냅니다"],
-            itQr: [Printer, "IT 자산 라벨(가로 10cm × 세로 5cm, QR 오른쪽)을 미리 보고 출력합니다"],
+            itQr: [Printer, "IT 자산 라벨(가로 10cm × 세로 4cm, QR 오른쪽)을 미리 보고 출력합니다"],
             itScans: [ScanLine, "IT 자산 QR 스캔 기록 — 누가 · 언제 · 어디서(GPS) 스캔했는지와 등록 위치 대비 판정을 조회합니다"],
             categoryAccess: [KeyRound, "등록된 사용자별로 화면마다 「보기」 · 「편집」 권한을 부여 · 변경합니다. 사용자 추가 · 삭제와 「반영」 내용은 활동 이력에 남습니다."],
           }[tab] || [LayoutDashboard, ""];
