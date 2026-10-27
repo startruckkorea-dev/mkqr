@@ -24,15 +24,20 @@
   사용 (mkqr-it-lists.ps1 과 같은 방식 · 일반 모드 ISE):
     .\mkqr-all-lists.ps1 -ClientId <지난번 열 만들기 때 쓴 PnP 클라이언트 ID>
     .\mkqr-all-lists.ps1 -ClientId <ID> -CheckOnly      # 만들지 않고 점검 표만
+    .\mkqr-all-lists.ps1 -ClientId <ID> -DeviceLogin    # 팝업 로그인이 「이 디바이스를 삭제했습니다(700003)」 로 막힐 때 — Chrome 에서 코드 입력
   ※ 시크릿 · 토큰을 이 파일에 적지 않는다.
 #>
 param(
   [Parameter(Mandatory = $true)][string]$ClientId,
   [string]$SiteUrl = "https://startruckkorea.sharepoint.com/sites/STK-DB",
-  [switch]$CheckOnly
+  [switch]$CheckOnly,
+  [switch]$DeviceLogin,                                        # 코드 로그인 — 팝업 대신 Chrome 에서 microsoft.com/devicelogin 에 코드 입력
+  [string]$Tenant = "19cab1f5-21f4-44df-8ac6-96d6ca595203"     # Star Truck Korea 테넌트(코드 로그인에 필요)
 )
 $ErrorActionPreference = "Stop"
-Connect-PnPOnline -Url $SiteUrl -ClientId $ClientId -Interactive
+$env:PNPPOWERSHELL_UPDATECHECK = "Off"
+if ($DeviceLogin) { Connect-PnPOnline -Url $SiteUrl -ClientId $ClientId -DeviceLogin -Tenant $Tenant }
+else { Connect-PnPOnline -Url $SiteUrl -ClientId $ClientId -Interactive }
 
 # ── 목록 정의 ─────────────────────────────────────────────────────────────────────────────
 # T = 한 줄 텍스트, N = 숫자, B = 예/아니요, M = 여러 줄 텍스트
