@@ -6128,7 +6128,7 @@ function ItLabelTab({ it }) {
 }
 
 // ---- IT 자산 스캔 기록 -----------------------------------------------------------------------------
-function ItScansTab({ it }) {
+function ItScansTab({ it, reload, loading }) {
   const { scans, assets, err, scanErr } = it;
   const [days, setDays] = useState(30);
   const [st, setSt] = useState("");
@@ -6191,7 +6191,11 @@ function ItScansTab({ it }) {
             <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="CI CD · 설명 · 스캔한 사람 검색" className="pl-8 pr-3 py-2 border border-slate-300 rounded-lg text-sm w-full sm:w-72 text-ellipsis" />
           </div>
         </div>
-        <button onClick={exportXlsx} disabled={!list.length} className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm border border-slate-300 disabled:opacity-40"><Download size={14} /> Excel</button>
+        <div className="flex items-center gap-2">
+          {it.at && <span className="text-[11.5px] text-slate-400" title="화면에 있으면 1분마다 · 창으로 돌아오면 자동으로 다시 읽습니다">{mkItKst(new Date(it.at).toISOString()).slice(11, 16)} 기준 · 자동 갱신</span>}
+          {reload && <button onClick={reload} disabled={loading} title="새로고침" className="w-9 h-9 inline-flex items-center justify-center rounded-lg border border-slate-300 text-slate-500 hover:text-slate-800 disabled:opacity-50" data-scan-reload><RefreshCw size={14} className={loading ? "animate-spin" : ""} /></button>}
+          <button onClick={exportXlsx} disabled={!list.length} className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm border border-slate-300 disabled:opacity-40"><Download size={14} /> Excel</button>
+        </div>
       </div>
       <div className="bg-white border rounded-xl overflow-x-auto">
         <table className="w-full text-sm">
@@ -6513,7 +6517,19 @@ function App({ userEmail, userName }) {
   // IT 자산(10-23 · mkqr-it) — IT 화면을 열 때만 읽는다(Marketing · HR 사용자는 읽지 않음)
   const [it, setIt] = useState({ assets: [], scans: [], history: [], stock: [], err: "", scanErr: "", histErr: "", stockErr: "", loaded: false });
   const [itLoading, setItLoading] = useState(false);
-  async function reloadIt() { setItLoading(true); try { const r = await mkItLoad(); setIt({ ...r, loaded: true }); } finally { setItLoading(false); } }
+  async function reloadIt() { setItLoading(true); try { const r = await mkItLoad(); setIt({ ...r, loaded: true, at: Date.now() }); } finally { setItLoading(false); } }
+  // 10-27 IT 화면 자동 새로고침 — 휴대폰에서 찍은 스캔 · 다른 담당자의 변경이 PC 화면에 보이도록.
+  // IT 화면에 있을 때 ① 창으로 돌아오면(포커스 · 탭 전환) 20초 넘게 지났으면 ② 스캔 기록 화면은 1분마다(창이 보일 때만) 다시 읽는다.
+  // 팝업(모달)이 열려 있으면 건너뛴다 — 입력하던 내용이 흔들리지 않게.
+  const itRef = useRef({}); itRef.current = { tab, it, itLoading };
+  useEffect(() => {
+    const busy = () => !!document.querySelector(".fixed.inset-0");
+    const due = (ms) => { const c = itRef.current; return MK_IT_TABS.includes(c.tab) && c.it.loaded && !c.itLoading && !busy() && Date.now() - (c.it.at || 0) > ms; };
+    const onBack = () => { if (document.visibilityState === "visible" && due(20e3)) reloadIt(); };
+    const tm = setInterval(() => { if (document.visibilityState === "visible" && itRef.current.tab === "itScans" && due(55e3)) reloadIt(); }, 15e3);
+    window.addEventListener("focus", onBack); document.addEventListener("visibilitychange", onBack);
+    return () => { clearInterval(tm); window.removeEventListener("focus", onBack); document.removeEventListener("visibilitychange", onBack); };
+  }, []);
   const [scanToken, setScanToken] = useState(null);
   const [staffScanToken, setStaffScanToken] = useState(null);   // 10-27 IT 권한 없는 사람의 자산 QR 스캔
   useEffect(() => { loadUiContent().then(setUiContent); }, []);
@@ -6888,7 +6904,7 @@ function App({ userEmail, userName }) {
             {MK_IT_TABS.includes(tab) && !it.loaded && <div className="text-slate-400 text-sm">IT 자산을 불러오는 중...</div>}
             {tab === "itAssets" && it.loaded && <ItAssetsTab it={it} reloadIt={reloadIt} readOnly={!canEdit("itAssets")} canLabel={canAccess("itQr")} onLabelTab={() => setTab("itQr")} />}
             {tab === "itQr" && it.loaded && <ItLabelTab it={it} />}
-            {tab === "itScans" && it.loaded && <ItScansTab it={it} />}
+            {tab === "itScans" && it.loaded && <ItScansTab it={it} reload={reloadIt} loading={itLoading} />}
             {tab === "myAssets" && <MyAssetsPanel userEmail={(userEmail || "").toLowerCase()} userName={myDirName} />}
             {tab === "itPeople" && it.loaded && <ItPeopleTab it={it} reloadIt={reloadIt} readOnly={!canEdit("itAssets")} canLabel={canAccess("itQr")} />}
             {tab === "itStock" && it.loaded && <ItStockTab it={it} reloadIt={reloadIt} readOnly={!canEdit("itAssets")} />}
