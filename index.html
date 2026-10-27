@@ -82,8 +82,10 @@ html, * { scrollbar-width: thin; scrollbar-color: #CBD5E1 transparent; }
     <div class="login-co">IT 자산 · 방문인증 QR · Star Truck Korea</div>
     <div id="asset-notice" style="display:none;margin:4px 0 14px;padding:12px 14px;border:1px solid #E7D3B5;background:#FBF6EE;border-radius:10px;text-align:left;font-size:12.5px;line-height:1.65;color:#5B4320">
       <div style="font-weight:700;font-size:13px;color:#3F2E14;margin-bottom:2px">Property of Star Truck Korea</div>
-      이 QR 은 스타트럭코리아 <b>IT 자산 라벨</b>입니다. 자산 정보 확인과 위치 기록은 IT 담당자 로그인 후 가능합니다.<br>
-      <span style="color:#7A6240">If found, please return it to Star Truck Korea IT. · 습득하셨다면 스타트럭코리아 IT팀으로 연락 바랍니다.</span>
+      이 QR 은 스타트럭코리아 <b>IT 자산 라벨</b>입니다. 자산 정보는 공개하지 않습니다.<br>
+      <b>습득하셨나요?</b> 라벨 아래에 적힌 IT 연락처(메일)로 알려 주시면 회수하겠습니다.<br>
+      <span style="color:#7A6240">If found, please contact Star Truck Korea IT at the address printed on the label.</span><br>
+      <span style="color:#7A6240"><b>직원이신가요?</b> 로그인하면 내 자산 확인(실사) 또는 습득 신고를 할 수 있습니다.</span>
     </div>
     <div class="login-guide">Hyosung M365 계정으로 로그인하세요</div>
     <button class="btn-login" id="btn-login" disabled>로딩 중...</button>
@@ -6130,18 +6132,30 @@ function ItScansTab({ it }) {
   const { scans, assets, err, scanErr } = it;
   const [days, setDays] = useState(30);
   const [st, setSt] = useState("");
+  const [ty, setTy] = useState("");   // 10-27 구분(본인 확인 · IT 점검 · 습득 · 타인)
   const [q, setQ] = useState("");
   const since = Date.now() - days * 864e5;
   const qq = q.trim().toLowerCase();
-  const list = scans.filter((s) => Date.parse(s.Created) >= since && (!st || s.VerifyStatus === st) &&
+  const assetById = useMemo(() => new Map(assets.map((a) => [String(a.id), a])), [assets]);
+  const typed = useMemo(() => scans.map((s) => ({ ...s, _type: mkScanTypeOf(s, assetById) })), [scans, assetById]);
+  const inRange = typed.filter((s) => Date.parse(s.Created) >= since);
+  const list = inRange.filter((s) => (!st || s.VerifyStatus === st) && (!ty || s._type === ty) &&
     (!qq || [s.CICD, s.AssetTitle, s.ScannedBy, s.ScannedByName].some((v) => String(v || "").toLowerCase().includes(qq))));
-  const counts = useMemo(() => { const m = {}; scans.filter((s) => Date.parse(s.Created) >= since).forEach((s) => { m[s.VerifyStatus] = (m[s.VerifyStatus] || 0) + 1; }); return m; }, [scans, days]);
+  const counts = useMemo(() => { const m = {}; inRange.forEach((s) => { m[s.VerifyStatus] = (m[s.VerifyStatus] || 0) + 1; }); return m; }, [typed, days]);
+  const tcounts = useMemo(() => { const m = {}; inRange.forEach((s) => { m[s._type] = (m[s._type] || 0) + 1; }); return m; }, [typed, days]);
+  // 실사 현황 — 사용자에게 지급된(사용 중 · QR 있는) 자산 가운데 올해 본인 확인(휴대폰 · 위치)이 된 자산 수(읽은 기록 = 최근 90일)
+  const audit = useMemo(() => {
+    const yr = new Date(Date.now() + 9 * 36e5).getUTCFullYear();
+    const target = assets.filter((a) => mkItStateOf(a) === "Active" && a.QrToken && (a.AssigneeEmail || a.Assignee));
+    const done = new Set(typed.filter((s) => mkScanCountsAsAudit(s, s._type) && new Date(Date.parse(s.Created) + 9 * 36e5).getUTCFullYear() === yr).map((s) => String(s.AssetId)));
+    return { total: target.length, done: target.filter((a) => done.has(String(a.id))).length };
+  }, [assets, typed]);
   function exportXlsx() {
     const data = list.map((s) => ({ "스캔 일시(KST)": mkItKst(s.Created), "CI CD": s.CICD, Description: s.AssetTitle, "스캔한 사람": s.ScannedByName ? `${s.ScannedByName} (${s.ScannedBy})` : s.ScannedBy,
-      판정: s.VerifyStatus, "거리(m)": s.DistanceM, 위도: s.GpsLat, 경도: s.GpsLng, "GPS 정확도(m)": s.GpsAccuracy, 기기: s.UserAgent }));
+      구분: s._type, "실사 인정": mkScanCountsAsAudit(s, s._type) ? "예" : "아니요", 판정: s.VerifyStatus, "거리(m)": s.DistanceM, 위도: s.GpsLat, 경도: s.GpsLng, "GPS 정확도(m)": s.GpsAccuracy, 기기: s.UserAgent }));
     const ws = XLSX.utils.json_to_sheet(data); const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, "IT Scans");
     XLSX.writeFile(wb, `QRHub_IT자산_스캔기록_${mkTodayKst()}.xlsx`);
-    mkLog("IT 자산 스캔", "Excel 다운로드", `기록 ${data.length}건`, { info: { 건수: data.length, 기간: `최근 ${days}일`, 판정: st || "전체" } });
+    mkLog("IT 자산 스캔", "Excel 다운로드", `기록 ${data.length}건`, { info: { 건수: data.length, 기간: `최근 ${days}일`, 판정: st || "전체", 구분: ty || "전체" } });
   }
   if (err) return <MkItListMissing error={err} />;
   if (scanErr) return <MkItListMissing error={scanErr} />;
@@ -6153,6 +6167,19 @@ function ItScansTab({ it }) {
             <MkItStatus s={k} /><div className="text-xl font-semibold text-slate-800 mt-1">{counts[k] || 0}</div>
           </button>
         ))}
+      </div>
+      <div className="mb-3 flex items-center justify-between flex-wrap gap-2" data-scan-types>
+        <div className="flex items-center gap-1.5 flex-wrap">
+          {[["", inRange.length], ...MK_SCAN_TYPES.map((t) => [t, tcounts[t] || 0])].map(([t, n]) => (
+            <button key={t || "all"} onClick={() => setTy(t)} className={`inline-flex items-center gap-1.5 h-8 px-3 rounded-full text-[12.5px] border ${ty === t ? "text-white border-transparent" : "bg-white text-slate-600 border-slate-200 hover:border-slate-300"}`} style={ty === t ? { background: BRAND.navy } : null}>
+              {t || "전체"}<span className={`text-[11px] tabular-nums ${ty === t ? "text-white/70" : "text-slate-400"}`}>{n}</span>
+            </button>
+          ))}
+        </div>
+        <div className="text-[12.5px] text-slate-500" data-audit-summary title="사용 중 · QR 이 있고 사용자가 지정된 자산 가운데, 올해 사용자 본인이 휴대폰으로 위치와 함께 스캔한 자산(읽은 기록: 최근 90일)">
+          올해 실사(본인 확인) <b className="text-slate-800 tabular-nums">{audit.done}</b> / {audit.total}대
+          {audit.total > 0 && <span className="ml-1.5 text-slate-400">({Math.round((audit.done / audit.total) * 100)}%)</span>}
+        </div>
       </div>
       <div className="mb-3 flex items-center justify-between flex-wrap gap-2">
         <div className="flex items-center gap-2 flex-wrap">
@@ -6170,7 +6197,7 @@ function ItScansTab({ it }) {
         <table className="w-full text-sm">
           <thead className="bg-slate-50 text-xs text-slate-500">
             <tr><th className="px-3 py-2.5 text-left">스캔 일시 (KST)</th><th className="px-3 py-2.5 text-left">자산</th><th className="px-3 py-2.5 text-left">스캔한 사람</th>
-              <th className="px-3 py-2.5 text-center">판정</th><th className="px-3 py-2.5 text-right">거리</th><th className="px-3 py-2.5 text-left">위치</th></tr>
+              <th className="px-3 py-2.5 text-center">구분</th><th className="px-3 py-2.5 text-center">판정</th><th className="px-3 py-2.5 text-right">거리</th><th className="px-3 py-2.5 text-left">위치</th></tr>
           </thead>
           <tbody>
             {list.slice(0, 500).map((s) => (
@@ -6178,6 +6205,7 @@ function ItScansTab({ it }) {
                 <td className="px-3 py-2 text-xs whitespace-nowrap">{mkItKst(s.Created)}</td>
                 <td className="px-3 py-2"><div className="font-mono text-xs">{s.CICD || "-"}</div><div className="text-xs text-slate-500">{s.AssetTitle}</div></td>
                 <td className="px-3 py-2 text-xs"><div>{s.ScannedByName || "-"}</div><div className="text-slate-400">{s.ScannedBy}</div></td>
+                <td className="px-3 py-2 text-center"><MkScanType t={s._type} /></td>
                 <td className="px-3 py-2 text-center"><MkItStatus s={s.VerifyStatus} /></td>
                 <td className="px-3 py-2 text-right text-xs whitespace-nowrap">{s.DistanceM != null && s.DistanceM !== "" ? `${Number(s.DistanceM).toLocaleString()} m` : "-"}</td>
                 <td className="px-3 py-2 text-xs whitespace-nowrap">{s.GpsLat != null && s.GpsLat !== ""
@@ -6185,7 +6213,7 @@ function ItScansTab({ it }) {
                   : <span className="text-slate-400">-</span>}</td>
               </tr>
             ))}
-            {!list.length && <tr><td colSpan={6} className="text-center text-slate-400 py-10">기록이 없습니다</td></tr>}
+            {!list.length && <tr><td colSpan={7} className="text-center text-slate-400 py-10">기록이 없습니다</td></tr>}
           </tbody>
         </table>
       </div>
@@ -6195,33 +6223,215 @@ function ItScansTab({ it }) {
 }
 
 // ---- QR 스캔 화면(?asset=) --------------------------------------------------------------------------
-function ItScanModal({ token, onClose, canEditAssets, onDone, userEmail, userName }) {
+// ---- 스캔 목적 · 구분(10-27 · mkqr-scan2) ----------------------------------------------------------------------
+// IT 자산 QR 스캔의 목적은 두 가지다.
+//   ① 분실 · 습득 — 누가 장비를 주웠을 때 IT 로 돌아오게 한다
+//   ② 연 1회 자산 실사 — 지급받은 사람이 자기 장비 라벨을 휴대폰으로 스캔해 「본인 소유 · 지금 위치」 를 확인한다
+// 그래서 스캔한 사람에 따라 화면과 기록이 다르다.
+//   · 로그인하지 않은 사람(외부 습득자) — 「Property of Star Truck Korea」 와 반납 안내만. 자산 정보 · 위치 기록 없음
+//   · 자산 사용자 본인 — 「내 자산 확인」: 위치(GPS) 판정 + 본인 일치로 기록(구분 「본인 확인」).
+//       PC 로 열거나 위치를 거부하면 기록은 남지만 실사 완료로 세지 않는다(「본인 확인(PC)」 · GPS거부)
+//   · 다른 직원 — 사용자 정보는 보이지 않고 「습득 신고」 만: 위치를 남기면 구분 「습득 · 타인」 으로 기록(IT 가 사용자에게 연락)
+//   · IT 담당(IT 자산 권한) — 전체 정보 + 위치 등록, 구분 「IT 점검」(본인 자산이면 「본인 확인」)
+// 실사를 화면에 띄운 QR 로 대신하지 못하게 「내 자산」 의 라벨 보기는 없앴다(라벨은 IT 자산 QR 라벨 화면에서만 본다).
+const MK_SCAN_OWN = "본인 확인", MK_SCAN_OWN_PC = "본인 확인(PC)", MK_SCAN_IT = "IT 점검", MK_SCAN_OTHER = "습득 · 타인";
+const MK_SCAN_TYPES = [MK_SCAN_OWN, MK_SCAN_OWN_PC, MK_SCAN_IT, MK_SCAN_OTHER];
+const MK_SCAN_TYPE_CLS = { [MK_SCAN_OWN]: "bg-teal-50 text-teal-700", [MK_SCAN_OWN_PC]: "bg-amber-50 text-amber-800", [MK_SCAN_IT]: "bg-slate-100 text-slate-600", [MK_SCAN_OTHER]: "bg-rose-50 text-rose-700" };
+function MkScanType({ t }) { return <span className={`inline-block whitespace-nowrap text-[11px] font-semibold rounded-full px-2 py-0.5 ${MK_SCAN_TYPE_CLS[t] || "bg-slate-100 text-slate-600"}`}>{t || "-"}</span>; }
+function mkIsMobile() { const ua = navigator.userAgent || ""; return /Android|iPhone|iPad|iPod|Mobile/i.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1); }
+const mkNameKey = (v) => String(v || "").replace(/\s+/g, " ").trim().toLowerCase();
+function mkIsAssetOwner(a, email, dirName) {
+  const em = String(a.AssigneeEmail || "").trim().toLowerCase();
+  if (em) return em === String(email || "").trim().toLowerCase();
+  return !!dirName && mkNameKey(a.Assignee) === mkNameKey(dirName);
+}
+// 실사 완료로 세는 기록 — 본인이 휴대폰으로 · 위치를 받아서
+const mkScanCountsAsAudit = (s, t) => t === MK_SCAN_OWN && s.GpsLat != null && s.GpsLat !== "";
+// 기록의 구분 — ScanType 열 → 없으면 제목 꼬리(「… · 본인 확인」) → 그것도 없으면(10-27 전 기록) 사용자 메일 일치로 추정
+function mkScanTypeOf(s, assetById) {
+  if (s.ScanType) return s.ScanType;
+  const m = / · (본인 확인\(PC\)|본인 확인|IT 점검|습득 · 타인)$/.exec(String(s.Title || ""));
+  if (m) return m[1];
+  const a = assetById && assetById.get(String(s.AssetId));
+  return a && String(a.AssigneeEmail || "").trim().toLowerCase() === String(s.ScannedBy || "").toLowerCase() ? MK_SCAN_OWN : MK_SCAN_IT;
+}
+// QR 토큰으로 자산 하나 — 서버에서 QrToken 으로 거른다(인덱스 권장). 거르기가 안 되면 전체를 읽어 찾는다
+async function mkFindAssetByToken(token) {
+  const q = String(token).replace(/'/g, "''");
+  let items;
+  try { items = await mkListAll(MK_LISTS.itAssets, `&$filter=fields/QrToken eq '${q}'`); }
+  catch (e) { console.warn("[MKQR] QR 토큰 거르기 조회 실패 — 전체를 읽어 찾습니다:", e.message); items = await mkListAll(MK_LISTS.itAssets); }
+  return items.map((x) => ({ id: x.id, ...x.fields })).find((a) => a.QrToken === token) || null;
+}
+// 스캔 기록 저장 — 구분은 ScanType 열(없으면 제목 꼬리에도 남는다)
+async function mkSaveItScan(asset, gps, judge, who, type) {
+  const ok = gps && !gps.denied;
+  const fields = {
+    Title: `${asset.CICD || asset.Title} ${mkItKst(new Date().toISOString())} · ${type}`,
+    AssetId: String(asset.id), CICD: asset.CICD || "", AssetTitle: asset.Title || "",
+    ScannedBy: String(who.email || "").toLowerCase(), ScannedByName: who.name || "",
+    ClientTimestamp: new Date().toISOString(), ScanType: type,
+    GpsLat: ok ? gps.lat : null, GpsLng: ok ? gps.lng : null, GpsAccuracy: ok ? gps.accuracy : null,
+    DistanceM: judge.distM, VerifyStatus: judge.status, UserAgent: navigator.userAgent.slice(0, 250),
+  };
+  let saveErr = "";
+  try { await mkItWrite(async () => mkCreateItem(MK_LISTS.itScans, await mkItFields(MK_LISTS.itScans, fields))); }
+  catch (e) { saveErr = e.message; }
+  mkLog("IT 자산 스캔", saveErr ? "기록 실패" : "기록", asset.CICD || asset.Title, { id: asset.id, info: { 구분: type, 판정: judge.status, "거리(m)": judge.distM, ...(saveErr ? { 오류: mkErrText({ message: saveErr }) } : {}) } });
+  return saveErr;
+}
+// 이 탭에 남은 스캔 토큰을 한 번만 꺼낸다(주소의 ?asset= 도 지운다)
+function mkTakeScanToken() {
+  let tk = null; try { tk = sessionStorage.getItem(MK_ASSET_SCAN_KEY); sessionStorage.removeItem(MK_ASSET_SCAN_KEY); } catch (e) {}
+  try { const u = new URL(window.location.href); if (u.searchParams.has("asset")) { u.searchParams.delete("asset"); history.replaceState(null, "", u.pathname + (u.search || "") + u.hash); } } catch (e) {}
+  return tk;
+}
+
+/* 직원용 스캔 화면(10-27 · mkqr-scan2) — IT 권한이 없는 사람이 자산 QR 을 스캔했을 때. 휴대폰 화면 기준으로 그린다.
+   본인 자산이면 「내 자산 확인(실사)」, 다른 사람 자산이면 「습득 신고」. 사용자 이름 · 메일 · 등록 위치는 보여 주지 않는다. */
+function AssetScanPanel({ token, userEmail, userName, dirName, onClose }) {
+  const [st, setSt] = useState({ phase: "load" });   // load → ready → gps → done | notfound | error
+  const mobile = mkIsMobile();
+  useEffect(() => {
+    let on = true;
+    (async () => {
+      try {
+        const a = await mkFindAssetByToken(token);
+        if (!on) return;
+        if (!a) { setSt({ phase: "notfound" }); mkLog("IT 자산 스캔", "실패", mkMaskToken(token), { info: { 사유: "등록되지 않은 QR" } }); return; }
+        const own = mkIsAssetOwner(a, userEmail, dirName);
+        setSt({ phase: "ready", asset: a, own });
+        mkLog("IT 자산 스캔", "열람", a.CICD || a.Title, { id: a.id, info: { 구분: own ? "본인 자산" : "다른 사람 자산" } });
+      } catch (e) { if (on) setSt({ phase: "error", error: e.message }); }
+    })();
+    return () => { on = false; };
+  }, [token]);
+  async function record() {
+    const { asset, own } = st;
+    setSt((s) => ({ ...s, phase: "gps" }));
+    const gps = await mkItGps();
+    const judge = mkItJudge(asset, gps);
+    const type = own ? (mobile ? MK_SCAN_OWN : MK_SCAN_OWN_PC) : MK_SCAN_OTHER;
+    const saveErr = await mkSaveItScan(asset, gps, judge, { email: userEmail, name: userName }, type);
+    setSt((s) => ({ ...s, phase: "done", gps, judge, type, saveErr }));
+  }
+  const a = st.asset || {};
+  const retired = a.Active === false || mkItStateOf(a) === "Retired";
+  const head = (
+    <div className="px-5 pt-5 pb-4" style={{ background: BRAND.navy }}>
+      <div className="text-[10.5px] font-semibold tracking-[.14em] text-white/50">PROPERTY OF STAR TRUCK KOREA</div>
+      <div className="mt-3 flex items-center gap-3">
+        <div className="w-11 h-11 rounded-xl flex items-center justify-center shrink-0 bg-white/10 text-white"><MkItTypeIcon type={a.AssetType} size={21} /></div>
+        <div className="min-w-0">
+          <div className="text-white text-[16px] font-semibold leading-snug truncate">{a.Title || "IT 자산"}</div>
+          <div className="text-white/60 text-[12px] font-mono mt-0.5">{a.CICD || ""}{a.SerialNo ? ` · ${a.SerialNo}` : ""}</div>
+        </div>
+      </div>
+    </div>
+  );
+  const btn = "w-full h-12 rounded-xl text-white text-[15px] font-semibold flex items-center justify-center gap-2 shadow-sm active:opacity-90 disabled:opacity-60";
+  const sub = "w-full h-11 rounded-xl text-[14px] font-medium text-slate-600 border border-slate-200 bg-white active:bg-slate-50";
+  let body = null;
+  if (st.phase === "load") body = <div className="py-14 text-center text-sm text-slate-400">자산을 확인하는 중…</div>;
+  else if (st.phase === "notfound") body = <div className="p-6 text-center"><AlertTriangle size={26} className="mx-auto text-amber-500 mb-2" /><div className="text-[15px] font-semibold text-slate-700">등록되지 않은 QR 입니다</div><div className="text-[13px] text-slate-500 mt-1 leading-relaxed">삭제되었거나 다시 발행된 라벨일 수 있습니다.<br />IT팀{MK_IT_MAIL ? `(${MK_IT_MAIL})` : ""}에 알려 주세요.</div></div>;
+  else if (st.phase === "error") body = <div className="p-6 text-center text-sm text-red-600">자산을 불러오지 못했습니다 — {mkErrText({ message: st.error })}</div>;
+  else if (st.own) {
+    // ── 본인 자산: 실사(본인 확인) ──
+    const j = st.judge || {};
+    const done = st.phase === "done";
+    const counted = done && st.type === MK_SCAN_OWN && j.status !== "GPS거부";
+    body = (
+      <div className="p-5" data-scan-own>
+        <div className="inline-flex items-center gap-1.5 text-[12px] font-semibold rounded-full px-2.5 py-1 bg-teal-50 text-teal-700"><CheckCircle2 size={13} /> 나에게 지급된 자산</div>
+        {!done ? (
+          <>
+            <div className="mt-3 text-[17px] font-semibold text-slate-800">내 자산 확인</div>
+            <p className="text-[13.5px] text-slate-500 mt-1 leading-relaxed">지금 이 장비 옆에서 위치를 기록해, 본인이 보유하고 있는지와 등록된 장소에 있는지 확인합니다. 연 1회 IT 자산 실사로 쓰입니다.</p>
+            <ol className="mt-4 space-y-2 text-[13px] text-slate-600">
+              {["장비 옆에서 진행해 주세요", "「위치 허용」 을 눌러 주세요", "기록이 끝나면 확인 완료"].map((t, i) => (
+                <li key={i} className="flex items-center gap-2.5"><span className="w-5 h-5 rounded-full text-[11px] font-semibold flex items-center justify-center text-white shrink-0" style={{ background: BRAND.accent }}>{i + 1}</span>{t}</li>
+              ))}
+            </ol>
+            {!mobile && <div className="mt-4 rounded-xl bg-amber-50 text-amber-800 text-[12.5px] px-3.5 py-2.5 leading-relaxed">PC 에서 연 화면입니다. 실사는 <b>휴대폰 카메라로 장비 라벨을 스캔</b>해야 완료로 인정됩니다.</div>}
+            {retired && <div className="mt-3 rounded-xl bg-slate-100 text-slate-600 text-[12.5px] px-3.5 py-2.5">반납 · 폐기로 표시된 자산입니다 — 아직 가지고 있다면 IT팀에 알려 주세요.</div>}
+            <button onClick={record} disabled={st.phase === "gps"} className={`${btn} mt-5`} style={{ background: BRAND.accent }} data-scan-record>
+              {st.phase === "gps" ? <><RefreshCw size={16} className="animate-spin" /> 위치 확인 중…</> : <><Navigation size={16} /> 위치 확인하고 기록하기</>}
+            </button>
+            <p className="text-[11.5px] text-slate-400 mt-2.5 text-center">위치는 자산 확인 목적으로만 IT팀이 봅니다.</p>
+          </>
+        ) : (
+          <div data-scan-result={j.status}>
+            <div className="mt-4 flex flex-col items-center text-center">
+              <div className={`w-14 h-14 rounded-full flex items-center justify-center ${counted ? (j.status === "검증필요" ? "bg-amber-50" : "bg-emerald-50") : "bg-slate-100"}`}>
+                {counted ? (j.status === "검증필요" ? <AlertTriangle size={28} className="text-amber-500" /> : <CheckCircle2 size={30} className="text-emerald-600" />) : <XCircle size={28} className="text-slate-400" />}
+              </div>
+              <div className="mt-3 text-[18px] font-semibold text-slate-800">{counted ? (j.status === "검증필요" ? "확인 기록 · 위치 다름" : "확인 완료") : "기록만 남았어요"}</div>
+              <div className="text-[13.5px] text-slate-500 mt-1.5 leading-relaxed">
+                {st.type === MK_SCAN_OWN_PC ? "PC 에서 연 기록이라 실사로 세지 않습니다. 휴대폰으로 장비 라벨을 스캔해 주세요."
+                  : j.status === "정상" ? `등록된 장소 근처(약 ${Number(j.distM).toLocaleString()}m)에서 본인 보유를 확인했습니다.`
+                  : j.status === "검증필요" ? `등록된 장소에서 약 ${j.distM >= 1000 ? (j.distM / 1000).toFixed(1) + "km" : j.distM + "m"} 떨어져 있습니다. 자리를 옮겼다면 IT팀이 확인 후 위치를 고칩니다.`
+                  : j.status === "위치미등록" ? "본인 보유를 확인했습니다. 이 장비는 아직 등록된 장소가 없어 이번 위치를 IT팀이 참고합니다."
+                  : "위치 권한이 꺼져 있어 위치 없이 기록되었습니다. 실사는 위치가 있어야 완료됩니다."}
+              </div>
+            </div>
+            {st.saveErr && <div className="mt-3 rounded-xl bg-red-50 text-red-700 text-[12.5px] px-3.5 py-2.5">기록 저장 실패 — {mkErrText({ message: st.saveErr })}</div>}
+            {(j.status === "GPS거부" || st.saveErr) && <button onClick={record} className={`${btn} mt-4`} style={{ background: BRAND.accent }}><RefreshCw size={16} /> 다시 시도</button>}
+          </div>
+        )}
+      </div>
+    );
+  } else {
+    // ── 다른 사람 자산: 습득 신고 ──
+    const done = st.phase === "done";
+    body = (
+      <div className="p-5" data-scan-other>
+        {!done ? (
+          <>
+            <div className="text-[17px] font-semibold text-slate-800">다른 직원에게 지급된 장비입니다</div>
+            <p className="text-[13.5px] text-slate-500 mt-1.5 leading-relaxed">주인을 잃은 장비라면 「습득 신고」 를 눌러 주세요. 지금 위치가 IT팀에 기록되고, IT팀이 사용자에게 연락합니다.</p>
+            <div className="mt-4 rounded-xl bg-slate-50 border border-slate-100 px-3.5 py-3 text-[12.5px] text-slate-600 leading-relaxed">장비는 IT팀{MK_IT_MAIL ? <> (<b>{MK_IT_MAIL}</b>)</> : ""}에 전달해 주세요. 사용자 정보는 보안상 보여 드리지 않습니다.</div>
+            <button onClick={record} disabled={st.phase === "gps"} className={`${btn} mt-5`} style={{ background: "#BE123C" }} data-scan-found>
+              {st.phase === "gps" ? <><RefreshCw size={16} className="animate-spin" /> 위치 확인 중…</> : <><MapPin size={16} /> 습득 신고 (위치 남기기)</>}
+            </button>
+            <p className="text-[11.5px] text-slate-400 mt-2.5 text-center">스캔한 사람과 시각은 IT 자산 기록에 남습니다.</p>
+          </>
+        ) : (
+          <div className="flex flex-col items-center text-center pt-2" data-scan-result="found">
+            <div className="w-14 h-14 rounded-full flex items-center justify-center bg-emerald-50"><CheckCircle2 size={30} className="text-emerald-600" /></div>
+            <div className="mt-3 text-[18px] font-semibold text-slate-800">습득 신고가 접수되었습니다</div>
+            <div className="text-[13.5px] text-slate-500 mt-1.5 leading-relaxed">{st.judge && st.judge.status === "GPS거부" ? "위치 없이 기록되었습니다. " : ""}IT팀이 사용자에게 연락합니다.<br />장비는 IT팀{MK_IT_MAIL ? `(${MK_IT_MAIL})` : ""}에 전달해 주세요. 감사합니다.</div>
+            {st.saveErr && <div className="mt-3 w-full rounded-xl bg-red-50 text-red-700 text-[12.5px] px-3.5 py-2.5">기록 저장 실패 — IT팀에 직접 알려 주세요</div>}
+          </div>
+        )}
+      </div>
+    );
+  }
+  return (
+    <div className="max-w-[440px] mx-auto bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden" data-asset-scan>
+      {head}
+      {body}
+      {onClose && <div className="px-5 pb-5"><button onClick={onClose} className={sub}>{st.phase === "done" ? "닫기" : "나중에 하기"}</button></div>}
+    </div>
+  );
+}
+
+function ItScanModal({ token, onClose, canEditAssets, onDone, userEmail, userName, dirName }) {
   const [state, setState] = useState({ phase: "load" });   // load → gps → saved | notfound | error
   const [locBusy, setLocBusy] = useState(false);
   useEffect(() => {
     let alive = true;
     (async () => {
       try {
-        const items = await mkListAll(MK_LISTS.itAssets);
-        const hit = items.map((x) => ({ id: x.id, ...x.fields })).find((a) => a.QrToken === token);
+        const hit = await mkFindAssetByToken(token);
         if (!alive) return;
         if (!hit) { setState({ phase: "notfound" }); mkLog("IT 자산 스캔", "실패", mkMaskToken(token), { info: { 사유: "등록되지 않은 QR" } }); return; }
         setState({ phase: "gps", asset: hit });
         const gps = await mkItGps();
         const j = mkItJudge(hit, gps);
-        const fields = {
-          Title: `${hit.CICD || hit.Title} ${mkItKst(new Date().toISOString())}`,
-          AssetId: String(hit.id), CICD: hit.CICD || "", AssetTitle: hit.Title || "",
-          ScannedBy: (userEmail || "").toLowerCase(), ScannedByName: userName || "",
-          ClientTimestamp: new Date().toISOString(),
-          GpsLat: gps.denied ? null : gps.lat, GpsLng: gps.denied ? null : gps.lng, GpsAccuracy: gps.denied ? null : gps.accuracy,
-          DistanceM: j.distM, VerifyStatus: j.status, UserAgent: navigator.userAgent.slice(0, 250),
-        };
-        let saveErr = "";
-        try { await mkItWrite(async () => mkCreateItem(MK_LISTS.itScans, await mkItFields(MK_LISTS.itScans, fields))); }
-        catch (e) { saveErr = e.message; }
-        mkLog("IT 자산 스캔", saveErr ? "기록 실패" : "기록", hit.CICD || hit.Title, { id: hit.id, info: { 판정: j.status, "거리(m)": j.distM, ...(saveErr ? { 오류: mkErrText({ message: saveErr }) } : {}) } });
-        if (alive) setState({ phase: "saved", asset: hit, gps, judge: j, saveErr });
+        // 10-27 구분 — IT 담당이 자기 자산을 찍으면 「본인 확인」(휴대폰일 때만 실사로 센다), 그 밖은 「IT 점검」
+        const type = mkIsAssetOwner(hit, userEmail, dirName) ? (mkIsMobile() ? MK_SCAN_OWN : MK_SCAN_OWN_PC) : MK_SCAN_IT;
+        const saveErr = await mkSaveItScan(hit, gps, j, { email: userEmail, name: userName }, type);
+        if (alive) setState({ phase: "saved", asset: hit, gps, judge: j, saveErr, type });
         if (onDone) onDone();
       } catch (e) { if (alive) setState({ phase: "error", error: e.message }); }
     })();
@@ -6259,7 +6469,7 @@ function ItScanModal({ token, onClose, canEditAssets, onDone, userEmail, userNam
           <div className="mt-4 rounded-xl border px-4 py-3 bg-slate-50">
             {state.phase === "gps" ? <div className="text-sm text-slate-600 flex items-center gap-2"><Navigation size={15} className="text-slate-400" /> 위치(GPS)를 확인하고 기록하는 중… <span className="text-xs text-slate-400">위치 권한을 허용해 주세요</span></div> : (
               <div className="text-sm">
-                <div className="flex items-center gap-2 mb-1"><MkItStatus s={state.judge.status} />
+                <div className="flex items-center gap-2 mb-1"><MkItStatus s={state.judge.status} />{state.type && <MkScanType t={state.type} />}
                   <span className="text-slate-600">{state.judge.status === "정상" ? `등록 위치에서 ${state.judge.distM.toLocaleString()}m (허용 ${state.judge.radius}m)`
                     : state.judge.status === "검증필요" ? `등록 위치에서 ${state.judge.distM.toLocaleString()}m — 허용 ${state.judge.radius}m 밖`
                     : state.judge.status === "위치미등록" ? "이 자산은 등록된 위치(좌표)가 없습니다"
@@ -6305,6 +6515,7 @@ function App({ userEmail, userName }) {
   const [itLoading, setItLoading] = useState(false);
   async function reloadIt() { setItLoading(true); try { const r = await mkItLoad(); setIt({ ...r, loaded: true }); } finally { setItLoading(false); } }
   const [scanToken, setScanToken] = useState(null);
+  const [staffScanToken, setStaffScanToken] = useState(null);   // 10-27 IT 권한 없는 사람의 자산 QR 스캔
   useEffect(() => { loadUiContent().then(setUiContent); }, []);
 
   async function reload(range = checkinRange) {
@@ -6474,11 +6685,10 @@ function App({ userEmail, userName }) {
   // QR 스캔으로 들어온 경우(?asset=) — 첫 로딩이 끝나면 한 번 연다. IT 권한이 없으면 안내만.
   useEffect(() => {
     if (!hasLoadedOnce) return;
-    let tk = null; try { tk = sessionStorage.getItem(MK_ASSET_SCAN_KEY); sessionStorage.removeItem(MK_ASSET_SCAN_KEY); } catch (e) {}
+    const tk = mkTakeScanToken();
     if (!tk) return;
-    try { const u = new URL(window.location.href); if (u.searchParams.has("asset")) { u.searchParams.delete("asset"); history.replaceState(null, "", u.pathname + (u.search || "") + u.hash); } } catch (e) {}
     if (["itAssets", "itScans", "itQr"].some((k) => canAccess(k))) setScanToken(tk);
-    else alert("Star Truck Korea IT 자산 QR 입니다.\n자산 정보 확인과 위치 기록은 IT 담당 권한(IT 자산 관리 · 스캔 기록)이 있어야 합니다.");
+    else setStaffScanToken(tk);   // 10-27 — IT 권한이 없으면 직원용 화면(본인 확인 · 습득 신고)
   }, [hasLoadedOnce]);
 
   // 로그인은 되지만(=mkqr_Admins엔 있음) 카테고리 접근 권한이 하나도 없는 사람은, 이도저도 아닌 텅 빈 화면을
@@ -6696,7 +6906,12 @@ function App({ userEmail, userName }) {
       </main>
       </div>
 
-      {scanToken && <ItScanModal token={scanToken} userEmail={userEmail} userName={shortName} canEditAssets={canEdit("itAssets")}
+      {staffScanToken && (
+        <div className="fixed inset-0 z-50 bg-black/40 overflow-y-auto p-4 flex items-start sm:items-center justify-center" onClick={() => setStaffScanToken(null)}>
+          <div className="w-full max-w-[440px] my-6" onClick={(e) => e.stopPropagation()}><AssetScanPanel token={staffScanToken} userEmail={(userEmail || "").toLowerCase()} userName={shortName} dirName={myDirName} onClose={() => setStaffScanToken(null)} /></div>
+        </div>
+      )}
+      {scanToken && <ItScanModal token={scanToken} userEmail={userEmail} userName={shortName} dirName={myDirName} canEditAssets={canEdit("itAssets")}
         onClose={() => setScanToken(null)} onDone={() => { if (it.loaded) reloadIt(); }} />}
       {permDeniedPopup && (
         <Modal title="접근 권한 없음" onClose={() => setPermDeniedPopup(false)}>
@@ -6757,19 +6972,24 @@ function MyAssetsPanel({ userEmail, userName }) {
   // 카드는 아이콘 · 이름 · 상태 → CI CD(복사) → 2열 정보 격자 순. 안내 문구는 맨 아래 한 줄로.
   const [list, setList] = useState(null);      // null = 읽는 중
   const [err, setErr] = useState("");
-  const [label, setLabel] = useState(null);    // { a, html }
   const [type, setType] = useState("");        // "" = 전체
+  const [audit, setAudit] = useState(null);    // 자산 id → 마지막 본인 확인(실사) 시각 · null = 못 읽음/읽는 중
   const [copied, setCopied] = useState("");
   async function load() {
     setErr(""); setList(null);
     try { setList(await mkLoadMyAssets(userEmail, userName)); }
     catch (e) { setErr(/\(403\)|accessDenied/.test(e.message) ? "IT 자산 목록을 읽을 권한이 없습니다 — IT 담당자에게 알려 주세요." : "내 자산을 불러오지 못했습니다: " + e.message); setList([]); }
+    // 10-27 본인 확인(실사) — 내가 스캔한 기록만 서버에서 걸러 읽는다(ScannedBy 인덱스). 못 읽으면 표시만 빠진다
+    try {
+      const me = String(userEmail || "").trim().toLowerCase().replace(/'/g, "''");
+      const rows = (await mkListAll(MK_LISTS.itScans, `&$filter=fields/ScannedBy eq '${me}'`)).map((x) => ({ id: x.id, ...x.fields, Created: x.fields.Created || x.createdDateTime }));
+      const m = new Map();
+      rows.forEach((r) => { if (!mkScanCountsAsAudit(r, mkScanTypeOf(r, null))) return; const k = String(r.AssetId); if (!m.has(k) || String(r.Created) > m.get(k)) m.set(k, String(r.Created)); });
+      setAudit(m);
+    } catch (e) { console.warn("[MKQR] 내 스캔 기록 조회 실패 — 본인 확인 표시를 생략합니다:", e.message); setAudit(null); }
   }
   useEffect(() => { load(); }, [userEmail, userName]);
-  async function showLabel(a) {
-    if (!a.QrToken) { setLabel({ a, html: "" }); return; }
-    try { setLabel({ a, html: mkItLabelHtml(a, await mkItQrData(a)) }); } catch (e) { setLabel({ a, html: "" }); }
-  }
+  const thisYear = new Date(Date.now() + 9 * 36e5).getUTCFullYear();
   async function copy(v) {
     try { await navigator.clipboard.writeText(v); } catch (e) { return; }
     setCopied(v); setTimeout(() => setCopied((c) => (c === v ? "" : c)), 1500);
@@ -6861,11 +7081,15 @@ function MyAssetsPanel({ userEmail, userName }) {
                       {dd != null && dd <= 30 && <div className="mt-0.5 font-medium">종료가 가까워요 — 반납 · 교체를 IT 와 상의해 주세요</div>}
                     </div>
                   )}
-                  {a.QrToken && (
-                    <div className="mt-4 pt-3 border-t border-slate-100 flex justify-end">
-                      <button onClick={() => showLabel(a)} className="inline-flex items-center gap-1.5 text-[12.5px] font-medium text-slate-500 hover:text-slate-900 transition-colors" data-mine-label><QrCode size={14} /> 라벨 보기 <ChevronRight size={13} /></button>
-                    </div>
-                  )}
+                  {audit && (() => {   // 10-27 본인 확인(실사) — 라벨 보기 대신. 화면의 QR 로 실사를 대신하지 못하게 라벨은 보여 주지 않는다
+                    const last = audit.get(String(a.id));
+                    const yr = last ? new Date(Date.parse(last) + 9 * 36e5).getUTCFullYear() : null;
+                    const st = !a.QrToken ? ["QR 라벨 미발행 — 실사 대상 아님", "text-slate-400", null]
+                      : last && yr === thisYear ? [`본인 확인 완료 · ${mkItKst(last).slice(0, 10)}`, "text-emerald-700", <CheckCircle2 key="i" size={14} />]
+                      : last ? [`올해 본인 확인 필요 · 마지막 ${mkItKst(last).slice(0, 10)}`, "text-amber-700", <AlertTriangle key="i" size={14} />]
+                      : ["본인 확인 전 — 장비의 QR 라벨을 휴대폰으로 스캔해 주세요", "text-slate-500", <ScanLine key="i" size={14} />];
+                    return <div className={`mt-4 pt-3 border-t border-slate-100 flex items-center gap-1.5 text-[12.5px] font-medium ${st[1]}`} data-mine-audit>{st[2]}<span className="truncate">{st[0]}</span></div>;
+                  })()}
                 </div>
               );
             })}
@@ -6874,23 +7098,15 @@ function MyAssetsPanel({ userEmail, userName }) {
       )}
       <div className="mt-5 flex items-start gap-2 text-[12px] text-slate-400 leading-relaxed" data-mine-note>
         <Info size={14} className="shrink-0 mt-0.5" />
-        <span>고장 · 분실 · 교체 · 반납이 필요하거나 목록이 실제와 다르면 <b className="font-semibold text-slate-500">IT Ticket</b> 으로 접수해 주세요 — <b className="font-semibold text-slate-500">CI CD</b> 를 눌러 복사해 붙여 넣으면 빠릅니다. 충전기 · 케이블 같은 재고 품목은 표시되지 않습니다.</span>
+        <span><b className="font-semibold text-slate-500">연 1회 자산 실사</b> — 장비에 붙은 QR 라벨을 휴대폰 카메라로 스캔해 「위치 확인하고 기록하기」 를 누르면 본인 확인이 끝납니다. 고장 · 분실 · 교체 · 반납이 필요하거나 목록이 실제와 다르면 <b className="font-semibold text-slate-500">IT Ticket</b> 으로 접수해 주세요(<b className="font-semibold text-slate-500">CI CD</b> 를 눌러 복사). 충전기 · 케이블 같은 재고 품목은 표시되지 않습니다.</span>
       </div>
-      {label && (
-        <div className="fixed inset-0 z-[80] flex items-center justify-center p-4" style={{ background: "rgba(15,23,42,.5)" }} onClick={() => setLabel(null)}>
-          <div className="bg-white rounded-2xl shadow-2xl p-5 max-w-[520px] w-full" onClick={(e) => e.stopPropagation()}>
-            <div className="flex items-center justify-between mb-3"><b className="text-sm text-slate-800">자산 라벨 · <span className="font-mono">{label.a.CICD || ""}</span></b><button onClick={() => setLabel(null)} className="w-8 h-8 inline-flex items-center justify-center rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-700"><X size={16} /></button></div>
-            {label.html ? (<><style>{MK_IT_LABEL_CSS}</style><div className="flex justify-center bg-slate-100 rounded-xl p-4 overflow-x-auto" dangerouslySetInnerHTML={{ __html: label.html }} /></>)
-              : <div className="text-sm text-slate-500 py-6 text-center">이 자산은 아직 QR 라벨이 발행되지 않았습니다.</div>}
-            <p className="text-[11px] text-slate-400 mt-3">장비에 붙은 라벨과 같은지 확인용입니다. 라벨이 떨어지거나 훼손됐으면 IT Ticket 으로 재발행을 요청해 주세요.</p>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
 /* 권한 표에 없는 직원 화면(10-27) — 직원 명부에 있는 사람은 「내 자산」 만 보는 간단한 화면으로 들어온다 */
 function MyAssetsOnlyApp({ userEmail, userName, dirName }) {
+  const [scanTk, setScanTk] = useState(() => (MK_ASSET_PENDING ? mkTakeScanToken() : null));   // 10-27 자산 QR 로 들어온 경우
+  const [mineKey, setMineKey] = useState(0);   // 본인 확인을 마치면 내 자산 카드의 확인 표시를 다시 읽는다
   const nameShort = (() => { const mm = /\(([^()]+)\)\s*$/.exec(userName || ""); return (mm ? mm[1] : userName || userEmail || "").trim(); })();
   return (
     <div className="min-h-screen flex flex-col" style={{ background: "#F5F6F8" }} data-mine-only>
@@ -6908,8 +7124,8 @@ function MyAssetsOnlyApp({ userEmail, userName, dirName }) {
         </div>
       </div>
       <div className="flex-1 overflow-y-auto p-4 md:p-6"><div className="max-w-[1200px] mx-auto">
-        {MK_ASSET_PENDING && <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-2.5 text-xs text-amber-800">스캔한 QR 은 Star Truck Korea IT 자산 라벨입니다. 자산 정보와 위치 기록은 IT 담당만 볼 수 있어, 여기서는 내 자산만 보여 드립니다.</div>}
-        <MyAssetsPanel userEmail={userEmail} userName={dirName} />
+        {scanTk && <div className="mb-6"><AssetScanPanel token={scanTk} userEmail={userEmail} userName={nameShort} dirName={dirName} onClose={() => { setScanTk(null); setMineKey((k) => k + 1); }} /></div>}
+        <MyAssetsPanel key={mineKey} userEmail={userEmail} userName={dirName} />
       </div></div>
       <div className="text-center text-[11px] text-slate-400 py-4">© 2026 Star Truck Korea · QR Hub · 문의 {MK_IT_MAIL || "IT팀"}</div>
     </div>

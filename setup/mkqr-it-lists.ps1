@@ -53,9 +53,9 @@ Ensure-Index $A "QrToken"; Ensure-Index $A "CICD"; Ensure-Index $A "SerialNo"; E
 
 # 2) 스캔 기록
 $S = "mkqr_ITScans"; Ensure-List $S | Out-Null
-foreach ($n in "AssetId", "CICD", "AssetTitle", "ScannedBy", "ScannedByName", "ClientTimestamp", "VerifyStatus", "UserAgent") { Ensure-Field $S $n "Text" }
+foreach ($n in "AssetId", "CICD", "AssetTitle", "ScannedBy", "ScannedByName", "ClientTimestamp", "VerifyStatus", "UserAgent", "ScanType") { Ensure-Field $S $n "Text" }   # ScanType(10-27) = 본인 확인 · 본인 확인(PC) · IT 점검 · 습득 · 타인
 foreach ($n in "GpsLat", "GpsLng", "GpsAccuracy", "DistanceM") { Ensure-Field $S $n "Number" }
-Ensure-Index $S "AssetId"; Ensure-Index $S "Created"
+Ensure-Index $S "AssetId"; Ensure-Index $S "Created"; Ensure-Index $S "ScannedBy"   # ScannedBy(10-27) — 내 자산의 본인 확인 표시
 
 # 3) 권한 열 — 비어 있으면 관리자(Access_admins) 값을 따르고, 그것도 없으면 「없음」
 $C = "mkqr_CategoryAccess"
