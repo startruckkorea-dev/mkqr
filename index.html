@@ -4003,13 +4003,14 @@ function mkItGps(timeoutMs = 15000) {
       { enableHighAccuracy: true, timeout: timeoutMs, maximumAge: 0 });
   });
 }
-function mkItJudge(asset, gps) {
+// geo = 주소별 확정 좌표(mkLoadAddrGeo) — 있으면 그 좌표가 기준(10-27), 없으면 자산 좌표
+function mkItJudge(asset, gps, geo) {
   if (!gps || gps.denied) return { status: "GPS거부", distM: null };
-  const hasCoord = asset.Lat != null && asset.Lat !== "" && asset.Lng != null && asset.Lng !== "";
-  if (!hasCoord) return { status: "위치미등록", distM: null };
-  const distM = Math.round(mkItDistanceM(gps.lat, gps.lng, Number(asset.Lat), Number(asset.Lng)));
+  const ref = mkItRefPoint(asset, geo);
+  if (!ref) return { status: "위치미등록", distM: null };
+  const distM = Math.round(mkItDistanceM(gps.lat, gps.lng, ref.lat, ref.lng));
   const radius = Number(asset.VerifyRadiusM) > 0 ? Number(asset.VerifyRadiusM) : MK_IT_RADIUS_DEFAULT;
-  return { status: distM <= radius ? "정상" : "검증필요", distM, radius };
+  return { status: distM <= radius ? "정상" : "검증필요", distM, radius, ref: ref.src };
 }
 function MkItStatus({ s }) {
   return <span className={`inline-block shrink-0 whitespace-nowrap text-[11px] font-semibold rounded-full px-2 py-0.5 ${MK_IT_STATUS[s] || "bg-slate-100 text-slate-600"}`}>{s || "-"}</span>;
@@ -4412,6 +4413,224 @@ const MK_IT_REASONS = {
   Receive: ["신규 구매", "반환 입고"], Adjust: ["재고 실사", "오류 정정"],
 };
 
+// ---- 자산 위치 = 회사 주소(10-27 · mkqr-addr) ---------------------------------------------------------------------
+// 주소 목록은 GA 명함 · 비품과 같은 파일(STK-DB 문서 루트 GA_Address.xlsx → 없으면 BC_Address.xlsx, 1행 머리글 · A 번호 · B 국문 · C 영문)을 읽는다.
+// 목록에 없는 곳은 「그 외 주소」 로 직접 적는다.
+// 주소마다 IT 가 한 번 「좌표 확정」 을 하면 mkqr_address_geo.json(STK-DB 문서 루트)에 남고, 그 주소를 쓰는 모든 자산의 GPS 판정이
+// 이 확정 좌표를 기준으로 한다(자산에 적힌 좌표보다 우선). 확정 좌표가 없으면 예전처럼 자산의 좌표로 판정한다.
+const MK_ADDR_FILES = ["GA_Address.xlsx", "BC_Address.xlsx"];
+const MK_ADDR_GEO_FILE = "mkqr_address_geo.json";
+const MK_ADDR_BUILTIN = [   // 파일을 못 읽을 때 — GA 와 같은 내장 목록(2026-05 BC_Address.xlsx 기준)
+  ["서울특별시 중구 한강대로 416 서울스퀘어 (04637)", "8th Fl. Seoul Square, 416 Hangang-daero, Jung-gu, Seoul, Korea"],
+  ["경기도 여주시 가남읍 경충대로 904-67 (12663)", "904-67 Gyeongchung-daero, Ganam-eup, Yeoju-si, Gyeonggi-do 12663, Korea"],
+  ["경기도 용인시 기흥구 공세로 58, 3층 (17086)", "3F, 58 Gongse-ro, Giheung-gu, Yongin-si, Gyeonggi-do 17086, Korea"],
+  ["충청남도 아산시 음봉면 음봉로 232 (31415)", "232 Eumbong-ro, Eumbong-myeon, Asan-si, Chungnam 31415, Korea"],
+  ["경기도 연천군 전곡읍 양연로 703 (11041)", "703 Yangyeon-ro, Jeongok-eup, Yeoncheon-gun, Gyeonggi-do 11041, Korea"],
+  ["인천 동구 중봉대로 68번길 48 (22534)", "48 Jungbong-daero 68beon-gil, Dong-gu, Incheon 22534, Korea"],
+  ["경기도 평택시 진위면 남부대로 552 3층 (17709)", "3F, 552 Nambu-daero, Jinwi-myeon, Pyeongtaek-si, Gyeonggi-do 17709, Korea"],
+  ["경상남도 양산시 물금읍 제방로 225 양산 ICD 6단지 한진CY내 (50615)", "Inside Hanjin CY, Yangsan ICD Complex 6, 225 Jebang-ro, Mulgeum-eup, Yangsan-si, Gyeongnam 50615, Korea"],
+  ["경상남도 창원시 진해구 안골로 52 (51609)", "52 Angol-ro, Jinhae-gu, Changwon-si, Gyeongnam 51609, Korea"],
+  ["경상남도 함안군 군북면 장지4길 4 (52063)", "4 Jangji 4-gil, Gunbuk-myeon, Haman-gun, Gyeongnam 52063, Korea"],
+  ["경상북도 포항시 남구 대솔면 철강산단로34번길 28, 2층 (37875)", "2F, 28 Cheolgangsandan-ro 34beon-gil, Daesong-myeon, Nam-gu, Pohang-si, Gyeongbuk 37875, Korea"],
+  ["광주광역시 광산구 평동산단3번로 105 (62414)", "105 Pyeongdongsandan 3beon-ro, Gwangsan-gu, Gwangju 62414, Korea"],
+  ["전라남도 광양시 광양읍 제철로 256 2층 (57759)", "2F, 256 Jecheol-ro, Gwangyang-eup, Gwangyang-si, Jeonnam 57759, Korea"],
+  ["충청북도 제천시 단양로 14번길 48-13 2층 (27134)", "2F, 48-13 Danyang-ro 14beon-gil, Je-cheon-si, Chungbuk 27134, Korea"],
+  ["강원도 강릉시 강변로 126번길 10, 2층 2호 (25603)", "202, 2F, 10 Gangbyeon-ro 126beon-gil, Gangneung-si, Gangwon-do 25603, Korea"],
+  ["전라북도 김제시 금구면 용지리 430-1, 2층 (54340)", "2F, 430-1 Yongji-ri, Geumgu-myeon, Gimje-si, Jeonbuk 54340, Korea"],
+  ["충청북도 청주시 서원구 남이면 연청로 1288-8 (28185)", "1288-8 Yeoncheong-ro, Nami-myeon, Seowon-gu, Cheongju-si, Chungbuk 28185, Korea"],
+  ["울산광역시 울주군 온산읍 우불강양로 26 (우불리) (45011)", "26, Ubonggangyang-ro, Onsan-eup, Ulju-gun, Ulsan 45011, Korea"],
+].map(([ko, en], i) => ({ id: i + 1, ko, en }));
+const mkAddrKey = (s) => String(s || "").replace(/\s+/g, " ").trim();
+// 짧은 이름 — 시 · 군 · 구 + 도로명(목록에서 한눈에 구분)
+function mkAddrShort(ko) {
+  const s = mkAddrKey(ko).replace(/\([^)]*\)/g, "").trim();
+  const p = s.split(" ");
+  const city = (p.find((x, i) => i > 0 && /(시|군)$/.test(x)) || p[0] || "").replace(/(특별시|광역시)$/, "");
+  return `${city} · ${p.slice(-3).join(" ")}`.replace(/,$/, "");
+}
+let _mkAddrP = null;
+function mkLoadAddresses() {
+  if (_mkAddrP) return _mkAddrP;
+  _mkAddrP = (async () => {
+    try {
+      const token = await getGraphToken(); const d = await getMkDocDriveId(token);
+      for (const f of MK_ADDR_FILES) {
+        const r = await fetch(`${GRAPH}/drives/${d}/root:/${encodeURIComponent(f)}:/content`, { headers: { Authorization: "Bearer " + token }, cache: "no-store" });
+        if (!r.ok) continue;
+        const wb = XLSX.read(await r.arrayBuffer(), { type: "array" });
+        const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1 });
+        const out = [];
+        rows.forEach((row) => {
+          if (!row) return;
+          const ko = mkAddrKey(row[1]), en = mkAddrKey(row[2]);
+          if (!ko || /^(국문|주소|address|ko)/i.test(ko) || /^(no|번호|#)$/i.test(String(row[0] ?? "").trim())) return;
+          out.push({ id: out.length + 1, ko, en });
+        });
+        if (out.length) return { list: out, source: f.replace(/\.xlsx$/i, "") };
+      }
+    } catch (e) { console.warn("[MKQR] 주소 파일을 못 읽어 내장 목록을 씁니다:", e.message); }
+    return { list: MK_ADDR_BUILTIN, source: "내장 목록" };
+  })();
+  return _mkAddrP;
+}
+// 확정 좌표 { items: { 주소: { lat, lng, by, at, how } } }
+let _mkGeo = null, _mkGeoAt = 0;
+async function mkLoadAddrGeo(force) {
+  if (_mkGeo && !force && Date.now() - _mkGeoAt < 5 * 60e3) return _mkGeo;
+  try {
+    const token = await getGraphToken(); const d = await getMkDocDriveId(token);
+    const r = await fetch(`${GRAPH}/drives/${d}/root:/${MK_ADDR_GEO_FILE}:/content`, { headers: { Authorization: "Bearer " + token }, cache: "no-store" });
+    _mkGeo = r.ok ? ((await r.json()).items || {}) : (_mkGeo || {});
+  } catch (e) { console.warn("[MKQR] 확정 좌표 파일 읽기 실패:", e.message); _mkGeo = _mkGeo || {}; }
+  _mkGeoAt = Date.now();
+  return _mkGeo;
+}
+async function mkSaveAddrGeo(addr, geo) {
+  const key = mkAddrKey(addr); if (!key) throw new Error("주소가 비어 있습니다");
+  const items = { ...(await mkLoadAddrGeo(true)) };   // 저장 직전 최신을 다시 읽어 다른 담당자의 확정을 지우지 않는다
+  const before = items[key];
+  items[key] = { lat: Number(Number(geo.lat).toFixed(6)), lng: Number(Number(geo.lng).toFixed(6)), how: geo.how || "manual", by: (_mkLogUser && _mkLogUser.email) || "", at: new Date().toISOString() };
+  const token = await getGraphToken(); const d = await getMkDocDriveId(token);
+  const r = await fetch(`${GRAPH}/drives/${d}/root:/${MK_ADDR_GEO_FILE}:/content`, { method: "PUT", headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" }, body: JSON.stringify({ version: 1, items }, null, 1) });
+  if (!r.ok) throw new Error(`확정 좌표 저장 실패 (${r.status})`);
+  _mkGeo = items; _mkGeoAt = Date.now();
+  mkLog("IT 자산", "주소 좌표 확정", key, { info: { 좌표: `${items[key].lat}, ${items[key].lng}`, 방법: { geocode: "주소 검색", gps: "현재 위치", manual: "직접 입력" }[items[key].how] || items[key].how, 이전: before ? `${before.lat}, ${before.lng}` : "없음" } });
+  return items[key];
+}
+// 주소 → 좌표 찾기(OpenStreetMap). 층 · 호 · 우편번호 · 건물명을 떼고 도로명 + 번지까지로 줄여 몇 번 시도한다
+async function mkGeocodeAddr(ko, en) {
+  const k = mkAddrKey(ko).replace(/\([^)]*\)/g, " ").replace(/,?\s*\d+층.*$/, "").replace(/,?\s*\d+호.*$/, "");
+  const road = (/(.*?(?:로|길)\s*\d+(?:-\d+)?)(?:\s|,|$)/.exec(k) || [])[1];
+  const tries = [road, k, en && mkAddrKey(en).replace(/^(\d+F|\d+(st|nd|rd|th)\s*Fl\.?|Inside [^,]+),\s*/i, "")].filter(Boolean);
+  for (const q of [...new Set(tries.map(mkAddrKey))]) {
+    try {
+      const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=kr&q=${encodeURIComponent(q)}`);
+      const data = await res.json();
+      if (data && data.length) return { lat: Number(data[0].lat), lng: Number(data[0].lon), how: "geocode", q };
+    } catch (e) { /* 다음 후보 */ }
+  }
+  return null;
+}
+// 판정 기준 좌표 — 확정 좌표(주소) 우선, 없으면 자산 좌표
+function mkItRefPoint(asset, geo) {
+  const g = geo && asset.AddressKr ? geo[mkAddrKey(asset.AddressKr)] : null;
+  if (g && isFinite(g.lat) && isFinite(g.lng)) return { lat: Number(g.lat), lng: Number(g.lng), src: "주소" };
+  if (asset.Lat != null && asset.Lat !== "" && asset.Lng != null && asset.Lng !== "") return { lat: Number(asset.Lat), lng: Number(asset.Lng), src: "자산" };
+  return null;
+}
+
+/* 설치 장소 고르기(10-27) — 회사 주소 목록에서 고르거나 「그 외 주소」 를 직접 적고, 그 주소의 확정 좌표를 보여 준다.
+   좌표가 아직 확정되지 않았으면 「주소로 찾기」 · 「현재 위치로」 로 채운 뒤 「이 좌표로 확정」 — 같은 주소의 다른 자산도 함께 쓴다. */
+function MkItAddressPicker({ form, setForm, readOnly }) {
+  const [addrs, setAddrs] = useState(null);   // { list, source }
+  const [geo, setGeo] = useState(null);
+  const [open, setOpen] = useState(false);
+  const [q, setQ] = useState("");
+  const [msg, setMsg] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [cand, setCand] = useState(null);     // 확정 전 후보 좌표 { lat, lng, how }
+  useEffect(() => { mkLoadAddresses().then(setAddrs); mkLoadAddrGeo().then(setGeo); }, []);
+  const cur = mkAddrKey(form.AddressKr);
+  const inList = !!(addrs && addrs.list.some((a) => mkAddrKey(a.ko) === cur));
+  const [custom, setCustom] = useState(false);
+  const isCustom = custom || (!!cur && addrs && !inList);
+  const g = geo && cur ? geo[cur] : null;
+  const curEn = addrs && (addrs.list.find((a) => mkAddrKey(a.ko) === cur) || {}).en;
+  function pick(a) {
+    setCustom(false); setOpen(false); setQ(""); setCand(null); setMsg("");
+    const gg = geo && geo[mkAddrKey(a.ko)];
+    setForm((f) => ({ ...f, AddressKr: a.ko, ...(gg ? { Lat: String(gg.lat), Lng: String(gg.lng) } : {}), Location: f.Location || mkAddrShort(a.ko).split(" · ")[0] }));
+  }
+  function pickCustom() { setCustom(true); setOpen(false); setQ(""); setCand(null); setMsg(""); if (inList) setForm((f) => ({ ...f, AddressKr: "" })); }
+  async function findByAddr() {
+    if (!cur) { setMsg("주소를 먼저 고르거나 적어 주세요"); return; }
+    setBusy(true); setMsg("주소로 좌표를 찾는 중…");
+    const r = await mkGeocodeAddr(cur, curEn);
+    setBusy(false);
+    if (!r) { setMsg("주소로 좌표를 찾지 못했습니다 — 그 장소에서 「현재 위치로」 를 눌러 주세요"); return; }
+    setCand(r); setForm((f) => ({ ...f, Lat: r.lat.toFixed(6), Lng: r.lng.toFixed(6) })); setMsg("찾은 좌표를 지도에서 확인한 뒤 「이 좌표로 확정」 을 눌러 주세요");
+  }
+  async function fromHere() {
+    setBusy(true); setMsg("현재 위치를 확인하는 중…");
+    const p = await mkItGps(); setBusy(false);
+    if (p.denied) { setMsg(p.reason); return; }
+    const r = { lat: p.lat, lng: p.lng, how: "gps", acc: p.accuracy };
+    setCand(r); setForm((f) => ({ ...f, Lat: r.lat.toFixed(6), Lng: r.lng.toFixed(6) })); setMsg(`현재 위치(정확도 약 ${p.accuracy}m) — 그 장소에 있다면 「이 좌표로 확정」 을 눌러 주세요`);
+  }
+  async function confirmGeo() {
+    const lat = Number(form.Lat), lng = Number(form.Lng);
+    if (!cur || !isFinite(lat) || !isFinite(lng) || form.Lat === "" || form.Lng === "") { setMsg("주소와 좌표가 모두 있어야 확정할 수 있습니다"); return; }
+    setBusy(true);
+    try { const saved = await mkSaveAddrGeo(cur, { lat, lng, how: cand ? cand.how : "manual" }); setGeo({ ...(_mkGeo || {}) }); setCand(null); setMsg(`확정했습니다 — 이 주소를 쓰는 자산은 모두 ${saved.lat}, ${saved.lng} 기준으로 판정합니다`); }
+    catch (e) { setMsg(e.message); } finally { setBusy(false); }
+  }
+  const list = (addrs ? addrs.list : []).filter((a) => !q || (a.ko + " " + a.en).toLowerCase().includes(q.trim().toLowerCase()));
+  const differs = g && (Math.abs(Number(form.Lat) - g.lat) > 1e-5 || Math.abs(Number(form.Lng) - g.lng) > 1e-5);
+  return (
+    <div className="rounded-xl border border-slate-200 p-3 mb-3" data-addr-picker>
+      <div className="flex items-center justify-between mb-2">
+        <div className="text-sm font-medium text-slate-700">설치 장소 · 주소</div>
+        <div className="text-[11px] text-slate-400">{addrs ? `${addrs.source} ${addrs.list.length}곳` : "주소 목록 불러오는 중…"}</div>
+      </div>
+      <div className="relative">
+        <button type="button" disabled={readOnly || !addrs} onClick={() => setOpen((v) => !v)} className="w-full text-left rounded-lg border border-slate-300 bg-white px-3 py-2.5 hover:border-slate-400 disabled:bg-slate-50 flex items-center gap-2" data-addr-open>
+          <MapPin size={15} className={cur ? "text-teal-700 shrink-0" : "text-slate-300 shrink-0"} />
+          <span className="min-w-0 flex-1">
+            {isCustom ? <span className="text-sm text-slate-700">그 외 주소 — 직접 입력</span>
+              : cur ? <><span className="block text-sm text-slate-800 truncate">{cur}</span>{curEn && <span className="block text-[11px] text-slate-400 truncate">{curEn}</span>}</>
+              : <span className="text-sm text-slate-400">회사 주소에서 고르기</span>}
+          </span>
+          <ChevronDown size={15} className="text-slate-400 shrink-0" />
+        </button>
+        {open && (
+          <div className="mt-1 bg-white border border-slate-200 rounded-xl shadow-md overflow-hidden" data-addr-list>
+            <div className="p-2 border-b border-slate-100"><div className="relative"><Search size={14} className="absolute left-2.5 top-2.5 text-slate-400" /><input autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder="지역 · 도로명 검색" className="w-full pl-8 pr-3 py-2 text-sm border border-slate-200 rounded-lg" /></div></div>
+            <div className="max-h-64 overflow-y-auto">
+              {list.map((a) => {
+                const k = mkAddrKey(a.ko), ok = geo && geo[k], on = k === cur && !isCustom;
+                return (
+                  <button type="button" key={a.id} onClick={() => pick(a)} className={`w-full text-left px-3 py-2 flex items-start gap-2 hover:bg-slate-50 ${on ? "bg-teal-50/60" : ""}`} data-addr-item>
+                    <span className={`mt-1.5 w-2 h-2 rounded-full shrink-0 ${ok ? "bg-emerald-500" : "bg-slate-300"}`} title={ok ? "좌표 확정" : "좌표 미확정"} />
+                    <span className="min-w-0 flex-1"><span className="block text-[13px] text-slate-800">{a.ko}</span><span className="block text-[11px] text-slate-400 truncate">{a.en}</span></span>
+                    {on && <Check size={14} className="text-teal-700 mt-1 shrink-0" />}
+                  </button>
+                );
+              })}
+              {!list.length && <div className="px-3 py-4 text-xs text-slate-400 text-center">검색 결과가 없습니다</div>}
+            </div>
+            <button type="button" onClick={pickCustom} className="w-full text-left px-3 py-2.5 border-t border-slate-100 text-[13px] font-medium text-slate-700 hover:bg-slate-50 flex items-center gap-2" data-addr-custom><Pencil size={13} /> 그 외 주소 — 직접 입력</button>
+          </div>
+        )}
+      </div>
+      {isCustom && <input className={inputCls + " mt-2"} value={form.AddressKr || ""} onChange={(e) => { setCand(null); setForm((f) => ({ ...f, AddressKr: e.target.value })); }} placeholder="예: 부산광역시 강서구 ○○로 00" disabled={readOnly} data-addr-input />}
+      <div className="mt-2"><Field label="장소 이름 · 상세(층 · 자리)"><input className={inputCls} value={form.Location || ""} onChange={(e) => setForm((f) => ({ ...f, Location: e.target.value }))} placeholder="예: SSQ 12F · 여주 PDC 2층 사무실" list="mk-it-locs" disabled={readOnly} /></Field></div>
+      {cur && (
+        <div className={`rounded-lg px-3 py-2.5 text-[12.5px] ${g && !differs ? "bg-emerald-50 text-emerald-800" : "bg-amber-50 text-amber-800"}`} data-addr-geo={g ? "ok" : "none"}>
+          {g && !differs ? <div className="flex items-center gap-1.5 flex-wrap"><CheckCircle2 size={14} /> GPS 검증 기준 좌표 확정 · {g.lat}, {g.lng}
+              <a className="underline" target="_blank" rel="noreferrer" href={`https://www.google.com/maps?q=${g.lat},${g.lng}`}>지도</a>
+              <span className="text-emerald-700/70">({{ geocode: "주소 검색", gps: "현장 위치", manual: "직접 입력" }[g.how] || "확정"} · {mkItKst(g.at).slice(0, 10)})</span></div>
+            : <div>{g ? "확정 좌표와 지금 입력한 좌표가 다릅니다 — 「이 좌표로 확정」 을 누르면 이 주소의 기준 좌표가 바뀝니다." : "이 주소는 아직 GPS 검증 기준 좌표가 없습니다 — 찾거나 현장에서 채운 뒤 확정해 주세요."}</div>}
+          {!readOnly && (
+            <div className="flex items-center gap-1.5 flex-wrap mt-2">
+              <button type="button" disabled={busy} onClick={findByAddr} className="px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-lg hover:bg-slate-50 flex items-center gap-1 text-slate-700"><Search size={12} /> 주소로 찾기</button>
+              <button type="button" disabled={busy} onClick={fromHere} className="px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-lg hover:bg-slate-50 flex items-center gap-1 text-slate-700"><LocateFixed size={12} /> 현재 위치로</button>
+              {form.Lat !== "" && form.Lat != null && <a className="px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-lg hover:bg-slate-50 flex items-center gap-1 text-slate-700" target="_blank" rel="noreferrer" href={`https://www.google.com/maps?q=${form.Lat},${form.Lng}`}><MapPin size={12} /> 지도에서 확인</a>}
+              {(!g || differs || cand) && form.Lat !== "" && form.Lat != null && <button type="button" disabled={busy} onClick={confirmGeo} className="px-2.5 py-1.5 text-xs rounded-lg text-white flex items-center gap-1" style={{ background: BRAND.accent }} data-addr-confirm><Check size={12} /> 이 좌표로 확정</button>}
+            </div>
+          )}
+          {msg && <div className="mt-1.5 text-[11.5px] opacity-90">{msg}</div>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function MkItRefNote({ a }) {   // 상세 · 위치 카드 — 판정 기준 좌표가 어디서 오는지
+  const [geo, setGeo] = useState(_mkGeo);
+  useEffect(() => { mkLoadAddrGeo().then(setGeo); }, []);
+  const ref = mkItRefPoint(a, geo);
+  return <div className="text-[11px] text-slate-400 mt-0.5">{ref ? `GPS 기준 ${ref.src === "주소" ? "주소 확정 좌표" : "자산 좌표"} ${ref.lat.toFixed(4)}, ${ref.lng.toFixed(4)} · 반경 ${a.VerifyRadiusM || MK_IT_RADIUS_DEFAULT}m` : "기준 좌표 없음 — 스캔 판정은 「위치미등록」"}</div>;
+}
 // ---- IT 자산 관리 -----------------------------------------------------------------------------------
 function ItAssetEditModal({ asset, onClose, onSave, busy, readOnly }) {
   const [form, setForm] = useState(() => ({ VerifyRadiusM: MK_IT_RADIUS_DEFAULT, AssetType: "", ...asset, State: mkItStateOf(asset.id ? asset : { State: asset.State || "Active" }) }));   // 새 자산은 「사용 중」 으로 시작(재고로 들이면 상태만 바꾼다)
@@ -4476,24 +4695,13 @@ function ItAssetEditModal({ asset, onClose, onSave, busy, readOnly }) {
             </Field>
           ) : <div className="text-xs text-slate-500 mb-3">{MK_IT_STATES[form.State].ko} 상태는 사용자가 없습니다 — 저장하면 사용자 칸을 비웁니다. 지급 · 반납은 자산 상세의 단추로 하면 이력이 함께 남습니다.</div>}
         </div>
-        <Field label="위치 (설치 장소)"><input className={inputCls} value={form.Location || ""} onChange={set("Location")} placeholder="예: SSQ · Busan Branch · Yeoju PDC" list="mk-it-locs" /></Field>
-        <Field label="주소 (좌표 찾기용, 선택)">
-          <div className="flex gap-2">
-            <input className={inputCls} value={form.AddressKr || ""} onChange={set("AddressKr")} placeholder="예: 서울시 ○○구 ○○로 00" />
-            {!readOnly && <button type="button" onClick={geocode} className="shrink-0 px-3 py-2 text-xs border border-slate-300 rounded-lg hover:bg-slate-50 flex items-center gap-1"><MapPin size={13} /> 주소로 찾기</button>}
-          </div>
-        </Field>
+        <MkItAddressPicker form={form} setForm={setForm} readOnly={dis} />
         <div className="grid grid-cols-3 gap-3">
           <Field label="위도 (Lat)"><input className={inputCls} value={form.Lat ?? ""} onChange={set("Lat")} inputMode="decimal" /></Field>
           <Field label="경도 (Lng)"><input className={inputCls} value={form.Lng ?? ""} onChange={set("Lng")} inputMode="decimal" /></Field>
           <Field label="GPS 허용 반경 (m)"><input className={inputCls} value={form.VerifyRadiusM ?? ""} onChange={set("VerifyRadiusM")} inputMode="numeric" /></Field>
         </div>
-        {!readOnly && (
-          <div className="flex items-center gap-2 mb-3 -mt-1 flex-wrap">
-            <button type="button" onClick={hereLocation} className="px-3 py-1.5 text-xs border border-slate-300 rounded-lg hover:bg-slate-50 flex items-center gap-1"><LocateFixed size={13} /> 현재 위치로 채우기</button>
-            <span className="text-xs text-slate-500">{locMsg || "스캔 위치가 이 좌표에서 허용 반경 안이면 「정상」, 밖이면 「검증필요」 입니다"}</span>
-          </div>
-        )}
+        <div className="text-[11.5px] text-slate-400 -mt-1 mb-3">스캔 위치가 기준 좌표(주소 확정 좌표 → 없으면 위 좌표)에서 허용 반경 안이면 「정상」, 밖이면 「검증필요」 입니다.</div>
         <div className="rounded-lg border border-slate-200 px-3 pt-3 pb-1 mb-3">
           <label className="flex items-center gap-2 text-sm text-slate-700 mb-2"><input type="checkbox" checked={form.IsRental === true} onChange={(e) => setForm((f) => ({ ...f, IsRental: e.target.checked }))} /> 렌탈 장비 <span className="text-xs text-slate-400">— 회사 소유가 아니라 업체에서 빌린 장비</span></label>
           {form.IsRental === true && (
@@ -4675,7 +4883,8 @@ function ItAssetDrawer({ asset, it, readOnly, canLabel, dir, onClose, onEdit, on
         <div className="bg-white border rounded-xl p-4">
           <div className="text-xs font-semibold text-slate-500 mb-2">위치</div>
           <div className="text-sm text-slate-800">{a.Location || "-"}</div>
-          <div className="text-[11px] text-slate-400 mt-0.5">{a.Lat != null && a.Lat !== "" ? `좌표 ${Number(a.Lat).toFixed(4)}, ${Number(a.Lng).toFixed(4)} · 반경 ${a.VerifyRadiusM || MK_IT_RADIUS_DEFAULT}m` : "좌표 미등록 — 스캔 판정은 「위치미등록」"}</div>
+          {a.AddressKr && <div className="text-[12px] text-slate-500 mt-0.5">{a.AddressKr}</div>}
+          <MkItRefNote a={a} />
         </div>
       </div>
       <div className="bg-white border rounded-xl px-4 py-2 mb-4">
@@ -6313,8 +6522,8 @@ function AssetScanPanel({ token, userEmail, userName, dirName, onClose }) {
   async function record() {
     const { asset, own } = st;
     setSt((s) => ({ ...s, phase: "gps" }));
-    const gps = await mkItGps();
-    const judge = mkItJudge(asset, gps);
+    const [gps, geo] = await Promise.all([mkItGps(), mkLoadAddrGeo()]);
+    const judge = mkItJudge(asset, gps, geo);
     const type = own ? (mobile ? MK_SCAN_OWN : MK_SCAN_OWN_PC) : MK_SCAN_OTHER;
     const saveErr = await mkSaveItScan(asset, gps, judge, { email: userEmail, name: userName }, type);
     setSt((s) => ({ ...s, phase: "done", gps, judge, type, saveErr }));
@@ -6430,8 +6639,8 @@ function ItScanModal({ token, onClose, canEditAssets, onDone, userEmail, userNam
         if (!alive) return;
         if (!hit) { setState({ phase: "notfound" }); mkLog("IT 자산 스캔", "실패", mkMaskToken(token), { info: { 사유: "등록되지 않은 QR" } }); return; }
         setState({ phase: "gps", asset: hit });
-        const gps = await mkItGps();
-        const j = mkItJudge(hit, gps);
+        const [gps, geo] = await Promise.all([mkItGps(), mkLoadAddrGeo()]);
+        const j = mkItJudge(hit, gps, geo);
         // 10-27 구분 — IT 담당이 자기 자산을 찍으면 「본인 확인」(휴대폰일 때만 실사로 센다), 그 밖은 「IT 점검」
         const type = mkIsAssetOwner(hit, userEmail, dirName) ? (mkIsMobile() ? MK_SCAN_OWN : MK_SCAN_OWN_PC) : MK_SCAN_IT;
         const saveErr = await mkSaveItScan(hit, gps, j, { email: userEmail, name: userName }, type);
