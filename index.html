@@ -110,7 +110,7 @@ import {
   Upload, ExternalLink, Phone, Navigation, LayoutDashboard, ShieldCheck,
   ArrowUpRight, ImagePlus, KeyRound, Mail, XCircle, Settings, ChevronDown, ChevronUp, Store, Contact, History,
   ArrowLeftToLine, ArrowRightFromLine, Menu, LockKeyhole, Eye, Check, LogIn, Home,
-  Laptop, Printer, ScanLine, LocateFixed,
+  Laptop, Printer, ScanLine, LocateFixed, Monitor, Server, Network, PcCase, Copy, Info,
   Users, Package, ArrowLeftRight, Undo2, Wrench, FileSpreadsheet, ChevronRight, Smartphone, Cable, Boxes, UserX, Archive, PackagePlus,
 } from "lucide-react";
 import * as XLSX from "xlsx";
@@ -4148,7 +4148,7 @@ function MkItChangeBadge({ t }) {
   const m = MK_IT_CHANGE[t] || { ko: t || "-", cls: "bg-slate-100 text-slate-600" };
   return <span className={`inline-block text-[11px] font-semibold rounded-full px-2 py-0.5 whitespace-nowrap ${m.cls}`}>{m.ko}</span>;
 }
-const MK_IT_TYPE_ICON = { Notebook: Laptop, Desktop: Laptop, "Docking Station": Cable, Mobile: Smartphone, Monitor: Laptop, Printer: Printer };
+const MK_IT_TYPE_ICON = { Notebook: Laptop, Desktop: PcCase, "Docking Station": Cable, Mobile: Smartphone, Monitor: Monitor, Server: Server, Network: Network, Printer: Printer };
 function MkItTypeIcon({ type, size = 15, className = "" }) { const I = MK_IT_TYPE_ICON[type] || Boxes; return <I size={size} className={className} />; }
 const MK_IT_TYPE_KO = { Notebook: "노트북", Desktop: "데스크톱", "Docking Station": "도킹", Mobile: "휴대폰", Monitor: "모니터", Server: "서버", Network: "네트워크", Printer: "프린터", 기타: "기타" };
 const mkItTypeKo = (t) => MK_IT_TYPE_KO[t] || t || "미분류";
@@ -6655,6 +6655,7 @@ function App({ userEmail, userName }) {
             itScans: [ScanLine, "IT 자산 QR 스캔 기록 — 누가 · 언제 · 어디서(GPS) 스캔했는지와 등록 위치 대비 판정을 조회합니다"],
             categoryAccess: [KeyRound, "등록된 사용자별로 화면마다 「보기」 · 「편집」 권한을 부여 · 변경합니다. 사용자 추가 · 삭제와 「반영」 내용은 활동 이력에 남습니다."],
           }[tab] || [LayoutDashboard, ""];
+          if (tab === "myAssets") return null;   // 10-27 — 내 자산은 패널이 제목 · 버튼을 함께 그린다(제목 두 번 방지)
           const viewOnlyHere = hasLoadedOnce && tabCat && !MK_VIEW_NATURE.has(tabCat) && canAccess(tabCat) && !canEdit(tabCat);
           return <PageHeader icon={meta[0]} title={nav.find((n) => n.id === tab)?.label} subtitle={meta[1]} inline={viewOnlyHere ? <MkViewOnlyPill /> : null} />;
         })()}
@@ -6752,9 +6753,13 @@ function mkMineDday(d) {
   return Math.round((t - today) / 864e5);
 }
 function MyAssetsPanel({ userEmail, userName }) {
+  // 10-27(mkqr-mine2) 다듬기 — 제목은 이 패널 하나만(메인 화면의 공통 머리글은 이 탭에서 숨김), 유형 칩으로 거르기,
+  // 카드는 아이콘 · 이름 · 상태 → CI CD(복사) → 2열 정보 격자 순. 안내 문구는 맨 아래 한 줄로.
   const [list, setList] = useState(null);      // null = 읽는 중
   const [err, setErr] = useState("");
   const [label, setLabel] = useState(null);    // { a, html }
+  const [type, setType] = useState("");        // "" = 전체
+  const [copied, setCopied] = useState("");
   async function load() {
     setErr(""); setList(null);
     try { setList(await mkLoadMyAssets(userEmail, userName)); }
@@ -6765,67 +6770,117 @@ function MyAssetsPanel({ userEmail, userName }) {
     if (!a.QrToken) { setLabel({ a, html: "" }); return; }
     try { setLabel({ a, html: mkItLabelHtml(a, await mkItQrData(a)) }); } catch (e) { setLabel({ a, html: "" }); }
   }
-  const fmtD = (v) => (v ? String(v).slice(0, 10) : "-");
-  const row = (k, v) => (v ? <div className="flex gap-2 text-[12.5px] leading-6"><span className="w-20 shrink-0 text-slate-400">{k}</span><span className="text-slate-700 break-all">{v}</span></div> : null);
+  async function copy(v) {
+    try { await navigator.clipboard.writeText(v); } catch (e) { return; }
+    setCopied(v); setTimeout(() => setCopied((c) => (c === v ? "" : c)), 1500);
+  }
+  const fmtD = (v) => (v ? String(v).slice(0, 10) : "");
+  const types = useMemo(() => {
+    const m = new Map(); (list || []).forEach((a) => { const t = a.AssetType || "기타"; m.set(t, (m.get(t) || 0) + 1); });
+    return [...m.entries()];
+  }, [list]);
+  const shown = (list || []).filter((a) => !type || (a.AssetType || "기타") === type);
+  const cell = (k, v, mono) => (
+    <div className="min-w-0">
+      <div className="text-[11px] text-slate-400 mb-0.5">{k}</div>
+      <div className={`text-[13px] truncate ${v ? "text-slate-700" : "text-slate-300"} ${mono && v ? "font-mono tracking-tight" : ""}`} title={v || ""}>{v || "—"}</div>
+    </div>
+  );
   return (
     <div data-my-assets>
-      <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
-        <div className="flex items-start gap-3">
+      <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-3 min-w-0">
           <div className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0" style={{ background: BRAND.accentSoft }}><Laptop size={20} color={BRAND.accent} /></div>
-          <div>
-            <h1 className="text-xl font-semibold text-slate-800">내 자산</h1>
-            <p className="text-sm text-slate-500 mt-0.5">나에게 지급된 IT 자산입니다 — IT 가 등록한 지급 내역 기준(조회 전용)</p>
+          <div className="min-w-0">
+            <h1 className="text-xl font-semibold text-slate-800 leading-tight">내 자산</h1>
+            <p className="text-[13px] text-slate-500 mt-0.5">나에게 지급된 IT 자산 · IT 등록 내역 기준 조회 전용</p>
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <button onClick={load} className="inline-flex items-center gap-1.5 text-xs font-medium px-3 py-2 rounded-lg border border-slate-200 bg-white text-slate-600 hover:border-teal-400 hover:text-teal-700"><RefreshCw size={13} /> 새로고침</button>
-          <a href={MK_ITSM_URL} target="_blank" rel="noreferrer" data-mine-ticket className="inline-flex items-center gap-1.5 text-xs font-semibold px-3 py-2 rounded-lg text-white" style={{ background: BRAND.accent }}><ExternalLink size={13} /> IT Ticket 으로 문의</a>
+          <button onClick={load} title="새로고침" aria-label="새로고침" className="w-9 h-9 inline-flex items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 hover:text-slate-800 hover:border-slate-300 transition-colors"><RefreshCw size={15} className={list === null ? "animate-spin" : ""} /></button>
+          <a href={MK_ITSM_URL} target="_blank" rel="noreferrer" data-mine-ticket className="h-9 inline-flex items-center gap-1.5 text-[13px] font-semibold px-3.5 rounded-lg text-white shadow-sm hover:opacity-90 transition-opacity" style={{ background: BRAND.accent }}>IT Ticket 문의 <ArrowUpRight size={14} /></a>
         </div>
-      </div>
-      <div className="mb-4 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-xs text-slate-500 leading-relaxed">
-        고장 · 분실 · 교체 · 반납이 필요하거나 목록이 실제와 다르면 <b className="text-slate-700">IT Ticket</b> 으로 접수해 주세요(자산의 <b className="text-slate-700">CI CD</b> 를 함께 적어 주시면 빠릅니다). 충전기 · 케이블 같은 재고 품목은 여기에 나오지 않습니다.
       </div>
       {err && <div className="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700" data-mine-err>{err}</div>}
       {list === null ? (
-        <div className="py-16 text-center text-sm text-slate-400">불러오는 중…</div>
-      ) : list.length === 0 ? (
-        !err && <div className="py-16 text-center text-sm text-slate-500 bg-white rounded-xl border border-slate-200" data-mine-empty>나에게 등록된 IT 자산이 없습니다.<br /><span className="text-xs text-slate-400">실제로 쓰고 있는 장비가 있으면 IT Ticket 으로 알려 주세요.</span></div>
-      ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4" data-mine-count={list.length}>
-          {list.map((a) => {
-            const dd = a.IsRental ? mkMineDday(a.RentalEndDate) : null;
-            return (
-              <div key={a.id} className="bg-white rounded-xl border border-slate-200 shadow-sm p-4 flex flex-col" data-mine-card={a.CICD || a.id}>
-                <div className="flex items-start justify-between gap-2 mb-2">
-                  <div className="min-w-0">
-                    <div className="text-[11px] text-slate-400">{a.AssetType || "IT 자산"}</div>
-                    <div className="text-[15px] font-semibold text-slate-800 leading-snug break-words">{a.Title || a.Model || "-"}</div>
-                  </div>
-                  <MkItStateBadge a={a} />
-                </div>
-                <div className="flex-1">
-                  {row("CI CD", a.CICD)}
-                  {row("모델", a.Model)}
-                  {row("시리얼", a.SerialNo)}
-                  {row("자산코드", a.AssetCode)}
-                  {row("Hostname", a.Hostname)}
-                  {row("지급일", a.AssignedDate ? fmtD(a.AssignedDate) : "")}
-                  {a.IsRental && row("렌탈", `${a.RentalVendor || "렌탈"} · 종료 ${fmtD(a.RentalEndDate)}${dd != null ? (dd >= 0 ? ` (D-${dd})` : ` (${-dd}일 지남)`) : ""}`)}
-                </div>
-                <div className="mt-3 pt-3 border-t border-slate-100 flex items-center justify-between gap-2">
-                  {a.IsRental && dd != null && dd <= 30 ? <span className="text-[11px] font-medium text-amber-700">렌탈 종료가 가까워요 — 반납 · 교체를 IT 와 상의해 주세요</span> : <span />}
-                  {a.QrToken && <button onClick={() => showLabel(a)} className="shrink-0 inline-flex items-center gap-1 text-xs text-slate-500 hover:text-slate-800" data-mine-label><QrCode size={13} /> 라벨 보기</button>}
-                </div>
-              </div>
-            );
-          })}
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+          {[0, 1, 2].map((i) => <div key={i} className="h-[214px] rounded-2xl border border-slate-200 bg-white animate-pulse" />)}
         </div>
+      ) : list.length === 0 ? (
+        !err && <div className="py-16 text-center bg-white rounded-2xl border border-slate-200" data-mine-empty>
+          <div className="w-12 h-12 mx-auto mb-3 rounded-full flex items-center justify-center bg-slate-100"><Laptop size={22} className="text-slate-400" /></div>
+          <div className="text-sm font-medium text-slate-600">나에게 등록된 IT 자산이 없습니다</div>
+          <div className="text-xs text-slate-400 mt-1">실제로 쓰고 있는 장비가 있으면 IT Ticket 으로 알려 주세요.</div>
+        </div>
+      ) : (
+        <>
+          <div className="mb-4 flex flex-wrap items-center gap-1.5" data-mine-chips>
+            {[["", list.length], ...types].map(([t, n]) => {
+              const on = type === t;
+              return (
+                <button key={t || "all"} onClick={() => setType(t)} className={`inline-flex items-center gap-1.5 h-8 px-3 rounded-full text-[12.5px] border transition-colors ${on ? "text-white border-transparent" : "bg-white text-slate-600 border-slate-200 hover:border-slate-300"}`} style={on ? { background: BRAND.navy } : null}>
+                  {t ? <MkItTypeIcon type={t} size={13} /> : null}{t ? mkItTypeKo(t) : "전체"}
+                  <span className={`text-[11px] tabular-nums ${on ? "text-white/70" : "text-slate-400"}`}>{n}</span>
+                </button>
+              );
+            })}
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4" data-mine-count={list.length}>
+            {shown.map((a) => {
+              const dd = a.IsRental ? mkMineDday(a.RentalEndDate) : null;
+              const title = a.Title || a.Model || "-";
+              const model = a.Model && !String(title).toLowerCase().includes(String(a.Model).toLowerCase()) ? a.Model : "";
+              return (
+                <div key={a.id} className="group bg-white rounded-2xl border border-slate-200 p-5 flex flex-col transition-all hover:shadow-md hover:border-slate-300" data-mine-card={a.CICD || a.id}>
+                  <div className="flex items-start gap-3">
+                    <div className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0 bg-slate-50 border border-slate-100 text-slate-600"><MkItTypeIcon type={a.AssetType} size={19} /></div>
+                    <div className="min-w-0 flex-1">
+                      <div className="text-[15px] font-semibold text-slate-800 leading-snug truncate" title={title}>{title}</div>
+                      <div className="text-[12px] text-slate-400 mt-0.5 truncate">{mkItTypeKo(a.AssetType)}{model ? ` · ${model}` : ""}</div>
+                    </div>
+                    <MkItStateBadge a={a} />
+                  </div>
+                  {a.CICD && (
+                    <button onClick={() => copy(a.CICD)} title="CI CD 복사 — IT Ticket 에 붙여 넣으세요" className="mt-4 flex items-center justify-between gap-2 w-full rounded-lg bg-slate-50 hover:bg-slate-100 border border-slate-100 px-3 py-2 text-left transition-colors" data-mine-cicd>
+                      <span className="text-[11px] font-medium text-slate-400">CI CD</span>
+                      <span className="flex items-center gap-2 min-w-0">
+                        <span className="font-mono text-[13px] font-semibold text-slate-800 tracking-tight truncate">{a.CICD}</span>
+                        {copied === a.CICD ? <Check size={13} className="text-emerald-600 shrink-0" /> : <Copy size={13} className="text-slate-300 group-hover:text-slate-500 shrink-0" />}
+                      </span>
+                    </button>
+                  )}
+                  <div className="mt-4 grid grid-cols-2 gap-x-4 gap-y-3 flex-1">
+                    {cell("시리얼", a.SerialNo, true)}
+                    {cell("Hostname", a.Hostname, true)}
+                    {cell("지급일", fmtD(a.AssignedDate))}
+                    {cell("자산코드", a.AssetCode, true)}
+                  </div>
+                  {a.IsRental && (
+                    <div className={`mt-3 rounded-lg px-3 py-2 text-[12px] ${dd != null && dd <= 30 ? "bg-amber-50 text-amber-800" : "bg-slate-50 text-slate-600"}`} data-mine-rental>
+                      렌탈 · {a.RentalVendor || "렌탈"} · 종료 {fmtD(a.RentalEndDate) || "-"}{dd != null ? (dd >= 0 ? ` (D-${dd})` : ` (${-dd}일 지남)`) : ""}
+                      {dd != null && dd <= 30 && <div className="mt-0.5 font-medium">종료가 가까워요 — 반납 · 교체를 IT 와 상의해 주세요</div>}
+                    </div>
+                  )}
+                  {a.QrToken && (
+                    <div className="mt-4 pt-3 border-t border-slate-100 flex justify-end">
+                      <button onClick={() => showLabel(a)} className="inline-flex items-center gap-1.5 text-[12.5px] font-medium text-slate-500 hover:text-slate-900 transition-colors" data-mine-label><QrCode size={14} /> 라벨 보기 <ChevronRight size={13} /></button>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </>
       )}
+      <div className="mt-5 flex items-start gap-2 text-[12px] text-slate-400 leading-relaxed" data-mine-note>
+        <Info size={14} className="shrink-0 mt-0.5" />
+        <span>고장 · 분실 · 교체 · 반납이 필요하거나 목록이 실제와 다르면 <b className="font-semibold text-slate-500">IT Ticket</b> 으로 접수해 주세요 — <b className="font-semibold text-slate-500">CI CD</b> 를 눌러 복사해 붙여 넣으면 빠릅니다. 충전기 · 케이블 같은 재고 품목은 표시되지 않습니다.</span>
+      </div>
       {label && (
-        <div className="fixed inset-0 z-[80] flex items-center justify-center p-4" style={{ background: "rgba(15,23,42,.45)" }} onClick={() => setLabel(null)}>
+        <div className="fixed inset-0 z-[80] flex items-center justify-center p-4" style={{ background: "rgba(15,23,42,.5)" }} onClick={() => setLabel(null)}>
           <div className="bg-white rounded-2xl shadow-2xl p-5 max-w-[520px] w-full" onClick={(e) => e.stopPropagation()}>
-            <div className="flex items-center justify-between mb-3"><b className="text-sm text-slate-800">자산 라벨 · {label.a.CICD || ""}</b><button onClick={() => setLabel(null)} className="text-slate-400 hover:text-slate-700"><X size={16} /></button></div>
-            {label.html ? (<><style>{MK_IT_LABEL_CSS}</style><div className="flex justify-center bg-slate-100 rounded-lg p-4 overflow-x-auto" dangerouslySetInnerHTML={{ __html: label.html }} /></>)
+            <div className="flex items-center justify-between mb-3"><b className="text-sm text-slate-800">자산 라벨 · <span className="font-mono">{label.a.CICD || ""}</span></b><button onClick={() => setLabel(null)} className="w-8 h-8 inline-flex items-center justify-center rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-700"><X size={16} /></button></div>
+            {label.html ? (<><style>{MK_IT_LABEL_CSS}</style><div className="flex justify-center bg-slate-100 rounded-xl p-4 overflow-x-auto" dangerouslySetInnerHTML={{ __html: label.html }} /></>)
               : <div className="text-sm text-slate-500 py-6 text-center">이 자산은 아직 QR 라벨이 발행되지 않았습니다.</div>}
             <p className="text-[11px] text-slate-400 mt-3">장비에 붙은 라벨과 같은지 확인용입니다. 라벨이 떨어지거나 훼손됐으면 IT Ticket 으로 재발행을 요청해 주세요.</p>
           </div>
