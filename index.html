@@ -754,6 +754,7 @@ async function loadEmployeeDirectory() {
   const nameIdx = header.indexOf("engname");
   const emailIdx = header.indexOf("email");
   const deptIdx = header.indexOf("department");
+  const bossIdx = header.indexOf("boss");   // G열 Boss(팀장 · 이름) — 자산 삭제 결재자(10-27)
   if (emailIdx < 0) throw new Error("employee_search.xlsx에 EMail 컬럼을 찾을 수 없습니다.");
   const byEmail = new Map();
   for (let i = 1; i < rows.length; i++) {
@@ -762,7 +763,8 @@ async function loadEmployeeDirectory() {
     if (!email || !email.includes("@")) continue;
     const name = nameIdx >= 0 ? String(row[nameIdx] || "").trim() : "";
     const dept = deptIdx >= 0 ? String(row[deptIdx] || "").trim() : "";
-    if (!byEmail.has(email)) byEmail.set(email, { name: name || email, email, dept });
+    const boss = bossIdx >= 0 ? String(row[bossIdx] || "").trim() : "";
+    if (!byEmail.has(email)) byEmail.set(email, { name: name || email, email, dept, boss });
   }
   _mkEmployeeDirectory = Array.from(byEmail.values()).sort((a, b) => a.name.localeCompare(b.name));
   return _mkEmployeeDirectory;
@@ -3976,11 +3978,12 @@ async function mkItWrite(fn) {
 }
 async function mkItLoad() {
   const since = new Date(Date.now() - 90 * 864e5).toISOString();
-  const [a, s, h, k] = await Promise.all([
+  const [a, s, h, k, dq] = await Promise.all([
     mkListAll(MK_LISTS.itAssets).then((v) => ({ v }), (e) => ({ e })),
     mkListAll(MK_LISTS.itScans, `&$filter=fields/Created ge '${since}'`).then((v) => ({ v }), (e) => ({ e })),
     mkListAll(MK_LISTS.itHistory).then((v) => ({ v }), (e) => ({ e })),   // CMDB 이력 · 재고 — 목록이 없어도 자산 화면은 그대로
     mkListAll(MK_LISTS.itStock).then((v) => ({ v }), (e) => ({ e })),
+    mkLoadDelReqs().then((v) => ({ v }), (e) => ({ e })),   // 삭제 결재 요청(10-27) — 목록이 없어도 자산 화면은 그대로
   ]);
   const num = (x) => (typeof x === "string" && x.trim() !== "" && isFinite(Number(x)) ? Number(x) : x);
   return {
@@ -3992,6 +3995,7 @@ async function mkItLoad() {
     scans: s.v ? s.v.map((x) => ({ id: x.id, ...x.fields, Created: x.fields.Created || x.createdDateTime })).sort((p, q) => String(q.Created).localeCompare(String(p.Created))) : [],
     err: a.e ? (a.e.message || String(a.e)) : "",
     scanErr: s.e ? (s.e.message || String(s.e)) : "",
+    delReqs: dq.v || [], delReqErr: dq.e ? (dq.e.message || String(dq.e)) : "",
   };
 }
 function mkItGps(timeoutMs = 15000) {
@@ -4625,6 +4629,153 @@ function MkItAddressPicker({ form, setForm, readOnly }) {
   );
 }
 
+// ---- IT 자산 삭제 결재(10-27 · mkqr-delreq) ------------------------------------------------------------------------
+// 자산 삭제는 바로 지우지 않고 결재를 거친다. 요청자가 사유(필수)를 적으면, 직원 명부(employee_search.xlsx) G열 Boss 가 결재자로 자동 지정된다.
+// 요청 · 결재 기록은 SharePoint 목록 mkqr_ITDeleteRequests. 상태: 대기 → 삭제 완료(결재자가 승인하며 바로 삭제) | 승인(삭제 대기: 결재자에게
+// 자산 삭제 권한이 없으면 IT 가 「삭제 실행」) · 반려 · 취소(요청자). 결재자는 QR Hub 에 들어오면 화면 맨 위에서 승인 · 반려한다.
+const MK_DELREQ_LIST = "mkqr_ITDeleteRequests";
+const MK_DELREQ_OPEN = ["대기", "승인"];
+const MK_DELREQ_CLS = { 대기: "bg-amber-50 text-amber-800", 승인: "bg-blue-50 text-blue-700", "삭제 완료": "bg-slate-100 text-slate-600", 반려: "bg-rose-50 text-rose-700", 취소: "bg-slate-100 text-slate-500" };
+async function mkFindBoss(email) {   // 요청자의 Boss(이름) → 같은 명부에서 메일을 찾는다
+  const dir = await loadEmployeeDirectory();
+  const me = dir.find((d) => d.email === String(email || "").trim().toLowerCase());
+  if (!me) return { err: "직원 명부(employee_search.xlsx)에 요청자가 없습니다." };
+  const bn = mkNameKey(me.boss);
+  if (!bn || bn === "-") return { err: `직원 명부에 ${me.name} 님의 Boss 가 비어 있어 결재자를 정할 수 없습니다.` };
+  const boss = dir.find((d) => mkNameKey(d.name) === bn);
+  if (!boss) return { err: `Boss 「${me.boss}」 를 직원 명부에서 찾지 못했습니다(이름 · 메일 확인).` };
+  if (boss.email === me.email) return { err: "Boss 가 요청자 본인이라 결재자를 정할 수 없습니다." };
+  return { boss, me };
+}
+async function mkLoadDelReqs(filter) {
+  const rows = await mkListAll(MK_DELREQ_LIST, filter || "");
+  return rows.map((x) => ({ id: x.id, ...x.fields, Created: x.fields.Created || x.createdDateTime })).sort((a, b) => String(b.Created).localeCompare(String(a.Created)));
+}
+function MkDelReqBadge({ s }) { return <span className={`inline-block whitespace-nowrap text-[11px] font-semibold rounded-full px-2 py-0.5 ${MK_DELREQ_CLS[s] || "bg-slate-100 text-slate-600"}`}>{s === "승인" ? "승인 · 삭제 대기" : s}</span>; }
+
+// 요청 창 — 자산 상세의 「자산 삭제 요청」
+function ItDeleteRequestModal({ asset, userEmail, userName, onClose, onDone }) {
+  const [reason, setReason] = useState("");
+  const [route, setRoute] = useState(null);   // { boss, me } | { err }
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { mkFindBoss(userEmail).then(setRoute, (e) => setRoute({ err: "직원 명부를 읽지 못했습니다 — " + e.message })); }, [userEmail]);
+  const okReason = reason.trim().length >= 5;
+  async function submit() {
+    if (!route || !route.boss || !okReason || busy) return;
+    setBusy(true);
+    try {
+      const open = (await mkLoadDelReqs(`&$filter=fields/AssetId eq '${String(asset.id)}'`)).find((r) => MK_DELREQ_OPEN.includes(r.Status));
+      if (open) throw new Error(`이미 진행 중인 삭제 요청이 있습니다(${open.Status} · 결재자 ${open.ApproverName || open.ApproverEmail}).`);
+      const snap = { Title: asset.Title, CICD: asset.CICD, SerialNo: asset.SerialNo, AssetCode: asset.AssetCode, AssetType: asset.AssetType, State: asset.State, Assignee: asset.Assignee, AssigneeEmail: asset.AssigneeEmail, Location: asset.Location };
+      const fields = {
+        Title: `${asset.CICD || asset.Title} 삭제 요청`, AssetId: String(asset.id), CICD: asset.CICD || "", AssetTitle: asset.Title || "", SerialNo: asset.SerialNo || "",
+        Reason: reason.trim(), RequesterEmail: String(userEmail || "").toLowerCase(), RequesterName: userName || route.me.name || "",
+        ApproverEmail: route.boss.email, ApproverName: route.boss.name, Status: "대기", Snapshot: JSON.stringify(snap).slice(0, 3000),
+      };
+      await mkItWrite(async () => mkCreateItem(MK_DELREQ_LIST, await mkItFields(MK_DELREQ_LIST, fields)));
+      mkLog("IT 자산", "삭제 요청", asset.CICD || asset.Title, { id: asset.id, info: { 사유: fields.Reason, 결재자: `${route.boss.name} (${route.boss.email})`, "Serial No.": asset.SerialNo } });
+      alert(`삭제 결재를 요청했습니다.\n결재자: ${route.boss.name} (${route.boss.email})\n\n결재자가 QR Hub 에서 승인하면 자산이 삭제됩니다.`);
+      onDone && onDone();
+    } catch (e) {
+      alert(mkIsMissingList(e) ? `SharePoint 목록 ${MK_DELREQ_LIST} 이 없어 요청할 수 없습니다 — setup/mkqr-it-lists.ps1 을 실행해 목록을 만든 뒤 다시 시도해 주세요.` : e.message);
+    } finally { setBusy(false); }
+  }
+  return (
+    <Modal title={`자산 삭제 요청 · ${asset.CICD || ""}`} onClose={onClose}>
+      <div className="text-sm text-slate-600 leading-relaxed mb-3">잘못 등록한 자산만 삭제합니다. 폐기 · 반납 · 분실은 삭제 대신 상태 처리(「폐기」 등)를 해 주세요 — 이력이 남습니다.</div>
+      <div className="rounded-xl bg-slate-50 border border-slate-100 px-3.5 py-2.5 text-[13px] mb-3">
+        <div className="font-medium text-slate-800">{asset.Title || "-"}</div>
+        <div className="text-slate-500 font-mono text-[12px] mt-0.5">{asset.CICD || ""}{asset.SerialNo ? ` · ${asset.SerialNo}` : ""}</div>
+      </div>
+      <Field label="삭제 사유" required>
+        <textarea className={inputCls} rows={3} value={reason} onChange={(e) => setReason(e.target.value)} placeholder="예: 같은 장비를 두 번 등록함(STK-CI-01234 와 중복)" data-delreq-reason />
+        {!okReason && reason.length > 0 && <div className="text-[11.5px] text-red-600 mt-1">사유를 5자 이상 적어 주세요.</div>}
+      </Field>
+      <div className="rounded-xl border border-slate-200 px-3.5 py-2.5 text-[13px]" data-delreq-route>
+        <div className="text-[11.5px] text-slate-400 mb-0.5">결재자 — 직원 명부의 내 Boss</div>
+        {!route ? <span className="text-slate-400">확인하는 중…</span>
+          : route.err ? <span className="text-red-600">{route.err}</span>
+          : <span className="text-slate-800 font-medium">{route.boss.name} <span className="font-normal text-slate-500">{route.boss.email}</span>{route.boss.dept ? <span className="font-normal text-slate-400"> · {route.boss.dept}</span> : null}</span>}
+      </div>
+      <div className="flex justify-end gap-2 mt-4">
+        <button onClick={onClose} className="px-4 py-2 text-sm rounded-lg border border-slate-300">취소</button>
+        <button onClick={submit} disabled={busy || !okReason || !route || !route.boss} className="px-4 py-2 text-sm rounded-lg text-white bg-red-600 disabled:opacity-40" data-delreq-submit>{busy ? "요청 중…" : "결재 요청"}</button>
+      </div>
+    </Modal>
+  );
+}
+
+// 승인 · 반려 처리(결재자) — 승인하면 바로 삭제를 시도하고, 자산 삭제 권한이 없으면 「승인(삭제 대기)」 로 두어 IT 가 실행한다
+async function mkDecideDelReq(req, decision, note, who) {
+  const cur = (await mkLoadDelReqs(`&$filter=fields/AssetId eq '${String(req.AssetId)}'`)).find((r) => String(r.id) === String(req.id));
+  if (!cur || cur.Status !== "대기") throw new Error(`이미 처리된 요청입니다(${cur ? cur.Status : "없음"}).`);
+  if (String(cur.ApproverEmail || "").toLowerCase() !== String(who.email || "").toLowerCase()) throw new Error("이 요청의 결재자가 아닙니다.");
+  const base = { DecidedAt: new Date().toISOString(), DecisionNote: note || "", DecidedBy: String(who.email || "").toLowerCase() };
+  if (decision === "반려") {
+    await mkItWrite(async () => mkUpdateItem(MK_DELREQ_LIST, req.id, await mkItFields(MK_DELREQ_LIST, { ...base, Status: "반려" })));
+    mkLog("IT 자산", "삭제 반려", req.CICD || req.AssetTitle, { id: req.AssetId, info: { 요청자: req.RequesterEmail, 사유: req.Reason, 반려의견: note || "" } });
+    return "반려";
+  }
+  let status = "삭제 완료", delErr = "";
+  try { await mkItWrite(async () => mkDeleteItem(MK_LISTS.itAssets, req.AssetId)); }
+  catch (e) { if (/\(404\)|itemNotFound/.test(e.message)) delErr = ""; else { status = "승인"; delErr = e.message; } }
+  await mkItWrite(async () => mkUpdateItem(MK_DELREQ_LIST, req.id, await mkItFields(MK_DELREQ_LIST, { ...base, Status: status, ...(status === "삭제 완료" ? { DeletedAt: base.DecidedAt } : {}) })));
+  mkLog("IT 자산", status === "삭제 완료" ? "삭제(결재 승인)" : "삭제 승인", req.CICD || req.AssetTitle, { id: req.AssetId, info: { 요청자: req.RequesterEmail, 결재자: who.email, 사유: req.Reason, ...(delErr ? { 삭제: "권한 없음 — IT 실행 대기" } : {}) } });
+  return status;
+}
+// IT 의 「삭제 실행」 — 승인(삭제 대기) 건
+async function mkExecDelReq(req) {
+  try { await mkDeleteItem(MK_LISTS.itAssets, req.AssetId); }
+  catch (e) { if (!/\(404\)|itemNotFound/.test(e.message)) throw e; }
+  const now = new Date().toISOString();
+  await mkItWrite(async () => mkUpdateItem(MK_DELREQ_LIST, req.id, await mkItFields(MK_DELREQ_LIST, { Status: "삭제 완료", DeletedAt: now })));
+  mkLog("IT 자산", "삭제(결재 승인)", req.CICD || req.AssetTitle, { id: req.AssetId, info: { 요청자: req.RequesterEmail, 결재자: req.ApproverEmail, 사유: req.Reason } });
+}
+
+// 결재함 — 나에게 온 삭제 결재(대기). 없으면 아무것도 그리지 않는다
+function ItDeleteApprovals({ userEmail, onChanged }) {
+  const [rows, setRows] = useState([]);
+  const [busy, setBusy] = useState("");
+  const me = String(userEmail || "").trim().toLowerCase();
+  async function load() {
+    try { setRows((await mkLoadDelReqs(`&$filter=fields/ApproverEmail eq '${me.replace(/'/g, "''")}'`)).filter((r) => r.Status === "대기")); }
+    catch (e) { setRows([]); }
+  }
+  useEffect(() => { if (me) load(); }, [me]);
+  async function act(r, decision) {
+    let note = "";
+    if (decision === "반려") { note = prompt("반려 의견을 적어 주세요(필수).", ""); if (note == null) return; if (!note.trim()) { alert("반려 의견을 적어 주세요."); return; } }
+    else if (!confirm(`「${r.CICD || r.AssetTitle}」 자산 삭제를 승인할까요?\n승인하면 자산이 목록에서 삭제되고 QR 라벨은 더 이상 열리지 않습니다.\n\n사유: ${r.Reason}`)) return;
+    setBusy(String(r.id));
+    try {
+      const st = await mkDecideDelReq(r, decision, note.trim(), { email: me });
+      if (st === "승인") alert("승인했습니다. 자산 삭제 권한이 없어 IT 담당이 삭제를 실행합니다.");
+      await load(); onChanged && onChanged();
+    } catch (e) { alert(e.message); await load(); } finally { setBusy(""); }
+  }
+  if (!rows.length) return null;
+  return (
+    <div className="mb-5 rounded-2xl border border-amber-200 bg-amber-50/60 p-4" data-delreq-inbox>
+      <div className="flex items-center gap-2 mb-3"><AlertTriangle size={16} className="text-amber-600" /><b className="text-sm text-slate-800">결재 대기 · IT 자산 삭제 요청 {rows.length}건</b></div>
+      <div className="space-y-2.5">
+        {rows.map((r) => (
+          <div key={r.id} className="bg-white rounded-xl border border-slate-200 p-3.5 flex flex-col md:flex-row md:items-center gap-3" data-delreq-item={r.CICD}>
+            <div className="min-w-0 flex-1">
+              <div className="text-[14px] font-semibold text-slate-800">{r.AssetTitle || "-"} <span className="font-mono text-[12px] font-normal text-slate-500">{r.CICD}{r.SerialNo ? ` · ${r.SerialNo}` : ""}</span></div>
+              <div className="text-[12.5px] text-slate-600 mt-1"><span className="text-slate-400">사유</span> {r.Reason}</div>
+              <div className="text-[11.5px] text-slate-400 mt-0.5">요청 {r.RequesterName || ""} {r.RequesterEmail} · {mkItKst(r.Created)}</div>
+            </div>
+            <div className="flex gap-2 shrink-0">
+              <button disabled={!!busy} onClick={() => act(r, "반려")} className="px-4 py-2 text-sm rounded-lg border border-slate-300 bg-white disabled:opacity-50" data-delreq-reject>반려</button>
+              <button disabled={!!busy} onClick={() => act(r, "승인")} className="px-4 py-2 text-sm rounded-lg text-white disabled:opacity-50" style={{ background: BRAND.accent }} data-delreq-approve>{busy === String(r.id) ? "처리 중…" : "승인"}</button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function MkItRefNote({ a }) {   // 상세 · 위치 카드 — 판정 기준 좌표가 어디서 오는지
   const [geo, setGeo] = useState(_mkGeo);
   useEffect(() => { mkLoadAddrGeo().then(setGeo); }, []);
@@ -4833,7 +4984,7 @@ function ItMoveModal({ kind, asset, person, assets, onClose, onDone }) {
 }
 
 // 자산 상세 — 정보 · 라벨 · 지급/반납 단추 · 이력 + 스캔 타임라인
-function ItAssetDrawer({ asset, it, readOnly, canLabel, dir, onClose, onEdit, onMove, onDelete }) {
+function ItAssetDrawer({ asset, it, readOnly, canLabel, dir, onClose, onEdit, onMove, onDelete, delReq, onCancelDel, onExecDel }) {
   const a = asset; const st = mkItStateOf(a);
   const hist = (it.history || []).filter((h) => (h.AssetId && String(h.AssetId) === String(a.id)) || (a.SerialNo && h.SerialNo && String(h.SerialNo).toUpperCase() === String(a.SerialNo).toUpperCase()));
   const scans = (it.scans || []).filter((s) => String(s.AssetId) === String(a.id));
@@ -4927,7 +5078,19 @@ function ItAssetDrawer({ asset, it, readOnly, canLabel, dir, onClose, onEdit, on
           </ol>
         ) : <div className="text-sm text-slate-400 py-4 text-center">아직 이력이 없습니다</div>}
       </div>
-      {!readOnly && onDelete && <div className="mt-4 text-right"><button onClick={() => onDelete(a)} className="text-xs text-slate-400 hover:text-red-600 inline-flex items-center gap-1"><Trash2 size={12} /> 자산 삭제(잘못 등록한 경우만)</button></div>}
+      {delReq ? (
+        <div className={`mt-4 rounded-xl border px-4 py-3 text-[13px] ${delReq.Status === "승인" ? "border-blue-200 bg-blue-50/60" : "border-amber-200 bg-amber-50/60"}`} data-delreq-banner={delReq.Status}>
+          <div className="flex items-center gap-2 mb-1"><Trash2 size={14} className="text-slate-500" /><b className="text-slate-800">삭제 요청</b><MkDelReqBadge s={delReq.Status} /></div>
+          <div className="text-slate-600"><span className="text-slate-400">사유</span> {delReq.Reason}</div>
+          <div className="text-[11.5px] text-slate-400 mt-0.5">요청 {delReq.RequesterName || delReq.RequesterEmail} · {mkItKst(delReq.Created)} · 결재자 {delReq.ApproverName || ""} {delReq.ApproverEmail}</div>
+          {!readOnly && (
+            <div className="flex justify-end gap-2 mt-2">
+              {delReq.Status === "대기" && String(delReq.RequesterEmail || "").toLowerCase() === String(_mkLogUser.email || "").toLowerCase() && <button onClick={() => onCancelDel(delReq)} className="px-3 py-1.5 text-xs rounded-lg border border-slate-300 bg-white">요청 취소</button>}
+              {delReq.Status === "승인" && <button onClick={() => onExecDel(delReq)} className="px-3 py-1.5 text-xs rounded-lg text-white bg-red-600" data-delreq-exec>삭제 실행</button>}
+            </div>
+          )}
+        </div>
+      ) : (!readOnly && onDelete && <div className="mt-4 text-right"><button onClick={() => onDelete(a)} className="text-xs text-slate-400 hover:text-red-600 inline-flex items-center gap-1" data-delreq-open><Trash2 size={12} /> 자산 삭제 요청(잘못 등록한 경우만 · 결재 필요)</button></div>)}
     </MkDrawer>
   );
 }
@@ -5044,14 +5207,17 @@ function ItAssetsTab({ it, reloadIt, readOnly, canLabel, onLabelTab }) {
         : /\(403\)|accessDenied/.test(e.message) ? `저장하지 못했습니다 — ${MK_LISTS.itAssets} 목록에 쓰기 권한이 없습니다(목록 권한 · 고급 설정의 만들기/편집 권한 확인).\n\n(${e.message.slice(0, 200)})` : e.message);
     } finally { setBusy(false); }
   }
-  async function remove(a) {
-    if (readOnly) return;
-    if (!confirm(`「${a.CICD || a.Title}」 자산을 삭제할까요?\n붙어 있는 QR 라벨은 더 이상 열리지 않습니다. 폐기 · 반납은 삭제 대신 「폐기」 처리를 권장합니다(이력이 남습니다).`)) return;
-    try {
-      await mkDeleteItem(MK_LISTS.itAssets, a.id);
-      mkLog("IT 자산", "삭제", a.CICD || a.Title, { id: a.id, info: { Description: a.Title, "Serial No.": a.SerialNo, "Asset Code": a.AssetCode, "QR 토큰": mkMaskToken(a.QrToken) } });
-      setDetailId(null); await reloadIt();
-    } catch (e) { alert(e.message); }
+  // 10-27 삭제는 결재(요청자의 Boss) 후에만 — 바로 지우지 않는다
+  const [delAsk, setDelAsk] = useState(null);
+  function remove(a) { if (!readOnly) setDelAsk(a); }
+  async function cancelDelReq(r) {
+    if (!confirm("삭제 요청을 취소할까요?")) return;
+    try { await mkItWrite(async () => mkUpdateItem(MK_DELREQ_LIST, r.id, await mkItFields(MK_DELREQ_LIST, { Status: "취소", DecidedAt: new Date().toISOString(), DecidedBy: String(_mkLogUser.email || "").toLowerCase() })));
+      mkLog("IT 자산", "삭제 요청 취소", r.CICD || r.AssetTitle, { id: r.AssetId, info: { 사유: r.Reason } }); await reloadIt(); } catch (e) { alert(e.message); }
+  }
+  async function execDelReq(r) {
+    if (!confirm(`결재 승인된 삭제를 실행할까요?\n「${r.CICD || r.AssetTitle}」 — 승인 ${r.ApproverName || r.ApproverEmail}`)) return;
+    try { await mkExecDelReq(r); setDetailId(null); await reloadIt(); } catch (e) { alert(e.message); }
   }
   function exportXlsx() {
     const data = filtered.map((a) => {
@@ -5163,7 +5329,9 @@ function ItAssetsTab({ it, reloadIt, readOnly, canLabel, onLabelTab }) {
         </div>
       )}
       <div className="text-xs text-slate-400 mt-2">전체 {assets.length}건 · 표시 {filtered.length}건 · 행을 누르면 상세(지급 · 반납 · 이력){canLabel && onLabelTab ? <> · 라벨 묶음 출력은 <button className="underline" onClick={onLabelTab}>IT 자산 QR 라벨</button></> : null}</div>
-      {detail && <ItAssetDrawer asset={detail} it={it} readOnly={readOnly} canLabel={canLabel} dir={dir} onClose={() => setDetailId(null)} onEdit={(a) => setEditing(a)} onMove={(kind, a) => setMove({ kind, asset: a })} onDelete={remove} />}
+      {detail && <ItAssetDrawer asset={detail} it={it} readOnly={readOnly} canLabel={canLabel} dir={dir} onClose={() => setDetailId(null)} onEdit={(a) => setEditing(a)} onMove={(kind, a) => setMove({ kind, asset: a })} onDelete={remove}
+        delReq={(it.delReqs || []).find((r) => String(r.AssetId) === String(detail.id) && MK_DELREQ_OPEN.includes(r.Status))} onCancelDel={cancelDelReq} onExecDel={execDelReq} />}
+      {delAsk && <ItDeleteRequestModal asset={delAsk} userEmail={_mkLogUser.email} userName={_mkLogUser.name} onClose={() => setDelAsk(null)} onDone={() => { setDelAsk(null); reloadIt(); }} />}
       {move && <ItMoveModal kind={move.kind} asset={move.asset} assets={assets} onClose={() => setMove(null)} onDone={after} />}
       {editing !== null && <ItAssetEditModal asset={editing} onClose={() => setEditing(null)} onSave={save} busy={busy} readOnly={readOnly} />}
       {showImport && <ItImportModal it={it} onClose={() => setShowImport(false)} onDone={async () => { await reloadIt(); }} />}
@@ -7101,6 +7269,7 @@ function App({ userEmail, userName }) {
           </div>
         ) : (
           <>
+            <ItDeleteApprovals userEmail={userEmail} onChanged={() => { if (it.loaded) reloadIt(); }} />
             {canAccess("admins") && ["overview", "checkins", "agentCheckins"].includes(tab) && <CheckinStorageNotice />}
             {tab === "overview" && <OverviewTab centers={centers} agents={agents} agentsError={agentsError} checkins={checkins} admins={admins} setTab={setTab} introText={uiContent.overviewIntro} canAccess={canAccess} it={canIt ? it : null} itLoading={itLoading}
               rangeLabel={checkinRange.mode === "custom" && checkinRange.from && checkinRange.to ? `${checkinRange.from.slice(5)}~${checkinRange.to.slice(5)}` : `최근 ${checkinRange.days || 7}일`} />}
@@ -7350,6 +7519,7 @@ function MyAssetsOnlyApp({ userEmail, userName, dirName }) {
       </div>
       <div className="flex-1 overflow-y-auto p-4 md:p-6"><div className="max-w-[1200px] mx-auto">
         {scanTk && <div className="mb-6"><AssetScanPanel token={scanTk} userEmail={userEmail} userName={nameShort} dirName={dirName} onClose={() => { setScanTk(null); setMineKey((k) => k + 1); }} /></div>}
+        <ItDeleteApprovals userEmail={userEmail} />
         <MyAssetsPanel key={mineKey} userEmail={userEmail} userName={dirName} />
       </div></div>
       <div className="text-center text-[11px] text-slate-400 py-4">© 2026 Star Truck Korea · QR Hub · 문의 {MK_IT_MAIL || "IT팀"}</div>

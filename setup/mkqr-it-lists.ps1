@@ -7,6 +7,8 @@
     3) mkqr_CategoryAccess 에 권한 열 3개 — Access_itAssets · Access_itQr · Access_itScans (예/아니요)
     4) mkqr_ITStock   — 수량으로 관리하는 액세서리 재고 (신품 · 회수 재고 · 최소 기준)
     5) mkqr_ITHistory — 지급 · 반납 · 교체 · 고장 · 폐기 이력 (자산 · 액세서리 공용)
+    6) mkqr_ITSecrets — BitLocker 복구 키(IT 전용)
+    7) mkqr_ITDeleteRequests — 자산 삭제 결재 요청(10-27)
   ※ 목록을 새로 만들면 사이트 권한을 그대로 이어받는다(권한 상속을 끊지 않는다). 상속을 끊으면 IT 담당자에게 「편집」 을 따로 줘야 한다.
   이미 있는 목록 · 열은 건너뛴다(다시 실행해도 안전).
 
@@ -83,5 +85,11 @@ foreach ($n in "SerialNo", "AssetId", "Hostname", "Model", "Owner", "Source") { 
 foreach ($n in "RecoveryKey", "Note") { Ensure-Field $X $n "Note" }
 Ensure-Index $X "SerialNo"; Ensure-Index $X "AssetId"
 Write-Host "  !! $X : 목록 설정 > 이 목록에 대한 권한 > 권한 상속 중지 > 구성원 · 방문자 제거 > IT 담당자만 (전 직원 참가가 이어지면 누구나 키를 읽음)" -ForegroundColor Yellow
+
+# 7) 자산 삭제 결재(10-27) — 삭제 요청 · 결재 기록. 결재자 = 요청자의 직원 명부 Boss
+$R = "mkqr_ITDeleteRequests"; Ensure-List $R | Out-Null
+foreach ($n in "AssetId", "CICD", "AssetTitle", "SerialNo", "RequesterEmail", "RequesterName", "ApproverEmail", "ApproverName", "Status", "DecidedAt", "DecidedBy", "DeletedAt") { Ensure-Field $R $n "Text" }
+foreach ($n in "Reason", "DecisionNote", "Snapshot") { Ensure-Field $R $n "Note" }
+Ensure-Index $R "ApproverEmail"; Ensure-Index $R "AssetId"; Ensure-Index $R "Status"
 
 Write-Host "`n완료 — MKQR 를 새로고침한 뒤 「카테고리 접근 권한」 에서 IT 담당자에게 IT 전용 칸을 체크하고 「반영」 하세요."
