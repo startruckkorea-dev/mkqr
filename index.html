@@ -4688,7 +4688,7 @@ function ItDeleteRequestModal({ asset, userEmail, userName, onClose, onDone }) {
       };
       await mkItWrite(async () => mkCreateItem(MK_DELREQ_LIST, await mkItFields(MK_DELREQ_LIST, fields)));
       mkLog("IT 자산", "삭제 요청", asset.CICD || asset.Title, { id: asset.id, info: { 사유: fields.Reason, 결재자: `${route.boss.name} (${route.boss.email})`, "Serial No.": asset.SerialNo } });
-      alert(`삭제 결재를 요청했습니다.\n결재자: ${route.boss.name} (${route.boss.email}) · 또는 IT 시스템 관리자(IT_SYSTEM_MGR)\n\n결재자가 QR Hub 「결재 승인」 메뉴에서 승인하면 자산이 삭제됩니다.`);
+      alert(`삭제 결재를 요청했습니다.\n결재자: ${route.boss.name} (${route.boss.email})\n\n결재자가 QR Hub 「결재 승인」 메뉴에서 승인하면 자산이 삭제됩니다.`);
       onDone && onDone();
     } catch (e) {
       alert(mkIsMissingList(e) ? `SharePoint 목록 ${MK_DELREQ_LIST} 이 없어 요청할 수 없습니다 — setup/mkqr-it-lists.ps1 을 실행해 목록을 만든 뒤 다시 시도해 주세요.` : e.message);
@@ -4706,7 +4706,7 @@ function ItDeleteRequestModal({ asset, userEmail, userName, onClose, onDone }) {
         {!okReason && reason.length > 0 && <div className="text-[11.5px] text-red-600 mt-1">사유를 5자 이상 적어 주세요.</div>}
       </Field>
       <div className="rounded-xl border border-slate-200 px-3.5 py-2.5 text-[13px]" data-delreq-route>
-        <div className="text-[11.5px] text-slate-400 mb-0.5">결재자 — 직원 명부의 내 Boss <span className="text-slate-400">(IT 시스템 관리자 IT_SYSTEM_MGR 도 승인 가능)</span></div>
+        <div className="text-[11.5px] text-slate-400 mb-0.5">결재자 — 직원 명부의 내 Boss</div>
         {!route ? <span className="text-slate-400">확인하는 중…</span>
           : route.err ? <span className="text-red-600">{route.err}</span>
           : <span className="text-slate-800 font-medium">{route.boss.name} <span className="font-normal text-slate-500">{route.boss.email}</span>{route.boss.dept ? <span className="font-normal text-slate-400"> · {route.boss.dept}</span> : null}</span>}
@@ -4724,8 +4724,8 @@ async function mkDecideDelReq(req, decision, note, who) {
   const cur = (await mkLoadDelReqs(`&$filter=fields/AssetId eq '${String(req.AssetId)}'`)).find((r) => String(r.id) === String(req.id));
   if (!cur || cur.Status !== "대기") throw new Error(`이미 처리된 요청입니다(${cur ? cur.Status : "없음"}).`);
   const role = mkDelReqRole(cur, who.email);
-  if (!role) throw new Error(mkLow(cur.RequesterEmail) === mkLow(who.email) ? "본인이 요청한 건은 결재할 수 없습니다(결재자: " + (cur.ApproverName || cur.ApproverEmail) + ")." : "이 요청의 결재자(Boss · IT_SYSTEM_MGR)가 아닙니다.");
-  const roleLabel = role === "boss" ? "Boss(지정 결재자)" : "IT_SYSTEM_MGR";
+  if (!role) throw new Error(mkLow(cur.RequesterEmail) === mkLow(who.email) ? "본인이 요청한 건은 결재할 수 없습니다(결재자: " + (cur.ApproverName || cur.ApproverEmail) + ")." : "이 요청의 결재자가 아닙니다.");
+  const roleLabel = role === "boss" ? "지정 결재자" : `on behalf of ${cur.ApproverName || ""} <${cur.ApproverEmail || ""}>`;   // 11-02 화면 표기와 같게(APS 결재 이력 「Approved on behalf of」)
   const base = { DecidedAt: new Date().toISOString(), DecisionNote: note || "", DecidedBy: String(who.email || "").toLowerCase() };
   if (decision === "반려") {
     await mkItWrite(async () => mkUpdateItem(MK_DELREQ_LIST, req.id, await mkItFields(MK_DELREQ_LIST, { ...base, Status: "반려" })));
@@ -4779,8 +4779,26 @@ async function mkCancelDelReq(r, me) {
   await mkItWrite(async () => mkUpdateItem(MK_DELREQ_LIST, r.id, await mkItFields(MK_DELREQ_LIST, { Status: "취소", DecidedAt: new Date().toISOString(), DecidedBy: mkLow(me) })));
   mkLog("IT 자산", "삭제 요청 취소", r.CICD || r.AssetTitle, { id: r.AssetId, info: { 사유: r.Reason } });
 }
-const mkApprDecider = (r) => (!r.DecidedBy || mkLow(r.DecidedBy) === mkLow(r.ApproverEmail) ? (r.ApproverName || r.ApproverEmail || "") : r.DecidedBy);
-const mkApprRoleOf = (r) => (!r.DecidedBy || mkLow(r.DecidedBy) === mkLow(r.ApproverEmail) ? "Boss" : "IT_SYSTEM_MGR");
+// 지정 결재자(Boss)가 아닌 사람이 처리한 건 — 처리자는 DecidedBy(메일), 이름은 직원 명부에서 찾는다
+const mkIsBehalf = (r) => !!r && MK_DONE_ST.includes(r.Status) && !!r.DecidedBy && mkLow(r.DecidedBy) !== mkLow(r.ApproverEmail);
+const mkApprDecider = (r, names) => (!mkIsBehalf(r) ? (r.ApproverName || r.ApproverEmail || "") : ((names || {})[mkLow(r.DecidedBy)] || r.DecidedBy));
+function useMkDirNames() {
+  const [m, setM] = useState({});
+  useEffect(() => { loadEmployeeDirectory().then((d) => { const o = {}; (d || []).forEach((x) => { if (x.email) o[x.email] = x.name; }); setM(o); }, () => {}); }, []);
+  return m;
+}
+// APS 결재 이력과 같은 노란 알약 — 「Approved on behalf of martin…@…」(짧게: 「on behalf of 이름」)
+function MkBehalf({ r, short }) {
+  if (!mkIsBehalf(r)) return null;
+  const v = r.Status === "반려" ? "Rejected on behalf of" : "Approved on behalf of";
+  const who = short ? (r.ApproverName || r.ApproverEmail) : (r.ApproverEmail || r.ApproverName);
+  return (
+    <span title={`${v} ${r.ApproverName || ""} ${r.ApproverEmail || ""}`.trim()} data-appr-behalf
+      className="inline-block whitespace-nowrap rounded-[10px] px-2 py-px text-[10.5px] font-semibold align-middle" style={{ background: "#fff4ce", border: "1px solid #f2d68c", color: "#8a5a00" }}>
+      <span className="font-normal opacity-80">{short ? "on behalf of" : v} </span><b className="font-bold">{who}</b>
+    </span>
+  );
+}
 function MkApprEmpty({ text }) {
   return (
     <div className="bg-white rounded-xl border border-slate-200 flex flex-col items-center justify-center py-12 text-slate-400 gap-2" data-appr-empty>
@@ -4794,7 +4812,7 @@ function MkApprKind() {   // 구분 — 지금은 IT 자산 삭제 결재뿐(ICS
 }
 const MK_APPR_PAGE = 10;
 // 결재 요청 표 — 결재 승인(내 차례 · 내가 올린 요청) · 나의 결재 이력이 같은 모양을 쓴다. 행을 누르면 상세 팝업
-function MkApprTable({ rows, kind, me, onPick }) {
+function MkApprTable({ rows, kind, me, onPick, names }) {
   const [page, setPage] = useState(0);
   useEffect(() => { setPage(0); }, [rows.length]);
   const pages = Math.max(1, Math.ceil(rows.length / MK_APPR_PAGE));
@@ -4804,7 +4822,7 @@ function MkApprTable({ rows, kind, me, onPick }) {
   const ell = { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" };
   const hist = kind === "history";
   const cols = hist
-    ? [["No", "5%"], ["CI CD", "12%"], ["자산", "21%"], ["구분", "9%"], ["요청자", "13%"], ["결재 구분", "11%"], ["내 처리", "8%"], ["내 처리일", "12%"], ["상태", "9%"]]
+    ? [["No", "5%"], ["CI CD", "11%"], ["자산", "18%"], ["구분", "8%"], ["요청자", "12%"], ["지정 결재자", "19%"], ["내 처리", "7%"], ["내 처리일", "12%"], ["상태", "8%"]]
     : [["No", "5%"], ["CI CD", "12%"], ["자산", "19%"], ["구분", "9%"], ["요청자", "13%"], ["요청일", "10%"], ["결재자", "20%"], ["상태", "12%"]];
   return (
     <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-x-auto" data-appr-table={kind}>
@@ -4815,7 +4833,6 @@ function MkApprTable({ rows, kind, me, onPick }) {
         <tbody className="divide-y divide-slate-100">
           {paged.map((r, i) => {
             const no = rows.length - (page * MK_APPR_PAGE + i);
-            const asMgr = kind === "turn" && mkDelReqRole(r, me) === "mgr";
             return (
               <tr key={r.id} onClick={() => onPick(r)} className="hover:bg-slate-50 cursor-pointer" data-appr-row={r.CICD}>
                 <td className={`${td} text-slate-400 text-center`}>{no}</td>
@@ -4824,14 +4841,14 @@ function MkApprTable({ rows, kind, me, onPick }) {
                 <td className={td}><MkApprKind /></td>
                 <td className={td} style={ell} title={r.RequesterEmail}>{r.RequesterName || r.RequesterEmail}</td>
                 {hist ? (<>
-                  <td className={td}>{mkApprRoleOf(r)}</td>
+                  <td className={td} style={ell} title={r.ApproverEmail}>{mkIsBehalf(r) ? <MkBehalf r={r} short /> : (r.ApproverName || r.ApproverEmail)}</td>
                   <td className={`${td} font-semibold`} style={{ color: r.Status === "반려" ? "#B91C1C" : "#15803D" }}>{r.Status === "반려" ? "반려" : "승인"}</td>
                   <td className={`${td} whitespace-nowrap text-slate-500`}>{mkItKst(r.DecidedAt) || "-"}</td>
                 </>) : (<>
                   <td className={`${td} whitespace-nowrap`}>{mkItKst(r.Created).slice(0, 10)}</td>
                   <td className={td} style={ell} title={r.ApproverEmail}>
-                    {r.Status === "대기" || r.Status === "취소" ? (r.ApproverName || r.ApproverEmail) : mkApprDecider(r)}
-                    {asMgr && <span className="text-slate-400"> · IT_SYSTEM_MGR 로</span>}
+                    {r.Status === "대기" || r.Status === "취소" ? (r.ApproverName || r.ApproverEmail) : mkApprDecider(r, names)}
+                    {mkIsBehalf(r) && <> <MkBehalf r={r} short /></>}
                   </td>
                 </>)}
                 <td className={td}>
@@ -4853,7 +4870,7 @@ function MkApprTable({ rows, kind, me, onPick }) {
   );
 }
 // 결재 상세 — 자산 · 사유 · 결재 현황, 내 차례면 의견 · 승인 · 반려, 내가 올린 대기 건이면 요청 취소
-function MkApprDetail({ r, me, onClose, onDone }) {
+function MkApprDetail({ r, me, onClose, onDone, names }) {
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState("");
   const [err, setErr] = useState("");
@@ -4877,11 +4894,11 @@ function MkApprDetail({ r, me, onClose, onDone }) {
     try { await mkCancelDelReq(r, me); onDone(); } catch (e) { setErr(e.message); setBusy(""); }
   }
   const decided = MK_DONE_ST.includes(r.Status);
-  const step = (n, label, who, state, when, tone) => (
+  const step = (n, label, who, state, when, tone, extra) => (
     <span className="text-xs px-2.5 py-1.5 rounded-lg inline-flex items-center gap-1.5 whitespace-nowrap border"
       style={{ background: { ok: "#DCFCE7", no: "#FEE2E2", cur: "#E4F1F0", off: "#FFFFFF" }[tone], color: { ok: "#15803D", no: "#B91C1C", cur: BRAND.accent, off: "#94A3B8" }[tone], borderColor: tone === "off" ? "#E2E8F0" : "transparent" }}>
       <span className="font-semibold">{n}. {label}</span>{who && <span className="opacity-80">{who}</span>}
-      {state && <span className="font-semibold">{state}</span>}{when && <span className="opacity-70">{when}</span>}
+      {state && <span className="font-semibold">{state}</span>}{when && <span className="opacity-70">{when}</span>}{extra}
     </span>
   );
   return (
@@ -4895,7 +4912,7 @@ function MkApprDetail({ r, me, onClose, onDone }) {
         <dl className="grid grid-cols-[88px_1fr] gap-x-3 gap-y-1.5 text-[13px] mt-3">
           <dt className="text-slate-400">삭제 사유</dt><dd className="text-slate-800 whitespace-pre-wrap">{r.Reason || "-"}</dd>
           <dt className="text-slate-400">요청자</dt><dd className="text-slate-700">{r.RequesterName || ""} <span className="text-slate-400">{r.RequesterEmail}</span> · {mkItKst(r.Created)}</dd>
-          <dt className="text-slate-400">결재자</dt><dd className="text-slate-700">{r.ApproverName || ""} <span className="text-slate-400">{r.ApproverEmail}</span> <span className="text-slate-400">· 직원 명부 Boss (IT_SYSTEM_MGR 도 결재 가능)</span></dd>
+          <dt className="text-slate-400">결재자</dt><dd className="text-slate-700">{r.ApproverName || ""} <span className="text-slate-400">{r.ApproverEmail}</span></dd>
           {r.DecisionNote ? (<><dt className="text-slate-400">결재 의견</dt><dd className="text-slate-700 whitespace-pre-wrap">{r.DecisionNote}</dd></>) : null}
         </dl>
         <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5" data-appr-trail>
@@ -4903,7 +4920,7 @@ function MkApprDetail({ r, me, onClose, onDone }) {
           <div className="flex flex-wrap items-center gap-2">
             {step(1, "요청", r.RequesterName || r.RequesterEmail, "", mkItKst(r.Created), "ok")}
             {r.Status === "취소" ? step(2, "결재", r.ApproverName || r.ApproverEmail, "요청 취소", mkItKst(r.DecidedAt), "off")
-              : decided ? step(2, `결재 · ${mkApprRoleOf(r)}`, mkApprDecider(r), r.Status === "반려" ? "반려" : "승인", mkItKst(r.DecidedAt), r.Status === "반려" ? "no" : "ok")
+              : decided ? step(2, "결재", mkApprDecider(r, names), r.Status === "반려" ? "반려" : "승인", mkItKst(r.DecidedAt), r.Status === "반려" ? "no" : "ok", <MkBehalf r={r} />)
               : step(2, "결재", r.ApproverName || r.ApproverEmail, "대기", "", "cur")}
             {r.Status === "승인" && step(3, "삭제 실행", "IT 담당", "대기", "", "cur")}
             {r.Status === "삭제 완료" && step(3, "삭제", "", "완료", mkItKst(r.DeletedAt || r.DecidedAt), "ok")}
@@ -4911,7 +4928,6 @@ function MkApprDetail({ r, me, onClose, onDone }) {
         </div>
         {role && (
           <div className="mt-4">
-            {role === "mgr" && <div className="text-[12px] text-slate-500 mb-2">지정 결재자 {r.ApproverName || r.ApproverEmail} 대신 IT_SYSTEM_MGR 로 결재합니다.</div>}
             <Field label="결재 의견 (반려 시 필수)">
               <textarea className={inputCls} rows={2} value={note} onChange={(e) => setNote(e.target.value)} placeholder="예: 중복 등록 확인 — 승인" data-appr-note />
             </Field>
@@ -4936,6 +4952,7 @@ function MkApprovalPage({ userEmail, mode, onChanged }) {
   const [loading, setLoading] = useState(true);
   const [detail, setDetail] = useState(null);
   const [q, setQ] = useState("");
+  const names = useMkDirNames();
   async function load() {
     setLoading(true);
     try {
@@ -4976,20 +4993,20 @@ function MkApprovalPage({ userEmail, mode, onChanged }) {
         return (
           <div className="mb-6" data-appr-sec="history">
             <h3 className="text-sm font-semibold text-slate-700 mb-3">내가 처리한 결재 ({rows.length})</h3>
-            {rows.length ? <MkApprTable rows={rows} kind="history" me={me} onPick={setDetail} /> : <MkApprEmpty text={kw ? "검색 결과가 없습니다." : "처리한 결재 건이 없습니다."} />}
+            {rows.length ? <MkApprTable rows={rows} kind="history" me={me} onPick={setDetail} names={names} /> : <MkApprEmpty text={kw ? "검색 결과가 없습니다." : "처리한 결재 건이 없습니다."} />}
           </div>
         );
       })() : (<>
         <div className="mb-8" data-appr-sec="turn">
           <h3 className="text-sm font-semibold text-slate-700 mb-3 flex items-center gap-2"><AlertTriangle size={15} className="text-amber-500" /> 내 결재 대기 ({data.turn.length})</h3>
-          {data.turn.length ? <MkApprTable rows={data.turn} kind="turn" me={me} onPick={setDetail} /> : <MkApprEmpty text="결재할 요청이 없습니다." />}
+          {data.turn.length ? <MkApprTable rows={data.turn} kind="turn" me={me} onPick={setDetail} names={names} /> : <MkApprEmpty text="결재할 요청이 없습니다." />}
         </div>
         <div className="mb-6" data-appr-sec="mine">
           <h3 className="text-sm font-semibold text-slate-700 mb-3">내가 올린 요청 ({data.mine.length})</h3>
-          {data.mine.length ? <MkApprTable rows={data.mine} kind="mine" me={me} onPick={setDetail} /> : <MkApprEmpty text="올린 요청이 없습니다." />}
+          {data.mine.length ? <MkApprTable rows={data.mine} kind="mine" me={me} onPick={setDetail} names={names} /> : <MkApprEmpty text="올린 요청이 없습니다." />}
         </div>
       </>)}
-      {detail && <MkApprDetail r={detail} me={me} onClose={() => setDetail(null)} onDone={done} />}
+      {detail && <MkApprDetail r={detail} me={me} onClose={() => setDetail(null)} onDone={done} names={names} />}
     </div>
   );
 }
@@ -5009,7 +5026,7 @@ function MkApprTopBtn({ n, onClick }) {
   );
 }
 const MK_APPR_META = {
-  approval: [FileCheck2, "결재 승인", "나에게 온 IT 자산 삭제 결재를 승인 · 반려하고, 내가 올린 요청의 진행 상황을 봅니다. 본인에게 배정된 건만 보입니다(직원 명부 Boss · IT_SYSTEM_MGR)."],
+  approval: [FileCheck2, "결재 승인", "나에게 온 IT 자산 삭제 결재를 승인 · 반려하고, 내가 올린 요청의 진행 상황을 봅니다. 본인에게 배정된 건만 보입니다."],
   myApprovals: [History, "나의 결재 이력", "내가 승인하거나 반려한 결재입니다. 처리일 최신순으로 보여 줍니다."],
 };
 
@@ -5319,7 +5336,7 @@ function ItAssetDrawer({ asset, it, readOnly, canLabel, dir, onClose, onEdit, on
         <div className={`mt-4 rounded-xl border px-4 py-3 text-[13px] ${delReq.Status === "승인" ? "border-blue-200 bg-blue-50/60" : "border-amber-200 bg-amber-50/60"}`} data-delreq-banner={delReq.Status}>
           <div className="flex items-center gap-2 mb-1"><Trash2 size={14} className="text-slate-500" /><b className="text-slate-800">삭제 요청</b><MkDelReqBadge s={delReq.Status} /></div>
           <div className="text-slate-600"><span className="text-slate-400">사유</span> {delReq.Reason}</div>
-          <div className="text-[11.5px] text-slate-400 mt-0.5">요청 {delReq.RequesterName || delReq.RequesterEmail} · {mkItKst(delReq.Created)} · 결재자 {delReq.ApproverName || ""} {delReq.ApproverEmail} · IT_SYSTEM_MGR 도 결재 가능</div>
+          <div className="text-[11.5px] text-slate-400 mt-0.5">요청 {delReq.RequesterName || delReq.RequesterEmail} · {mkItKst(delReq.Created)} · 결재자 {delReq.ApproverName || ""} {delReq.ApproverEmail}</div>
           {!readOnly && (
             <div className="flex justify-end gap-2 mt-2">
               {delReq.Status === "대기" && String(delReq.RequesterEmail || "").toLowerCase() === String(_mkLogUser.email || "").toLowerCase() && <button onClick={() => onCancelDel(delReq)} className="px-3 py-1.5 text-xs rounded-lg border border-slate-300 bg-white">요청 취소</button>}
