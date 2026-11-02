@@ -113,7 +113,7 @@ import {
   ArrowUpRight, ImagePlus, KeyRound, Mail, XCircle, Settings, ChevronDown, ChevronUp, Store, Contact, History,
   ArrowLeftToLine, ArrowRightFromLine, Menu, LockKeyhole, Eye, Check, LogIn, Home,
   Laptop, Printer, ScanLine, LocateFixed, Monitor, Server, Network, PcCase, Copy, Info,
-  Users, Package, ArrowLeftRight, Undo2, Wrench, FileSpreadsheet, ChevronRight, Smartphone, Cable, Boxes, UserX, Archive, PackagePlus,
+  Users, Package, ArrowLeftRight, Undo2, Wrench, FileSpreadsheet, ChevronRight, Smartphone, Cable, Boxes, UserX, Archive, PackagePlus, FileCheck2,
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import QRCode from "qrcode";
@@ -4634,7 +4634,7 @@ function MkItAddressPicker({ form, setForm, readOnly }) {
 // ---- IT 자산 삭제 결재(10-27 · mkqr-delreq) ------------------------------------------------------------------------
 // 자산 삭제는 바로 지우지 않고 결재를 거친다. 요청자가 사유(필수)를 적으면, 직원 명부(employee_search.xlsx) G열 Boss 가 결재자로 자동 지정된다.
 // 요청 · 결재 기록은 SharePoint 목록 mkqr_ITDeleteRequests. 상태: 대기 → 삭제 완료(결재자가 승인하며 바로 삭제) | 승인(삭제 대기: 결재자에게
-// 자산 삭제 권한이 없으면 IT 가 「삭제 실행」) · 반려 · 취소(요청자). 결재자는 QR Hub 에 들어오면 화면 맨 위에서 승인 · 반려한다.
+// 자산 삭제 권한이 없으면 IT 가 「삭제 실행」) · 반려 · 취소(요청자). 결재자는 QR Hub OVERVIEW › 「결재 승인」 에서 승인 · 반려한다(11-02 · ICS 와 같게).
 // 11-02: Boss 와 함께 system_config_final.xlsx 의 IT_SYSTEM_MGR 도 승인 · 반려할 수 있다(먼저 처리한 사람 기준, DecidedBy 에 남음).
 //        IT_SYSTEM_MGR 본인이 요청한 건은 그 자격으로 결재하지 않는다 — 요청자 ≠ 결재자(그 건은 Boss 만).
 const MK_DELREQ_LIST = "mkqr_ITDeleteRequests";
@@ -4688,7 +4688,7 @@ function ItDeleteRequestModal({ asset, userEmail, userName, onClose, onDone }) {
       };
       await mkItWrite(async () => mkCreateItem(MK_DELREQ_LIST, await mkItFields(MK_DELREQ_LIST, fields)));
       mkLog("IT 자산", "삭제 요청", asset.CICD || asset.Title, { id: asset.id, info: { 사유: fields.Reason, 결재자: `${route.boss.name} (${route.boss.email})`, "Serial No.": asset.SerialNo } });
-      alert(`삭제 결재를 요청했습니다.\n결재자: ${route.boss.name} (${route.boss.email}) · 또는 IT 시스템 관리자(IT_SYSTEM_MGR)\n\n결재자가 QR Hub 에서 승인하면 자산이 삭제됩니다.`);
+      alert(`삭제 결재를 요청했습니다.\n결재자: ${route.boss.name} (${route.boss.email}) · 또는 IT 시스템 관리자(IT_SYSTEM_MGR)\n\n결재자가 QR Hub 「결재 승인」 메뉴에서 승인하면 자산이 삭제됩니다.`);
       onDone && onDone();
     } catch (e) {
       alert(mkIsMissingList(e) ? `SharePoint 목록 ${MK_DELREQ_LIST} 이 없어 요청할 수 없습니다 — setup/mkqr-it-lists.ps1 을 실행해 목록을 만든 뒤 다시 시도해 주세요.` : e.message);
@@ -4748,52 +4748,270 @@ async function mkExecDelReq(req) {
   mkLog("IT 자산", "삭제(결재 승인)", req.CICD || req.AssetTitle, { id: req.AssetId, info: { 요청자: req.RequesterEmail, 결재자: req.ApproverEmail, 사유: req.Reason } });
 }
 
-// 결재함 — 나에게 온 삭제 결재(대기). 없으면 아무것도 그리지 않는다
-function ItDeleteApprovals({ userEmail, onChanged }) {
-  const [rows, setRows] = useState([]);
-  const [busy, setBusy] = useState("");
-  const me = String(userEmail || "").trim().toLowerCase();
-  async function load() {
-    try {
-      const q = mkIsDelMgr(me) ? `&$filter=fields/Status eq '대기'` : `&$filter=fields/ApproverEmail eq '${me.replace(/'/g, "''")}'`;
-      setRows((await mkLoadDelReqs(q)).filter((r) => r.Status === "대기" && mkDelReqRole(r, me)));
-    }
-    catch (e) { setRows([]); }
-  }
-  useEffect(() => { if (me) load(); }, [me]);
-  async function act(r, decision) {
-    let note = "";
-    if (decision === "반려") { note = prompt("반려 의견을 적어 주세요(필수).", ""); if (note == null) return; if (!note.trim()) { alert("반려 의견을 적어 주세요."); return; } }
-    else if (!confirm(`「${r.CICD || r.AssetTitle}」 자산 삭제를 승인할까요?\n승인하면 자산이 목록에서 삭제되고 QR 라벨은 더 이상 열리지 않습니다.\n\n사유: ${r.Reason}`)) return;
-    setBusy(String(r.id));
-    try {
-      const st = await mkDecideDelReq(r, decision, note.trim(), { email: me });
-      if (st === "승인") alert("승인했습니다. 자산 삭제 권한이 없어 IT 담당이 삭제를 실행합니다.");
-      await load(); onChanged && onChanged();
-    } catch (e) { alert(e.message); await load(); } finally { setBusy(""); }
-  }
-  if (!rows.length) return null;
+// ---- 결재 승인 · 나의 결재 이력(11-02 · mkqr-appr) — ICS 와 같은 자리(OVERVIEW 묶음) · 같은 모양 --------------------------------
+// 예전엔 결재 대기 카드가 모든 화면 맨 위(Overview 위)에 노란 상자로 떠 있어 화면과 상관없이 끼어들었다. 이제는 ICS 처럼
+//  · 사이드바 OVERVIEW 의 「결재 승인」(내 대기 건수 배지 · 0 이면 회색) · 상단 바 결재 아이콘으로 들어와
+//  · 「내 결재 대기」 · 「내가 올린 요청」 표에서 행을 눌러 팝업에서 승인 · 반려(의견) · 요청 취소를 하고
+//  · 내가 승인 · 반려한 건은 「나의 결재 이력」 에서 다시 본다.
+// 권한 표에 없는 직원(내 자산 화면)도 같은 화면을 탭으로 쓴다 — Boss 는 대개 QR Hub 권한이 없다.
+const mkQ = (s) => String(s || "").replace(/'/g, "''");
+const MK_DONE_ST = ["승인", "삭제 완료", "반려"];
+async function mkLoadMyTurn(me) {
+  const q = mkIsDelMgr(me) ? `&$filter=fields/Status eq '대기'` : `&$filter=fields/ApproverEmail eq '${mkQ(me)}'`;
+  return (await mkLoadDelReqs(q)).filter((r) => r.Status === "대기" && mkDelReqRole(r, me));
+}
+// 내 결재 대기 건수 — 처음 · 5분마다 · 결재 처리 뒤(refresh) 다시 센다. 목록이 없거나 못 읽으면 0
+function useMkApprCount(me) {
+  const [n, setN] = useState(null);
+  const meRef = useRef(me); meRef.current = me;
+  const refresh = useRef(async () => {
+    const e = meRef.current; if (!e) return;
+    try { setN((await mkLoadMyTurn(e)).length); } catch (err) { setN((v) => (v == null ? 0 : v)); }
+  }).current;
+  useEffect(() => { refresh(); const tm = setInterval(refresh, 5 * 60000); return () => clearInterval(tm); }, [me]);
+  return [n, refresh];
+}
+// 요청자 본인 취소 — 그사이 결재됐으면 막는다
+async function mkCancelDelReq(r, me) {
+  const cur = (await mkLoadDelReqs(`&$filter=fields/AssetId eq '${mkQ(r.AssetId)}'`)).find((x) => String(x.id) === String(r.id));
+  if (!cur || cur.Status !== "대기") throw new Error(`이미 처리된 요청이라 취소할 수 없습니다(${cur ? cur.Status : "없음"}).`);
+  if (mkLow(cur.RequesterEmail) !== mkLow(me)) throw new Error("본인이 올린 요청만 취소할 수 있습니다.");
+  await mkItWrite(async () => mkUpdateItem(MK_DELREQ_LIST, r.id, await mkItFields(MK_DELREQ_LIST, { Status: "취소", DecidedAt: new Date().toISOString(), DecidedBy: mkLow(me) })));
+  mkLog("IT 자산", "삭제 요청 취소", r.CICD || r.AssetTitle, { id: r.AssetId, info: { 사유: r.Reason } });
+}
+const mkApprDecider = (r) => (!r.DecidedBy || mkLow(r.DecidedBy) === mkLow(r.ApproverEmail) ? (r.ApproverName || r.ApproverEmail || "") : r.DecidedBy);
+const mkApprRoleOf = (r) => (!r.DecidedBy || mkLow(r.DecidedBy) === mkLow(r.ApproverEmail) ? "Boss" : "IT_SYSTEM_MGR");
+function MkApprEmpty({ text }) {
   return (
-    <div className="mb-5 rounded-2xl border border-amber-200 bg-amber-50/60 p-4" data-delreq-inbox>
-      <div className="flex items-center gap-2 mb-3"><AlertTriangle size={16} className="text-amber-600" /><b className="text-sm text-slate-800">결재 대기 · IT 자산 삭제 요청 {rows.length}건</b></div>
-      <div className="space-y-2.5">
-        {rows.map((r) => (
-          <div key={r.id} className="bg-white rounded-xl border border-slate-200 p-3.5 flex flex-col md:flex-row md:items-center gap-3" data-delreq-item={r.CICD}>
-            <div className="min-w-0 flex-1">
-              <div className="text-[14px] font-semibold text-slate-800">{r.AssetTitle || "-"} <span className="font-mono text-[12px] font-normal text-slate-500">{r.CICD}{r.SerialNo ? ` · ${r.SerialNo}` : ""}</span></div>
-              <div className="text-[12.5px] text-slate-600 mt-1"><span className="text-slate-400">사유</span> {r.Reason}</div>
-              <div className="text-[11.5px] text-slate-400 mt-0.5">요청 {r.RequesterName || ""} {r.RequesterEmail} · {mkItKst(r.Created)}{mkDelReqRole(r, me) === "mgr" ? ` · 결재자 ${r.ApproverName || r.ApproverEmail} — IT_SYSTEM_MGR 로 결재` : ""}</div>
-            </div>
-            <div className="flex gap-2 shrink-0">
-              <button disabled={!!busy} onClick={() => act(r, "반려")} className="px-4 py-2 text-sm rounded-lg border border-slate-300 bg-white disabled:opacity-50" data-delreq-reject>반려</button>
-              <button disabled={!!busy} onClick={() => act(r, "승인")} className="px-4 py-2 text-sm rounded-lg text-white disabled:opacity-50" style={{ background: BRAND.accent }} data-delreq-approve>{busy === String(r.id) ? "처리 중…" : "승인"}</button>
-            </div>
-          </div>
-        ))}
-      </div>
+    <div className="bg-white rounded-xl border border-slate-200 flex flex-col items-center justify-center py-12 text-slate-400 gap-2" data-appr-empty>
+      <ShieldCheck size={28} className="text-slate-300" />
+      <p className="text-sm">{text}</p>
     </div>
   );
 }
+function MkApprKind() {   // 구분 — 지금은 IT 자산 삭제 결재뿐(ICS 의 「수정 · 삭제 요청」 칩 자리)
+  return <span className="inline-block px-2 py-0.5 rounded-full text-[11px] font-medium whitespace-nowrap bg-rose-50 text-rose-700">자산 삭제</span>;
+}
+const MK_APPR_PAGE = 10;
+// 결재 요청 표 — 결재 승인(내 차례 · 내가 올린 요청) · 나의 결재 이력이 같은 모양을 쓴다. 행을 누르면 상세 팝업
+function MkApprTable({ rows, kind, me, onPick }) {
+  const [page, setPage] = useState(0);
+  useEffect(() => { setPage(0); }, [rows.length]);
+  const pages = Math.max(1, Math.ceil(rows.length / MK_APPR_PAGE));
+  const paged = rows.slice(page * MK_APPR_PAGE, (page + 1) * MK_APPR_PAGE);
+  const th = "px-3 py-2 text-left text-[11px] font-semibold text-slate-500 whitespace-nowrap";
+  const td = "px-3 py-2 text-xs text-slate-700 align-middle";
+  const ell = { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" };
+  const hist = kind === "history";
+  const cols = hist
+    ? [["No", "5%"], ["CI CD", "12%"], ["자산", "21%"], ["구분", "9%"], ["요청자", "13%"], ["결재 구분", "11%"], ["내 처리", "8%"], ["내 처리일", "12%"], ["상태", "9%"]]
+    : [["No", "5%"], ["CI CD", "12%"], ["자산", "19%"], ["구분", "9%"], ["요청자", "13%"], ["요청일", "10%"], ["결재자", "20%"], ["상태", "12%"]];
+  return (
+    <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-x-auto" data-appr-table={kind}>
+      <table className="w-full min-w-[760px]" style={{ tableLayout: "fixed" }}>
+        <thead className="bg-slate-50 border-b border-slate-200">
+          <tr>{cols.map(([h, w]) => <th key={h} className={th} style={{ width: w }}>{h}</th>)}</tr>
+        </thead>
+        <tbody className="divide-y divide-slate-100">
+          {paged.map((r, i) => {
+            const no = rows.length - (page * MK_APPR_PAGE + i);
+            const asMgr = kind === "turn" && mkDelReqRole(r, me) === "mgr";
+            return (
+              <tr key={r.id} onClick={() => onPick(r)} className="hover:bg-slate-50 cursor-pointer" data-appr-row={r.CICD}>
+                <td className={`${td} text-slate-400 text-center`}>{no}</td>
+                <td className={`${td} font-mono text-slate-500`} style={ell}>{r.CICD || "-"}</td>
+                <td className={td} style={ell} title={r.AssetTitle}>{r.AssetTitle || "-"}</td>
+                <td className={td}><MkApprKind /></td>
+                <td className={td} style={ell} title={r.RequesterEmail}>{r.RequesterName || r.RequesterEmail}</td>
+                {hist ? (<>
+                  <td className={td}>{mkApprRoleOf(r)}</td>
+                  <td className={`${td} font-semibold`} style={{ color: r.Status === "반려" ? "#B91C1C" : "#15803D" }}>{r.Status === "반려" ? "반려" : "승인"}</td>
+                  <td className={`${td} whitespace-nowrap text-slate-500`}>{mkItKst(r.DecidedAt) || "-"}</td>
+                </>) : (<>
+                  <td className={`${td} whitespace-nowrap`}>{mkItKst(r.Created).slice(0, 10)}</td>
+                  <td className={td} style={ell} title={r.ApproverEmail}>
+                    {r.Status === "대기" || r.Status === "취소" ? (r.ApproverName || r.ApproverEmail) : mkApprDecider(r)}
+                    {asMgr && <span className="text-slate-400"> · IT_SYSTEM_MGR 로</span>}
+                  </td>
+                </>)}
+                <td className={td}>
+                  <span className="inline-flex items-center gap-1.5 whitespace-nowrap"><MkDelReqBadge s={r.Status} />{kind === "turn" && <ChevronRight size={13} style={{ color: BRAND.accent }} />}</span>
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+      {pages > 1 && (
+        <div className="flex items-center justify-end gap-2 px-3 py-2 border-t border-slate-100 text-xs text-slate-500">
+          <button disabled={page === 0} onClick={() => setPage(page - 1)} className="px-2.5 py-1 rounded-md border border-slate-200 disabled:opacity-40">이전</button>
+          <span>{page + 1} / {pages}</span>
+          <button disabled={page >= pages - 1} onClick={() => setPage(page + 1)} className="px-2.5 py-1 rounded-md border border-slate-200 disabled:opacity-40">다음</button>
+        </div>
+      )}
+    </div>
+  );
+}
+// 결재 상세 — 자산 · 사유 · 결재 현황, 내 차례면 의견 · 승인 · 반려, 내가 올린 대기 건이면 요청 취소
+function MkApprDetail({ r, me, onClose, onDone }) {
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState("");
+  const [err, setErr] = useState("");
+  const role = r.Status === "대기" ? mkDelReqRole(r, me) : false;
+  const mineOpen = r.Status === "대기" && mkLow(r.RequesterEmail) === mkLow(me);
+  let snap = {}; try { snap = JSON.parse(r.Snapshot || "{}") || {}; } catch (e) {}
+  async function decide(decision) {
+    setErr("");
+    if (decision === "반려" && !note.trim()) { setErr("반려 의견을 적어 주세요."); return; }
+    if (decision === "승인" && !confirm(`「${r.CICD || r.AssetTitle}」 자산 삭제를 승인할까요?\n승인하면 자산이 목록에서 삭제되고 QR 라벨은 더 이상 열리지 않습니다.\n\n사유: ${r.Reason}`)) return;
+    setBusy(decision);
+    try {
+      const st = await mkDecideDelReq(r, decision, note.trim(), { email: me });
+      if (st === "승인") alert("승인했습니다. 자산 삭제 권한이 없어 IT 담당이 삭제를 실행합니다.");
+      onDone();
+    } catch (e) { setErr(e.message); setBusy(""); }
+  }
+  async function cancelReq() {
+    if (!confirm("삭제 요청을 취소할까요?")) return;
+    setBusy("취소");
+    try { await mkCancelDelReq(r, me); onDone(); } catch (e) { setErr(e.message); setBusy(""); }
+  }
+  const decided = MK_DONE_ST.includes(r.Status);
+  const step = (n, label, who, state, when, tone) => (
+    <span className="text-xs px-2.5 py-1.5 rounded-lg inline-flex items-center gap-1.5 whitespace-nowrap border"
+      style={{ background: { ok: "#DCFCE7", no: "#FEE2E2", cur: "#E4F1F0", off: "#FFFFFF" }[tone], color: { ok: "#15803D", no: "#B91C1C", cur: BRAND.accent, off: "#94A3B8" }[tone], borderColor: tone === "off" ? "#E2E8F0" : "transparent" }}>
+      <span className="font-semibold">{n}. {label}</span>{who && <span className="opacity-80">{who}</span>}
+      {state && <span className="font-semibold">{state}</span>}{when && <span className="opacity-70">{when}</span>}
+    </span>
+  );
+  return (
+    <Modal title={`IT 자산 삭제 결재 · ${r.CICD || ""}`} onClose={busy ? () => {} : onClose} wide>
+      <div data-appr-detail={r.CICD}>
+        <div className="rounded-xl bg-slate-50 border border-slate-100 px-3.5 py-2.5 text-[13px]">
+          <div className="flex items-center gap-2 flex-wrap"><span className="font-semibold text-slate-800">{r.AssetTitle || "-"}</span><MkDelReqBadge s={r.Status} /></div>
+          <div className="text-slate-500 font-mono text-[12px] mt-0.5">{r.CICD || ""}{r.SerialNo ? ` · ${r.SerialNo}` : ""}{snap.AssetCode ? ` · ${snap.AssetCode}` : ""}</div>
+          {(snap.AssetType || snap.Assignee || snap.Location) && <div className="text-[12px] text-slate-500 mt-1">{[snap.AssetType, snap.State && (MK_IT_STATES[snap.State] ? MK_IT_STATES[snap.State].ko : snap.State), snap.Assignee && `사용자 ${snap.Assignee}`, snap.Location].filter(Boolean).join(" · ")}</div>}
+        </div>
+        <dl className="grid grid-cols-[88px_1fr] gap-x-3 gap-y-1.5 text-[13px] mt-3">
+          <dt className="text-slate-400">삭제 사유</dt><dd className="text-slate-800 whitespace-pre-wrap">{r.Reason || "-"}</dd>
+          <dt className="text-slate-400">요청자</dt><dd className="text-slate-700">{r.RequesterName || ""} <span className="text-slate-400">{r.RequesterEmail}</span> · {mkItKst(r.Created)}</dd>
+          <dt className="text-slate-400">결재자</dt><dd className="text-slate-700">{r.ApproverName || ""} <span className="text-slate-400">{r.ApproverEmail}</span> <span className="text-slate-400">· 직원 명부 Boss (IT_SYSTEM_MGR 도 결재 가능)</span></dd>
+          {r.DecisionNote ? (<><dt className="text-slate-400">결재 의견</dt><dd className="text-slate-700 whitespace-pre-wrap">{r.DecisionNote}</dd></>) : null}
+        </dl>
+        <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5" data-appr-trail>
+          <p className="text-[11px] font-semibold text-slate-500 mb-2">결재 현황</p>
+          <div className="flex flex-wrap items-center gap-2">
+            {step(1, "요청", r.RequesterName || r.RequesterEmail, "", mkItKst(r.Created), "ok")}
+            {r.Status === "취소" ? step(2, "결재", r.ApproverName || r.ApproverEmail, "요청 취소", mkItKst(r.DecidedAt), "off")
+              : decided ? step(2, `결재 · ${mkApprRoleOf(r)}`, mkApprDecider(r), r.Status === "반려" ? "반려" : "승인", mkItKst(r.DecidedAt), r.Status === "반려" ? "no" : "ok")
+              : step(2, "결재", r.ApproverName || r.ApproverEmail, "대기", "", "cur")}
+            {r.Status === "승인" && step(3, "삭제 실행", "IT 담당", "대기", "", "cur")}
+            {r.Status === "삭제 완료" && step(3, "삭제", "", "완료", mkItKst(r.DeletedAt || r.DecidedAt), "ok")}
+          </div>
+        </div>
+        {role && (
+          <div className="mt-4">
+            {role === "mgr" && <div className="text-[12px] text-slate-500 mb-2">지정 결재자 {r.ApproverName || r.ApproverEmail} 대신 IT_SYSTEM_MGR 로 결재합니다.</div>}
+            <Field label="결재 의견 (반려 시 필수)">
+              <textarea className={inputCls} rows={2} value={note} onChange={(e) => setNote(e.target.value)} placeholder="예: 중복 등록 확인 — 승인" data-appr-note />
+            </Field>
+          </div>
+        )}
+        {err && <div className="mt-2 text-[12.5px] text-red-600" data-appr-err>{err}</div>}
+        <div className="flex justify-end gap-2 mt-4">
+          {mineOpen && <button disabled={!!busy} onClick={cancelReq} className="px-4 py-2 text-sm rounded-lg border border-slate-300 bg-white disabled:opacity-50 mr-auto" data-appr-cancel>{busy === "취소" ? "취소 중…" : "요청 취소"}</button>}
+          {role ? (<>
+            <button disabled={!!busy} onClick={() => decide("반려")} className="px-4 py-2 text-sm rounded-lg border border-slate-300 bg-white disabled:opacity-50" data-appr-reject>{busy === "반려" ? "처리 중…" : "반려"}</button>
+            <button disabled={!!busy} onClick={() => decide("승인")} className="px-4 py-2 text-sm rounded-lg text-white disabled:opacity-50" style={{ background: BRAND.accent }} data-appr-approve>{busy === "승인" ? "처리 중…" : "승인"}</button>
+          </>) : <button onClick={onClose} className="px-4 py-2 text-sm rounded-lg border border-slate-300 bg-white">닫기</button>}
+        </div>
+      </div>
+    </Modal>
+  );
+}
+// 결재 승인(mode "turn") · 나의 결재 이력(mode "history") 화면 본문 — 제목은 화면 머리(PageHeader)가 그린다
+function MkApprovalPage({ userEmail, mode, onChanged }) {
+  const me = mkLow(userEmail);
+  const [data, setData] = useState(null);   // { turn, mine } | { hist }
+  const [loading, setLoading] = useState(true);
+  const [detail, setDetail] = useState(null);
+  const [q, setQ] = useState("");
+  async function load() {
+    setLoading(true);
+    try {
+      if (mode === "history") {
+        const rows = await mkLoadDelReqs(`&$filter=fields/DecidedBy eq '${mkQ(me)}' or fields/ApproverEmail eq '${mkQ(me)}'`);
+        const hist = rows.filter((r) => MK_DONE_ST.includes(r.Status) && (mkLow(r.DecidedBy) === me || (!r.DecidedBy && mkLow(r.ApproverEmail) === me)))
+          .sort((a, b) => String(b.DecidedAt || "").localeCompare(String(a.DecidedAt || "")));
+        setData({ hist });
+      } else {
+        const [turn, mine] = await Promise.all([mkLoadMyTurn(me), mkLoadDelReqs(`&$filter=fields/RequesterEmail eq '${mkQ(me)}'`)]);
+        setData({ turn, mine: mine.filter((r) => mkLow(r.RequesterEmail) === me) });
+      }
+    } catch (e) {
+      if (!mkIsMissingList(e)) console.warn("[MKQR] 결재 목록 조회 실패:", e.message);
+      setData({ turn: [], mine: [], hist: [], err: mkIsMissingList(e) ? "" : "결재 목록을 불러오지 못했습니다. 잠시 후 다시 시도해 주세요." });
+    }
+    setLoading(false);
+  }
+  useEffect(() => { if (me) load(); }, [me, mode]);
+  const done = async () => { setDetail(null); await load(); onChanged && onChanged(); };
+  const kw = q.trim().toLowerCase();
+  const hit = (r) => !kw || [r.CICD, r.AssetTitle, r.RequesterName, r.RequesterEmail, r.Reason].some((v) => String(v || "").toLowerCase().includes(kw));
+  const bar = (
+    <div className="mb-4 flex items-center gap-2 flex-wrap">
+      {mode === "history" && <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="CI CD · 자산 · 요청자로 검색" className="flex-1 min-w-[220px] max-w-md text-sm border border-slate-200 rounded-lg px-3 py-2 bg-white focus:outline-none focus:border-slate-400" data-appr-search />}
+      <button onClick={load} disabled={loading} className="ml-auto flex items-center gap-1.5 text-sm px-3 py-2 rounded-lg border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 disabled:opacity-50" data-appr-reload>
+        <RefreshCw size={14} className={loading ? "animate-spin" : ""} /> 새로 고침
+      </button>
+    </div>
+  );
+  if (!data) return <div className="text-slate-400 text-sm" data-appr-loading>불러오는 중...</div>;
+  return (
+    <div data-appr-page={mode}>
+      {bar}
+      {data.err && <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-[13px] text-red-700">{data.err}</div>}
+      {mode === "history" ? (() => {
+        const rows = data.hist.filter(hit);
+        return (
+          <div className="mb-6" data-appr-sec="history">
+            <h3 className="text-sm font-semibold text-slate-700 mb-3">내가 처리한 결재 ({rows.length})</h3>
+            {rows.length ? <MkApprTable rows={rows} kind="history" me={me} onPick={setDetail} /> : <MkApprEmpty text={kw ? "검색 결과가 없습니다." : "처리한 결재 건이 없습니다."} />}
+          </div>
+        );
+      })() : (<>
+        <div className="mb-8" data-appr-sec="turn">
+          <h3 className="text-sm font-semibold text-slate-700 mb-3 flex items-center gap-2"><AlertTriangle size={15} className="text-amber-500" /> 내 결재 대기 ({data.turn.length})</h3>
+          {data.turn.length ? <MkApprTable rows={data.turn} kind="turn" me={me} onPick={setDetail} /> : <MkApprEmpty text="결재할 요청이 없습니다." />}
+        </div>
+        <div className="mb-6" data-appr-sec="mine">
+          <h3 className="text-sm font-semibold text-slate-700 mb-3">내가 올린 요청 ({data.mine.length})</h3>
+          {data.mine.length ? <MkApprTable rows={data.mine} kind="mine" me={me} onPick={setDetail} /> : <MkApprEmpty text="올린 요청이 없습니다." />}
+        </div>
+      </>)}
+      {detail && <MkApprDetail r={detail} me={me} onClose={() => setDetail(null)} onDone={done} />}
+    </div>
+  );
+}
+// 상단 바 결재 바로가기(ICS 와 같은 모양) — 어느 화면에서든 내 대기 건수를 보고 누르면 「결재 승인」 으로
+function MkApprTopBtn({ n, onClick }) {
+  return (
+    <button onClick={onClick} title={`결재 승인 · 내 결재 대기 ${n || 0}건`} aria-label={`결재 승인 · 내 결재 대기 ${n || 0}건`} data-appr-top
+      className="relative hidden md:flex items-center justify-center w-9 h-9 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 transition-colors shrink-0">
+      <FileCheck2 size={17} style={{ color: n > 0 ? "#DC2626" : "#94A3B8" }} />
+      {n != null && (
+        <span className="absolute -top-1.5 -right-1.5 text-[10px] font-bold rounded-full px-1 min-w-[17px] h-[17px] flex items-center justify-center"
+          style={n > 0 ? { background: "#DC2626", color: "#fff", boxShadow: "0 0 0 2px #fff" } : { background: "#E2E8F0", color: "#94A3B8", boxShadow: "0 0 0 2px #fff" }}>
+          {n > 99 ? "99+" : n}
+        </span>
+      )}
+    </button>
+  );
+}
+const MK_APPR_META = {
+  approval: [FileCheck2, "결재 승인", "나에게 온 IT 자산 삭제 결재를 승인 · 반려하고, 내가 올린 요청의 진행 상황을 봅니다. 본인에게 배정된 건만 보입니다(직원 명부 Boss · IT_SYSTEM_MGR)."],
+  myApprovals: [History, "나의 결재 이력", "내가 승인하거나 반려한 결재입니다. 처리일 최신순으로 보여 줍니다."],
+};
 
 function MkItRefNote({ a }) {   // 상세 · 위치 카드 — 판정 기준 좌표가 어디서 오는지
   const [geo, setGeo] = useState(_mkGeo);
@@ -6893,6 +7111,7 @@ function ItScanModal({ token, onClose, canEditAssets, onDone, userEmail, userNam
 const MK_IT_TABS = ["itAssets", "itQr", "itScans", "itPeople", "itStock", "itHistory"];
 function App({ userEmail, userName }) {
   const [tab, setTab] = useState("overview");
+  const [apprCount, refreshAppr] = useMkApprCount(String(userEmail || "").trim().toLowerCase());   // 11-02 결재 승인 배지 · 상단 아이콘
   const [centers, setCenters] = useState([]);
   const [agents, setAgents] = useState([]);           // mkqr_Agents (10-08)
   const [agentsError, setAgentsError] = useState(""); // 목록이 없거나 못 읽으면 Agent 화면에 안내 — 다른 화면은 그대로
@@ -6992,6 +7211,7 @@ function App({ userEmail, userName }) {
   const myAccessRow = categoryAccess.find((r) => (r.Email || "").toLowerCase() === (userEmail || "").toLowerCase());
   const anyoneHasAccess = categoryAccess.some((r) => MK_CATEGORIES.some((c) => mkCatValue(r, c) === true));
   function canAccess(catKey) {
+    if (catKey === "approval") return true;   // 11-02 결재 승인 · 나의 결재 이력 — ICS 와 같이 누구나(본인에게 배정된 건만 보임)
     if (!accessLoaded) return catKey === "overview";
     if (!myAccessRow) return !anyoneHasAccess;
     const cat = MK_CATEGORIES.find((c) => c.key === catKey);
@@ -7026,6 +7246,9 @@ function App({ userEmail, userName }) {
   const allNav = [
     { id: "overview", label: "Overview", icon: LayoutDashboard, cat: "overview" },
     { id: "myAssets", label: "내 자산", icon: Laptop, cat: "overview" },   // 10-27 — 누구나(본인에게 지급된 IT 자산)
+    // 11-02 ICS 와 같이 OVERVIEW 묶음에 결재 메뉴 — 대기 건수 배지(0 이면 회색). 예전 「모든 화면 맨 위 노란 결재 상자」 대신
+    { id: "approval", label: "결재 승인", icon: FileCheck2, cat: "approval", badge: apprCount, badgeZero: true },
+    { id: "myApprovals", label: "나의 결재 이력", icon: History, cat: "approval" },
   ];
   const marketingNav = [   // Marketing 전용 — 캠페인 센터 방문 인증(10-09)
     { id: "centers", label: "센터 관리", icon: Building2, cat: "centers" },
@@ -7166,13 +7389,14 @@ function App({ userEmail, userName }) {
                     {active && !railCollapsed && <span aria-hidden="true" className="absolute top-2 bottom-2 w-[3px] rounded-full" style={{ left: -11, background: BRAND.accent }} data-nav-active />}
                     <n.icon size={railCollapsed ? 17 : 15} className="shrink-0" style={railCollapsed || active ? undefined : { opacity: 0.85 }} />
                     {!railCollapsed && <span className="leading-snug flex-1">{n.label}</span>}
-                    {!!n.badge && allowed && (railCollapsed ? (
+                    {(!!n.badge || (n.badgeZero && n.badge === 0 && !railCollapsed)) && allowed && (railCollapsed ? (
                       <span className="absolute top-1 left-[26px] text-[9px] leading-none font-bold rounded-full px-1 min-w-[16px] h-[16px] flex items-center justify-center"
                         style={{ backgroundColor: "#DC2626", color: "#fff", boxShadow: `0 0 0 2px ${BRAND.navy}` }}>
                         {n.badge > 99 ? "99+" : n.badge}
                       </span>
                     ) : (
-                      <span className="shrink-0 text-[11px] font-semibold rounded-full px-1.5 min-w-[18px] text-center" style={{ backgroundColor: "#DC2626", color: "#fff" }}>
+                      <span className="shrink-0 text-[11px] font-semibold rounded-full px-1.5 min-w-[18px] text-center" data-nav-badge={n.id}
+                        style={n.badge > 0 ? { backgroundColor: "#DC2626", color: "#fff" } : { backgroundColor: "rgba(255,255,255,.16)", color: "rgba(255,255,255,.6)" }}>
                         {n.badge > 99 ? "99+" : n.badge}
                       </span>
                     ))}
@@ -7241,6 +7465,7 @@ function App({ userEmail, userName }) {
             <span className="text-slate-700 font-medium truncate">{nav.find((n) => n.id === tab)?.label}</span>
           </div>
           <div className="flex items-center gap-2 md:gap-4 shrink-0">
+            <MkApprTopBtn n={apprCount} onClick={() => setTab("approval")} />
             <div className="leading-tight text-sm text-slate-500 hidden md:block" title={[userName, userEmail].filter(Boolean).join("\n")}>
               <div>{shortName}</div>
               <div className="text-[11px] text-slate-400">{roleLabel}</div>
@@ -7275,10 +7500,12 @@ function App({ userEmail, userName }) {
             itHistory: [History, "IT 자산 · 액세서리 지급 · 반납 · 교체 · 고장 · 폐기 이력을 조회하고 Excel 로 내보냅니다"],
             itQr: [Printer, "IT 자산 라벨(가로 10.4cm × 세로 4cm, QR 오른쪽)을 미리 보고 출력합니다"],
             itScans: [ScanLine, "IT 자산 QR 스캔 기록 — 누가 · 언제 · 어디서(GPS) 스캔했는지와 등록 위치 대비 판정을 조회합니다"],
+            approval: [MK_APPR_META.approval[0], MK_APPR_META.approval[2]],
+            myApprovals: [MK_APPR_META.myApprovals[0], MK_APPR_META.myApprovals[2]],
             categoryAccess: [KeyRound, "등록된 사용자별로 화면마다 「보기」 · 「편집」 권한을 부여 · 변경합니다. 사용자 추가 · 삭제와 「반영」 내용은 활동 이력에 남습니다."],
           }[tab] || [LayoutDashboard, ""];
           if (tab === "myAssets") return null;   // 10-27 — 내 자산은 패널이 제목 · 버튼을 함께 그린다(제목 두 번 방지)
-          const viewOnlyHere = hasLoadedOnce && tabCat && !MK_VIEW_NATURE.has(tabCat) && canAccess(tabCat) && !canEdit(tabCat);
+          const viewOnlyHere = hasLoadedOnce && tabCat && tabCat !== "approval" && !MK_VIEW_NATURE.has(tabCat) && canAccess(tabCat) && !canEdit(tabCat);
           return <PageHeader icon={meta[0]} title={nav.find((n) => n.id === tab)?.label} subtitle={meta[1]} inline={viewOnlyHere ? <MkViewOnlyPill /> : null} />;
         })()}
         {!hasLoadedOnce ? <div className="text-slate-400 text-sm">불러오는 중...</div> : !canAccess(nav.find((n) => n.id === tab)?.cat) ? (
@@ -7288,7 +7515,7 @@ function App({ userEmail, userName }) {
           </div>
         ) : (
           <>
-            <ItDeleteApprovals userEmail={userEmail} onChanged={() => { if (it.loaded) reloadIt(); }} />
+            {(tab === "approval" || tab === "myApprovals") && <MkApprovalPage key={tab} userEmail={userEmail} mode={tab === "approval" ? "turn" : "history"} onChanged={() => { refreshAppr(); if (it.loaded) reloadIt(); }} />}
             {canAccess("admins") && ["overview", "checkins", "agentCheckins"].includes(tab) && <CheckinStorageNotice />}
             {tab === "overview" && <OverviewTab centers={centers} agents={agents} agentsError={agentsError} checkins={checkins} admins={admins} setTab={setTab} introText={uiContent.overviewIntro} canAccess={canAccess} it={canIt ? it : null} itLoading={itLoading}
               rangeLabel={checkinRange.mode === "custom" && checkinRange.from && checkinRange.to ? `${checkinRange.from.slice(5)}~${checkinRange.to.slice(5)}` : `최근 ${checkinRange.days || 7}일`} />}
@@ -7520,6 +7747,10 @@ function MyAssetsPanel({ userEmail, userName }) {
 function MyAssetsOnlyApp({ userEmail, userName, dirName }) {
   const [scanTk, setScanTk] = useState(() => (MK_ASSET_PENDING ? mkTakeScanToken() : null));   // 10-27 자산 QR 로 들어온 경우
   const [mineKey, setMineKey] = useState(0);   // 본인 확인을 마치면 내 자산 카드의 확인 표시를 다시 읽는다
+  // 11-02 결재 승인 · 나의 결재 이력 — 권한 표에 없는 직원(Boss 대부분)도 같은 화면을 탭으로(예전엔 내 자산 위 노란 결재 상자)
+  const [view, setView] = useState("mine");
+  const [apprCount, refreshAppr] = useMkApprCount(userEmail);
+  const VIEWS = [["mine", "내 자산", Laptop], ["approval", "결재 승인", FileCheck2], ["myApprovals", "나의 결재 이력", History]];
   const nameShort = (() => { const mm = /\(([^()]+)\)\s*$/.exec(userName || ""); return (mm ? mm[1] : userName || userEmail || "").trim(); })();
   return (
     <div className="min-h-screen flex flex-col" style={{ background: "#F5F6F8" }} data-mine-only>
@@ -7528,9 +7759,10 @@ function MyAssetsOnlyApp({ userEmail, userName, dirName }) {
           <div className="rounded-md px-2 py-1.5 border border-slate-200 bg-white"><img src={LOGO_SRC} alt="Star Truck Korea" style={{ height: 13, display: "block" }} /></div>
           <span className="text-sm text-slate-400 hidden sm:inline">QR Hub</span>
           <ChevronRight size={13} className="text-slate-300 hidden sm:block" />
-          <span className="text-sm font-medium text-slate-700 whitespace-nowrap">내 자산</span>
+          <span className="text-sm font-medium text-slate-700 whitespace-nowrap">{(VIEWS.find((v) => v[0] === view) || VIEWS[0])[1]}</span>
         </div>
         <div className="flex items-center gap-2 md:gap-3 shrink-0">
+          <MkApprTopBtn n={apprCount} onClick={() => setView("approval")} />
           <div className="leading-tight text-right hidden sm:block"><div className="text-sm text-slate-600">{nameShort}</div><div className="text-[11px] text-slate-400">{userEmail}</div></div>
           <a href="https://aps.startruckkorea.com/" target="_self" className="text-xs font-medium text-slate-500 border border-slate-200 rounded-lg px-3 py-1.5 hover:border-teal-400 hover:text-teal-600 whitespace-nowrap">📬 돌아가기</a>
           <button onClick={mkLogout} className="text-xs font-medium text-slate-500 border border-slate-200 rounded-lg px-3 py-1.5 hover:border-red-300 hover:text-red-500 whitespace-nowrap">로그아웃</button>
@@ -7538,8 +7770,20 @@ function MyAssetsOnlyApp({ userEmail, userName, dirName }) {
       </div>
       <div className="flex-1 overflow-y-auto p-4 md:p-6"><div className="max-w-[1200px] mx-auto">
         {scanTk && <div className="mb-6"><AssetScanPanel token={scanTk} userEmail={userEmail} userName={nameShort} dirName={dirName} onClose={() => { setScanTk(null); setMineKey((k) => k + 1); }} /></div>}
-        <ItDeleteApprovals userEmail={userEmail} />
-        <MyAssetsPanel key={mineKey} userEmail={userEmail} userName={dirName} />
+        <div className="flex items-center gap-1 mb-5 border-b border-slate-200 overflow-x-auto" role="tablist" data-mine-tabs>
+          {VIEWS.map(([k, label, Ic]) => (
+            <button key={k} role="tab" aria-selected={view === k} onClick={() => setView(k)} data-mine-tab={k}
+              className={`flex items-center gap-1.5 px-3.5 py-2.5 text-sm -mb-px border-b-2 whitespace-nowrap transition-colors ${view === k ? "font-semibold text-slate-800" : "border-transparent text-slate-500 hover:text-slate-700"}`}
+              style={view === k ? { borderColor: BRAND.accent } : undefined}>
+              <Ic size={15} />{label}
+              {k === "approval" && apprCount != null && <span className="text-[11px] font-semibold rounded-full px-1.5 min-w-[18px] text-center" style={apprCount > 0 ? { background: "#DC2626", color: "#fff" } : { background: "#E2E8F0", color: "#64748B" }}>{apprCount > 99 ? "99+" : apprCount}</span>}
+            </button>
+          ))}
+        </div>
+        {view === "mine" ? <MyAssetsPanel key={mineKey} userEmail={userEmail} userName={dirName} /> : (<>
+          <PageHeader icon={MK_APPR_META[view][0]} title={MK_APPR_META[view][1]} subtitle={MK_APPR_META[view][2]} />
+          <MkApprovalPage key={view} userEmail={userEmail} mode={view === "approval" ? "turn" : "history"} onChanged={refreshAppr} />
+        </>)}
       </div></div>
       <div className="text-center text-[11px] text-slate-400 py-4">© 2026 Star Truck Korea · QR Hub · 문의 {MK_IT_MAIL || "IT팀"}</div>
     </div>
