@@ -528,6 +528,7 @@ async function getMkDocDriveId(token) {
 // system_config_final.xlsx 의 MKQR_IT_CONTACT(C열) → 없으면 CONTACT_EMAIL. 못 읽으면(로그인 전 · 읽기 실패) 메일 없이 「IT팀」.
 // 형식이 맞는 메일만 받는다. 로그인 뒤 화면을 그리기 전에 한 번 읽는다(mkBoot).
 let MK_IT_MAIL = "";
+let MK_DELREQ_MGRS = [];   // 11-02: IT 자산 삭제 결재를 Boss 와 함께 할 수 있는 사람 — system_config_final.xlsx IT_SYSTEM_MGR(C열 메일, 여러 행이면 모두)
 const MK_ITSM_URL = "https://itsm-ticket.startruckkorea.com";
 const mkItTeam = (label = "IT") => (MK_IT_MAIL ? `${label}(${MK_IT_MAIL})` : "IT팀");
 async function loadMkItMail(token) {
@@ -540,6 +541,7 @@ async function loadMkItMail(token) {
     const pick = (k) => { const r = rows.find((x) => String((x || [])[0] || "").trim().toUpperCase() === k); return r ? String(r[2] || "").trim().toLowerCase() : ""; };
     const ok = (v) => /^[a-z0-9._%+-]+@[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(v);
     MK_IT_MAIL = [pick("MKQR_IT_CONTACT"), pick("CONTACT_EMAIL")].find(ok) || "";
+    MK_DELREQ_MGRS = [...new Set(rows.filter((x) => String((x || [])[0] || "").trim().toUpperCase() === "IT_SYSTEM_MGR").map((x) => String(x[2] || "").trim().toLowerCase()).filter(ok))];
   } catch (e) { console.warn("[MKQR] IT 문의 메일(MKQR_IT_CONTACT) 읽기 실패 — 「IT팀」 으로 표시:", e.message); }
 }
 
@@ -4633,6 +4635,8 @@ function MkItAddressPicker({ form, setForm, readOnly }) {
 // 자산 삭제는 바로 지우지 않고 결재를 거친다. 요청자가 사유(필수)를 적으면, 직원 명부(employee_search.xlsx) G열 Boss 가 결재자로 자동 지정된다.
 // 요청 · 결재 기록은 SharePoint 목록 mkqr_ITDeleteRequests. 상태: 대기 → 삭제 완료(결재자가 승인하며 바로 삭제) | 승인(삭제 대기: 결재자에게
 // 자산 삭제 권한이 없으면 IT 가 「삭제 실행」) · 반려 · 취소(요청자). 결재자는 QR Hub 에 들어오면 화면 맨 위에서 승인 · 반려한다.
+// 11-02: Boss 와 함께 system_config_final.xlsx 의 IT_SYSTEM_MGR 도 승인 · 반려할 수 있다(먼저 처리한 사람 기준, DecidedBy 에 남음).
+//        IT_SYSTEM_MGR 본인이 요청한 건은 그 자격으로 결재하지 않는다 — 요청자 ≠ 결재자(그 건은 Boss 만).
 const MK_DELREQ_LIST = "mkqr_ITDeleteRequests";
 const MK_DELREQ_OPEN = ["대기", "승인"];
 const MK_DELREQ_CLS = { 대기: "bg-amber-50 text-amber-800", 승인: "bg-blue-50 text-blue-700", "삭제 완료": "bg-slate-100 text-slate-600", 반려: "bg-rose-50 text-rose-700", 취소: "bg-slate-100 text-slate-500" };
@@ -4650,6 +4654,16 @@ async function mkFindBoss(email) {   // 요청자의 Boss(이름) → 같은 명
 async function mkLoadDelReqs(filter) {
   const rows = await mkListAll(MK_DELREQ_LIST, filter || "");
   return rows.map((x) => ({ id: x.id, ...x.fields, Created: x.fields.Created || x.createdDateTime })).sort((a, b) => String(b.Created).localeCompare(String(a.Created)));
+}
+const mkLow = (v) => String(v || "").trim().toLowerCase();
+function mkIsDelMgr(email) { return !!mkLow(email) && MK_DELREQ_MGRS.includes(mkLow(email)); }
+// 이 사람이 이 요청을 결재할 수 있나 — "boss"(지정 결재자) · "mgr"(IT_SYSTEM_MGR, 본인 요청 제외) · false
+function mkDelReqRole(r, email) {
+  const e = mkLow(email);
+  if (!e || !r) return false;
+  if (mkLow(r.ApproverEmail) === e) return "boss";
+  if (mkIsDelMgr(e) && mkLow(r.RequesterEmail) !== e) return "mgr";
+  return false;
 }
 function MkDelReqBadge({ s }) { return <span className={`inline-block whitespace-nowrap text-[11px] font-semibold rounded-full px-2 py-0.5 ${MK_DELREQ_CLS[s] || "bg-slate-100 text-slate-600"}`}>{s === "승인" ? "승인 · 삭제 대기" : s}</span>; }
 
@@ -4674,7 +4688,7 @@ function ItDeleteRequestModal({ asset, userEmail, userName, onClose, onDone }) {
       };
       await mkItWrite(async () => mkCreateItem(MK_DELREQ_LIST, await mkItFields(MK_DELREQ_LIST, fields)));
       mkLog("IT 자산", "삭제 요청", asset.CICD || asset.Title, { id: asset.id, info: { 사유: fields.Reason, 결재자: `${route.boss.name} (${route.boss.email})`, "Serial No.": asset.SerialNo } });
-      alert(`삭제 결재를 요청했습니다.\n결재자: ${route.boss.name} (${route.boss.email})\n\n결재자가 QR Hub 에서 승인하면 자산이 삭제됩니다.`);
+      alert(`삭제 결재를 요청했습니다.\n결재자: ${route.boss.name} (${route.boss.email}) · 또는 IT 시스템 관리자(IT_SYSTEM_MGR)\n\n결재자가 QR Hub 에서 승인하면 자산이 삭제됩니다.`);
       onDone && onDone();
     } catch (e) {
       alert(mkIsMissingList(e) ? `SharePoint 목록 ${MK_DELREQ_LIST} 이 없어 요청할 수 없습니다 — setup/mkqr-it-lists.ps1 을 실행해 목록을 만든 뒤 다시 시도해 주세요.` : e.message);
@@ -4692,7 +4706,7 @@ function ItDeleteRequestModal({ asset, userEmail, userName, onClose, onDone }) {
         {!okReason && reason.length > 0 && <div className="text-[11.5px] text-red-600 mt-1">사유를 5자 이상 적어 주세요.</div>}
       </Field>
       <div className="rounded-xl border border-slate-200 px-3.5 py-2.5 text-[13px]" data-delreq-route>
-        <div className="text-[11.5px] text-slate-400 mb-0.5">결재자 — 직원 명부의 내 Boss</div>
+        <div className="text-[11.5px] text-slate-400 mb-0.5">결재자 — 직원 명부의 내 Boss <span className="text-slate-400">(IT 시스템 관리자 IT_SYSTEM_MGR 도 승인 가능)</span></div>
         {!route ? <span className="text-slate-400">확인하는 중…</span>
           : route.err ? <span className="text-red-600">{route.err}</span>
           : <span className="text-slate-800 font-medium">{route.boss.name} <span className="font-normal text-slate-500">{route.boss.email}</span>{route.boss.dept ? <span className="font-normal text-slate-400"> · {route.boss.dept}</span> : null}</span>}
@@ -4709,18 +4723,20 @@ function ItDeleteRequestModal({ asset, userEmail, userName, onClose, onDone }) {
 async function mkDecideDelReq(req, decision, note, who) {
   const cur = (await mkLoadDelReqs(`&$filter=fields/AssetId eq '${String(req.AssetId)}'`)).find((r) => String(r.id) === String(req.id));
   if (!cur || cur.Status !== "대기") throw new Error(`이미 처리된 요청입니다(${cur ? cur.Status : "없음"}).`);
-  if (String(cur.ApproverEmail || "").toLowerCase() !== String(who.email || "").toLowerCase()) throw new Error("이 요청의 결재자가 아닙니다.");
+  const role = mkDelReqRole(cur, who.email);
+  if (!role) throw new Error(mkLow(cur.RequesterEmail) === mkLow(who.email) ? "본인이 요청한 건은 결재할 수 없습니다(결재자: " + (cur.ApproverName || cur.ApproverEmail) + ")." : "이 요청의 결재자(Boss · IT_SYSTEM_MGR)가 아닙니다.");
+  const roleLabel = role === "boss" ? "Boss(지정 결재자)" : "IT_SYSTEM_MGR";
   const base = { DecidedAt: new Date().toISOString(), DecisionNote: note || "", DecidedBy: String(who.email || "").toLowerCase() };
   if (decision === "반려") {
     await mkItWrite(async () => mkUpdateItem(MK_DELREQ_LIST, req.id, await mkItFields(MK_DELREQ_LIST, { ...base, Status: "반려" })));
-    mkLog("IT 자산", "삭제 반려", req.CICD || req.AssetTitle, { id: req.AssetId, info: { 요청자: req.RequesterEmail, 사유: req.Reason, 반려의견: note || "" } });
+    mkLog("IT 자산", "삭제 반려", req.CICD || req.AssetTitle, { id: req.AssetId, info: { 요청자: req.RequesterEmail, 사유: req.Reason, 반려의견: note || "", 처리자: who.email, 결재구분: roleLabel } });
     return "반려";
   }
   let status = "삭제 완료", delErr = "";
   try { await mkItWrite(async () => mkDeleteItem(MK_LISTS.itAssets, req.AssetId)); }
   catch (e) { if (/\(404\)|itemNotFound/.test(e.message)) delErr = ""; else { status = "승인"; delErr = e.message; } }
   await mkItWrite(async () => mkUpdateItem(MK_DELREQ_LIST, req.id, await mkItFields(MK_DELREQ_LIST, { ...base, Status: status, ...(status === "삭제 완료" ? { DeletedAt: base.DecidedAt } : {}) })));
-  mkLog("IT 자산", status === "삭제 완료" ? "삭제(결재 승인)" : "삭제 승인", req.CICD || req.AssetTitle, { id: req.AssetId, info: { 요청자: req.RequesterEmail, 결재자: who.email, 사유: req.Reason, ...(delErr ? { 삭제: "권한 없음 — IT 실행 대기" } : {}) } });
+  mkLog("IT 자산", status === "삭제 완료" ? "삭제(결재 승인)" : "삭제 승인", req.CICD || req.AssetTitle, { id: req.AssetId, info: { 요청자: req.RequesterEmail, 결재자: who.email, 결재구분: roleLabel, 지정결재자: req.ApproverEmail, 사유: req.Reason, ...(delErr ? { 삭제: "권한 없음 — IT 실행 대기" } : {}) } });
   return status;
 }
 // IT 의 「삭제 실행」 — 승인(삭제 대기) 건
@@ -4738,7 +4754,10 @@ function ItDeleteApprovals({ userEmail, onChanged }) {
   const [busy, setBusy] = useState("");
   const me = String(userEmail || "").trim().toLowerCase();
   async function load() {
-    try { setRows((await mkLoadDelReqs(`&$filter=fields/ApproverEmail eq '${me.replace(/'/g, "''")}'`)).filter((r) => r.Status === "대기")); }
+    try {
+      const q = mkIsDelMgr(me) ? `&$filter=fields/Status eq '대기'` : `&$filter=fields/ApproverEmail eq '${me.replace(/'/g, "''")}'`;
+      setRows((await mkLoadDelReqs(q)).filter((r) => r.Status === "대기" && mkDelReqRole(r, me)));
+    }
     catch (e) { setRows([]); }
   }
   useEffect(() => { if (me) load(); }, [me]);
@@ -4763,7 +4782,7 @@ function ItDeleteApprovals({ userEmail, onChanged }) {
             <div className="min-w-0 flex-1">
               <div className="text-[14px] font-semibold text-slate-800">{r.AssetTitle || "-"} <span className="font-mono text-[12px] font-normal text-slate-500">{r.CICD}{r.SerialNo ? ` · ${r.SerialNo}` : ""}</span></div>
               <div className="text-[12.5px] text-slate-600 mt-1"><span className="text-slate-400">사유</span> {r.Reason}</div>
-              <div className="text-[11.5px] text-slate-400 mt-0.5">요청 {r.RequesterName || ""} {r.RequesterEmail} · {mkItKst(r.Created)}</div>
+              <div className="text-[11.5px] text-slate-400 mt-0.5">요청 {r.RequesterName || ""} {r.RequesterEmail} · {mkItKst(r.Created)}{mkDelReqRole(r, me) === "mgr" ? ` · 결재자 ${r.ApproverName || r.ApproverEmail} — IT_SYSTEM_MGR 로 결재` : ""}</div>
             </div>
             <div className="flex gap-2 shrink-0">
               <button disabled={!!busy} onClick={() => act(r, "반려")} className="px-4 py-2 text-sm rounded-lg border border-slate-300 bg-white disabled:opacity-50" data-delreq-reject>반려</button>
@@ -5082,7 +5101,7 @@ function ItAssetDrawer({ asset, it, readOnly, canLabel, dir, onClose, onEdit, on
         <div className={`mt-4 rounded-xl border px-4 py-3 text-[13px] ${delReq.Status === "승인" ? "border-blue-200 bg-blue-50/60" : "border-amber-200 bg-amber-50/60"}`} data-delreq-banner={delReq.Status}>
           <div className="flex items-center gap-2 mb-1"><Trash2 size={14} className="text-slate-500" /><b className="text-slate-800">삭제 요청</b><MkDelReqBadge s={delReq.Status} /></div>
           <div className="text-slate-600"><span className="text-slate-400">사유</span> {delReq.Reason}</div>
-          <div className="text-[11.5px] text-slate-400 mt-0.5">요청 {delReq.RequesterName || delReq.RequesterEmail} · {mkItKst(delReq.Created)} · 결재자 {delReq.ApproverName || ""} {delReq.ApproverEmail}</div>
+          <div className="text-[11.5px] text-slate-400 mt-0.5">요청 {delReq.RequesterName || delReq.RequesterEmail} · {mkItKst(delReq.Created)} · 결재자 {delReq.ApproverName || ""} {delReq.ApproverEmail} · IT_SYSTEM_MGR 도 결재 가능</div>
           {!readOnly && (
             <div className="flex justify-end gap-2 mt-2">
               {delReq.Status === "대기" && String(delReq.RequesterEmail || "").toLowerCase() === String(_mkLogUser.email || "").toLowerCase() && <button onClick={() => onCancelDel(delReq)} className="px-3 py-1.5 text-xs rounded-lg border border-slate-300 bg-white">요청 취소</button>}
