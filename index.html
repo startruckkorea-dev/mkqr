@@ -4904,13 +4904,19 @@ function MkApprDetail({ r, me, onClose, onDone, names }) {
     try { await mkCancelDelReq(r, me); onDone(); } catch (e) { setErr(e.message); setBusy(""); }
   }
   const decided = MK_DONE_ST.includes(r.Status);
-  const step = (n, label, who, state, when, tone, extra) => (
-    <span className="text-xs px-2.5 py-1.5 rounded-lg inline-flex items-center gap-1.5 whitespace-nowrap border"
-      style={{ background: { ok: "#DCFCE7", no: "#FEE2E2", cur: "#E4F1F0", off: "#FFFFFF" }[tone], color: { ok: "#15803D", no: "#B91C1C", cur: BRAND.accent, off: "#94A3B8" }[tone], borderColor: tone === "off" ? "#E2E8F0" : "transparent" }}>
-      <span className="font-semibold">{n}. {label}</span>{who && <span className="opacity-80">{who}</span>}
-      {state && <span className="font-semibold">{state}</span>}{when && <span className="opacity-70">{when}</span>}{extra}
-    </span>
+  // 11-03 결재 현황 — 초록 알약 대신 APS 결재 이력과 같은 줄 목록(제목 · 메일 · 일시, 오른쪽 상태 글자). 사람은 메일만.
+  const ST_COLOR = { ok: "#15803D", no: "#B91C1C", cur: "#C2410C", off: "#94A3B8", req: "#64748B" };
+  const step = (n, label, mail, state, when, tone, extra) => (
+    <div className="flex items-start justify-between gap-3 px-3.5 py-2.5" data-appr-step={n}>
+      <div className="min-w-0">
+        <div className="text-[13px] font-semibold text-slate-800 flex items-center gap-1.5 flex-wrap"><span>{n}. {label}</span>{extra}</div>
+        {mail && <div className="text-[12px] text-slate-500 mt-0.5 break-all">{mail}</div>}
+        {when && <div className="text-[11px] text-slate-400 mt-0.5">{when}</div>}
+      </div>
+      <span className="text-[12px] font-semibold whitespace-nowrap pt-0.5" style={{ color: ST_COLOR[tone] }}>{state}</span>
+    </div>
   );
+  const deciderMail = mkIsBehalf(r) ? mkLow(r.DecidedBy) : (r.ApproverEmail || "");   // 대신 처리한 건은 처리자 메일 + 「Approved on behalf of 지정 결재자」
   return (
     <Modal title={`IT 자산 삭제 결재 · ${r.CICD || ""}`} onClose={busy ? () => {} : onClose} wide>
       <div data-appr-detail={r.CICD}>
@@ -4921,19 +4927,19 @@ function MkApprDetail({ r, me, onClose, onDone, names }) {
         </div>
         <dl className="grid grid-cols-[88px_1fr] gap-x-3 gap-y-1.5 text-[13px] mt-3">
           <dt className="text-slate-400">삭제 사유</dt><dd className="text-slate-800 whitespace-pre-wrap">{r.Reason || "-"}</dd>
-          <dt className="text-slate-400">요청자</dt><dd className="text-slate-700">{r.RequesterName || ""} <span className="text-slate-400">{r.RequesterEmail}</span> · {mkItKst(r.Created)}</dd>
-          <dt className="text-slate-400">결재자</dt><dd className="text-slate-700">{r.ApproverName || ""} <span className="text-slate-400">{r.ApproverEmail}</span></dd>
+          <dt className="text-slate-400">요청자</dt><dd className="text-slate-700">{r.RequesterEmail || "-"} <span className="text-slate-400">· {mkItKst(r.Created)}</span></dd>
+          <dt className="text-slate-400">결재자</dt><dd className="text-slate-700">{r.ApproverEmail || "-"}</dd>
           {r.DecisionNote ? (<><dt className="text-slate-400">결재 의견</dt><dd className="text-slate-700 whitespace-pre-wrap">{r.DecisionNote}</dd></>) : null}
         </dl>
-        <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5" data-appr-trail>
-          <p className="text-[11px] font-semibold text-slate-500 mb-2">결재 현황</p>
-          <div className="flex flex-wrap items-center gap-2">
-            {step(1, "요청", r.RequesterName || r.RequesterEmail, "", mkItKst(r.Created), "ok")}
-            {r.Status === "취소" ? step(2, "결재", r.ApproverName || r.ApproverEmail, "요청 취소", mkItKst(r.DecidedAt), "off")
-              : decided ? step(2, "결재", mkApprDecider(r, names), r.Status === "반려" ? "반려" : "승인", mkItKst(r.DecidedAt), r.Status === "반려" ? "no" : "ok", <MkBehalf r={r} />)
-              : step(2, "결재", r.ApproverName || r.ApproverEmail, "대기", "", "cur")}
-            {r.Status === "승인" && step(3, "삭제 실행", "IT 담당", "대기", "", "cur")}
-            {r.Status === "삭제 완료" && step(3, "삭제", "", "완료", mkItKst(r.DeletedAt || r.DecidedAt), "ok")}
+        <div className="mt-3 rounded-lg border border-slate-200 bg-white overflow-hidden" data-appr-trail>
+          <p className="px-3.5 py-2 bg-slate-50 border-b border-slate-200 text-[11px] font-semibold text-slate-500">결재 현황</p>
+          <div className="divide-y divide-slate-100">
+            {step(1, "요청자", r.RequesterEmail, "요청", mkItKst(r.Created), "req")}
+            {r.Status === "취소" ? step(2, "결재자", r.ApproverEmail, "요청 취소", mkItKst(r.DecidedAt), "off")
+              : decided ? step(2, "결재자", deciderMail, r.Status === "반려" ? "반려" : "승인", mkItKst(r.DecidedAt), r.Status === "반려" ? "no" : "ok", <MkBehalf r={r} />)
+              : step(2, "결재자", r.ApproverEmail, "대기", "", "cur")}
+            {r.Status === "승인" && step(3, "자산 삭제", "IT 담당", "대기", "", "cur")}
+            {r.Status === "삭제 완료" && step(3, "자산 삭제", "", "완료", mkItKst(r.DeletedAt || r.DecidedAt), "ok")}
           </div>
         </div>
         {role && (
